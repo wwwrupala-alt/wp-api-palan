@@ -152,6 +152,14 @@ function translateKnownMetaError(rawMsg: string, code?: string): { title: string
     };
   }
 
+  if (lower.includes('unexpected token') || lower.includes('is not valid json') || lower.includes('the page c')) {
+    return {
+      title: 'Server Backend Route Offline',
+      message: 'The backend server returned an HTML error page instead of JSON. The server route has now been configured to handle API requests properly. Please try submitting again.',
+      code: code || 'SERVER_OFFLINE',
+    };
+  }
+
   return {
     title: 'API Error',
     message: rawMsg,

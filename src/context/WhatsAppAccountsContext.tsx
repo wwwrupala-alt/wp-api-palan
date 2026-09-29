@@ -11,6 +11,28 @@ import { db, handleFirestoreError, OperationType } from '../lib/firebase.ts';
 import { useAuth } from './AuthContext.tsx';
 import type { WhatsAppAccount, MetaConfigStatus } from '../types/index.ts';
 
+async function parseJsonResponse<T = any>(res: Response, fallbackError: string): Promise<T> {
+  const text = await res.text();
+  let json: any = null;
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch (err) {
+    if (!res.ok) {
+      if (res.status === 404) {
+        throw new Error('API route not found (404). Please ensure server is running.');
+      }
+      throw new Error(`Server returned error status ${res.status}.`);
+    }
+    throw new Error('Invalid response received from server.');
+  }
+
+  if (!res.ok) {
+    throw new Error(json?.error || json?.message || fallbackError);
+  }
+
+  return json;
+}
+
 interface WhatsAppAccountsContextType {
   accounts: WhatsAppAccount[];
   activeAccount: WhatsAppAccount | null;
@@ -276,10 +298,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
         }),
       });
 
-      const data = await res.json();
-      if (!res.ok) {
-        return { success: false, error: data.error || 'Meta account verification failed.' };
-      }
+      const data = await parseJsonResponse(res, 'Meta account verification failed.');
 
       // If user provided a 6-digit PIN and custom token, register phone with Meta
       if (params.pin && params.customToken) {
@@ -339,11 +358,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
         body: JSON.stringify(params),
       });
 
-      const data = await res.json();
-      if (!res.ok) {
-        return { success: false, error: data.error || 'Connection test failed' };
-      }
-
+      const data = await parseJsonResponse(res, 'Connection test failed');
       return { success: data.success, diagnostics: data.diagnostics };
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : 'Network test error' };
@@ -362,11 +377,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
         body: JSON.stringify(params),
       });
 
-      const data = await res.json();
-      if (!res.ok) {
-        return { success: false, error: data.error || 'Meta phone registration failed' };
-      }
-
+      await parseJsonResponse(res, 'Meta phone registration failed');
       return { success: true };
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : 'Registration network error' };
@@ -391,11 +402,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
         }),
       });
 
-      const data = await res.json();
-      if (!res.ok) {
-        return { success: false, error: data.error || 'Failed to sync account with Meta' };
-      }
-
+      await parseJsonResponse(res, 'Failed to sync account with Meta');
       return { success: true };
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : 'Network sync error' };

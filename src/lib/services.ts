@@ -22,6 +22,31 @@ import type {
   Automation,
 } from '../types/index.ts';
 
+/**
+ * Safely parses response as JSON, falling back cleanly with meaningful error if server returned HTML (e.g. 404/500/offline)
+ */
+async function parseJsonResponse<T = any>(res: Response, fallbackError: string): Promise<T> {
+  const text = await res.text();
+  let json: any = null;
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch (err) {
+    if (!res.ok) {
+      if (res.status === 404) {
+        throw new Error('API server route not found (404). Please ensure the backend server is running and deployed properly.');
+      }
+      throw new Error(`Server returned status ${res.status}. Could not parse response as JSON.`);
+    }
+    throw new Error('Invalid response received from server.');
+  }
+
+  if (!res.ok) {
+    throw new Error(json?.error || json?.message || fallbackError);
+  }
+
+  return json;
+}
+
 // -------------------------------------------------------------
 // CONTACTS & GROUPS
 // -------------------------------------------------------------
@@ -158,10 +183,7 @@ export async function syncTemplatesFromMeta(orgId: string, wabaId: string, accou
   const res = await fetch(url, {
     headers: customToken ? { 'x-meta-token': customToken } : {},
   });
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.error || 'Failed to sync templates from Meta.');
-  }
+  const data = await parseJsonResponse(res, 'Failed to sync templates from Meta.');
 
   const metaTemplates = data.templates || [];
   let count = 0;
@@ -209,10 +231,7 @@ export async function createTemplate(
     }),
   });
 
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.error || 'Meta rejected template creation.');
-  }
+  const data = await parseJsonResponse(res, 'Meta rejected template creation.');
 
   // 2. Save in Firestore
   const templateId = data.metaTemplateId || `tpl_${templateData.name}`;
@@ -321,11 +340,7 @@ export async function launchCampaign(
       }),
     });
 
-    const data = await res.json();
-    if (!res.ok) {
-      await updateDoc(campRef, { status: 'failed' });
-      throw new Error(data.error || 'Failed to dispatch campaign.');
-    }
+    const data = await parseJsonResponse(res, 'Failed to dispatch campaign.');
 
     await updateDoc(campRef, {
       status: 'completed',
@@ -431,10 +446,7 @@ export async function sendOutboundMessage(
     }),
   });
 
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.error || 'Failed to send WhatsApp message via Meta Cloud API.');
-  }
+  const data = await parseJsonResponse(res, 'Failed to send WhatsApp message via Meta Cloud API.');
 
   const now = new Date().toISOString();
   const convId = params.conversationId || `conv_${params.recipientPhone.replace(/[^0-9]/g, '')}`;

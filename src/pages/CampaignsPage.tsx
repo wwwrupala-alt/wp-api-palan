@@ -108,11 +108,15 @@ export const CampaignsPage: React.FC = () => {
     try {
       const res = await fetch('/api/meta/send-message', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(activeAccount.customToken ? { 'x-meta-token': activeAccount.customToken } : {}),
+        },
         body: JSON.stringify({
           phoneNumberId: activeAccount.phoneNumberId,
           recipientPhone: testPhone.trim(),
           type: 'template',
+          customToken: activeAccount.customToken,
           template: {
             name: selectedTemplate.name,
             language: selectedTemplate.language || 'en_US',
@@ -120,7 +124,13 @@ export const CampaignsPage: React.FC = () => {
           },
         }),
       });
-      const data = await res.json();
+      const text = await res.text();
+      let data: any = {};
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        throw new Error(`Server returned status ${res.status}. Route might be misconfigured.`);
+      }
       if (!res.ok) {
         throw new Error(data.error || 'Failed to send test message.');
       }
