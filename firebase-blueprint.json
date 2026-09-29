@@ -1,0 +1,228 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile with organization linkage and role",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 255 },
+        "displayName": { "type": "string", "maxLength": 150 },
+        "photoURL": { "type": "string", "maxLength": 1000 },
+        "role": { "type": "string", "enum": ["owner", "admin", "agent"] },
+        "organizationId": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role", "organizationId", "createdAt", "updatedAt"]
+    },
+    "Organization": {
+      "title": "Organization",
+      "description": "Multi-tenant organization account",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "maxLength": 150, "minLength": 1 },
+        "ownerId": { "type": "string", "maxLength": 128 },
+        "status": { "type": "string", "enum": ["active", "suspended"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "ownerId", "status", "createdAt", "updatedAt"]
+    },
+    "Member": {
+      "title": "Member",
+      "description": "Team member in an organization",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 255 },
+        "role": { "type": "string", "enum": ["owner", "admin", "agent"] },
+        "joinedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role", "joinedAt"]
+    },
+    "WhatsAppAccount": {
+      "title": "WhatsAppAccount",
+      "description": "Connected Meta WhatsApp Business Account and Phone Number",
+      "type": "object",
+      "properties": {
+        "wabaId": { "type": "string", "maxLength": 100 },
+        "phoneNumberId": { "type": "string", "maxLength": 100 },
+        "displayPhoneNumber": { "type": "string", "maxLength": 50 },
+        "verifiedName": { "type": "string", "maxLength": 200 },
+        "businessId": { "type": "string", "maxLength": 100 },
+        "connectionStatus": { "type": "string", "enum": ["connected", "disconnected", "pending"] },
+        "webhookStatus": { "type": "string", "enum": ["active", "unverified", "error"] },
+        "qualityRating": { "type": "string", "enum": ["GREEN", "YELLOW", "RED", "UNKNOWN"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["wabaId", "phoneNumberId", "displayPhoneNumber", "verifiedName", "connectionStatus", "webhookStatus", "createdAt", "updatedAt"]
+    },
+    "Contact": {
+      "title": "Contact",
+      "description": "WhatsApp contact in an organization",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "maxLength": 150 },
+        "phone": { "type": "string", "maxLength": 30, "minLength": 7 },
+        "email": { "type": "string", "maxLength": 255 },
+        "groups": { "type": "array" },
+        "customFields": { "type": "object" },
+        "optInStatus": { "type": "string", "enum": ["opted_in", "opted_out", "pending"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "phone", "optInStatus", "createdAt", "updatedAt"]
+    },
+    "ContactGroup": {
+      "title": "ContactGroup",
+      "description": "Audience group for contacts",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "maxLength": 100, "minLength": 1 },
+        "description": { "type": "string", "maxLength": 500 },
+        "contactCount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "createdAt"]
+    },
+    "Campaign": {
+      "title": "Campaign",
+      "description": "Broadcast message campaign",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "maxLength": 150, "minLength": 1 },
+        "whatsAppAccountId": { "type": "string", "maxLength": 128 },
+        "templateId": { "type": "string", "maxLength": 128 },
+        "templateName": { "type": "string", "maxLength": 150 },
+        "recipientCount": { "type": "number" },
+        "groupId": { "type": "string", "maxLength": 128 },
+        "status": { "type": "string", "enum": ["draft", "scheduled", "sending", "completed", "paused", "cancelled", "failed"] },
+        "scheduledAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "completedAt": { "type": "string", "format": "date-time" },
+        "stats": { "type": "object" }
+      },
+      "required": ["name", "whatsAppAccountId", "templateId", "recipientCount", "status", "createdAt"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "WhatsApp incoming or outgoing message record",
+      "type": "object",
+      "properties": {
+        "whatsAppAccountId": { "type": "string", "maxLength": 128 },
+        "contactId": { "type": "string", "maxLength": 128 },
+        "conversationId": { "type": "string", "maxLength": 128 },
+        "campaignId": { "type": "string", "maxLength": 128 },
+        "direction": { "type": "string", "enum": ["inbound", "outbound"] },
+        "messageType": { "type": "string", "enum": ["text", "image", "video", "document", "audio", "template", "interactive"] },
+        "messageStatus": { "type": "string", "enum": ["pending", "sent", "delivered", "read", "failed"] },
+        "metaMessageId": { "type": "string", "maxLength": 150 },
+        "body": { "type": "string", "maxLength": 4096 },
+        "mediaUrl": { "type": "string", "maxLength": 2000 },
+        "errorInfo": { "type": "string", "maxLength": 1000 },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["whatsAppAccountId", "contactId", "direction", "messageType", "messageStatus", "timestamp"]
+    },
+    "Template": {
+      "title": "Template",
+      "description": "Meta WhatsApp interactive or standard message template",
+      "type": "object",
+      "properties": {
+        "metaTemplateId": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 150, "minLength": 1 },
+        "language": { "type": "string", "maxLength": 20 },
+        "category": { "type": "string", "enum": ["MARKETING", "UTILITY", "AUTHENTICATION"] },
+        "status": { "type": "string", "enum": ["APPROVED", "PENDING", "REJECTED", "PAUSED", "DISABLED"] },
+        "components": { "type": "array" },
+        "whatsAppAccountId": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "language", "category", "status", "whatsAppAccountId", "createdAt", "updatedAt"]
+    },
+    "Conversation": {
+      "title": "Conversation",
+      "description": "Chat thread between contact and WhatsApp account",
+      "type": "object",
+      "properties": {
+        "contactId": { "type": "string", "maxLength": 128 },
+        "contactPhone": { "type": "string", "maxLength": 30 },
+        "contactName": { "type": "string", "maxLength": 150 },
+        "whatsAppAccountId": { "type": "string", "maxLength": 128 },
+        "lastMessage": { "type": "string", "maxLength": 4096 },
+        "lastMessageAt": { "type": "string", "format": "date-time" },
+        "unreadCount": { "type": "number" },
+        "assignedUser": { "type": "string", "maxLength": 128 },
+        "status": { "type": "string", "enum": ["open", "resolved", "pending"] }
+      },
+      "required": ["contactId", "contactPhone", "whatsAppAccountId", "lastMessage", "lastMessageAt", "unreadCount", "status"]
+    },
+    "Automation": {
+      "title": "Automation",
+      "description": "Keyword trigger and automatic response chatbot workflow",
+      "type": "object",
+      "properties": {
+        "trigger": { "type": "string", "maxLength": 100 },
+        "triggerType": { "type": "string", "enum": ["keyword_exact", "keyword_contains", "welcome", "fallback"] },
+        "keyword": { "type": "string", "maxLength": 100 },
+        "responseType": { "type": "string", "enum": ["text", "image", "document", "template", "assign_agent"] },
+        "responseContent": { "type": "string", "maxLength": 4096 },
+        "mediaUrl": { "type": "string", "maxLength": 2000 },
+        "mediaName": { "type": "string", "maxLength": 255 },
+        "enabled": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["triggerType", "responseType", "enabled", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Application user account linked to tenant organization"
+    },
+    "/organizations/{organizationId}": {
+      "schema": { "$ref": "#/entities/Organization" },
+      "description": "Tenant organization workspace"
+    },
+    "/organizations/{organizationId}/members/{memberId}": {
+      "schema": { "$ref": "#/entities/Member" },
+      "description": "Team member in organization"
+    },
+    "/organizations/{organizationId}/whatsappAccounts/{accountId}": {
+      "schema": { "$ref": "#/entities/WhatsAppAccount" },
+      "description": "Connected WhatsApp account belonging to tenant organization"
+    },
+    "/organizations/{organizationId}/contacts/{contactId}": {
+      "schema": { "$ref": "#/entities/Contact" },
+      "description": "Contacts stored for this organization"
+    },
+    "/organizations/{organizationId}/contactGroups/{groupId}": {
+      "schema": { "$ref": "#/entities/ContactGroup" },
+      "description": "Contact groups / segments for this organization"
+    },
+    "/organizations/{organizationId}/campaigns/{campaignId}": {
+      "schema": { "$ref": "#/entities/Campaign" },
+      "description": "Broadcast campaigns for this organization"
+    },
+    "/organizations/{organizationId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/Message" },
+      "description": "All messages exchanged through organization WhatsApp accounts"
+    },
+    "/organizations/{organizationId}/templates/{templateId}": {
+      "schema": { "$ref": "#/entities/Template" },
+      "description": "WhatsApp templates synced or created for this organization"
+    },
+    "/organizations/{organizationId}/conversations/{conversationId}": {
+      "schema": { "$ref": "#/entities/Conversation" },
+      "description": "Chat conversations for inbox support"
+    },
+    "/organizations/{organizationId}/automations/{automationId}": {
+      "schema": { "$ref": "#/entities/Automation" },
+      "description": "Bot automation workflows and keyword auto-responses"
+    }
+  }
+}

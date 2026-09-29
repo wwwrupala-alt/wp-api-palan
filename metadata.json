@@ -1,0 +1,8 @@
+{
+  "name": "CloudWABA - Multi-Tenant WhatsApp Business API SaaS",
+  "description": "Production-ready, multi-tenant WhatsApp Business Platform & Cloud API portal with Meta Embedded Signup, secure Firestore, templates, campaigns, webhook management, and team inbox.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
