@@ -180,7 +180,7 @@ export const AdminPage: React.FC = () => {
               <div className="p-3.5 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-800/40 flex items-center justify-between">
                 <div>
                   <p className="font-medium text-neutral-800 dark:text-neutral-200">META_APP_ID</p>
-                  <p className="text-[11px] text-neutral-500">Meta Developer App Identifier</p>
+                  <p className="text-[11px] text-neutral-500">Only required for Facebook Embedded Signup popup</p>
                 </div>
                 {metaStatus?.appIdSet ? (
                   <span className="inline-flex items-center space-x-1 text-emerald-600 dark:text-emerald-400 font-semibold text-[11px]">
@@ -190,7 +190,7 @@ export const AdminPage: React.FC = () => {
                 ) : (
                   <span className="inline-flex items-center space-x-1 text-amber-600 dark:text-amber-400 font-semibold text-[11px]">
                     <AlertCircle className="w-4 h-4" />
-                    <span>Missing</span>
+                    <span>Optional (Not Set)</span>
                   </span>
                 )}
               </div>
@@ -198,7 +198,7 @@ export const AdminPage: React.FC = () => {
               <div className="p-3.5 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-800/40 flex items-center justify-between">
                 <div>
                   <p className="font-medium text-neutral-800 dark:text-neutral-200">META_APP_SECRET</p>
-                  <p className="text-[11px] text-neutral-500">Required for code exchange &amp; webhook verification</p>
+                  <p className="text-[11px] text-neutral-500">Only required for Facebook Embedded Signup popup</p>
                 </div>
                 {metaStatus?.appSecretSet ? (
                   <span className="inline-flex items-center space-x-1 text-emerald-600 dark:text-emerald-400 font-semibold text-[11px]">
@@ -208,7 +208,7 @@ export const AdminPage: React.FC = () => {
                 ) : (
                   <span className="inline-flex items-center space-x-1 text-amber-600 dark:text-amber-400 font-semibold text-[11px]">
                     <AlertCircle className="w-4 h-4" />
-                    <span>Missing</span>
+                    <span>Optional (Not Set)</span>
                   </span>
                 )}
               </div>

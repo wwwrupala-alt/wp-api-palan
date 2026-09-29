@@ -53,16 +53,24 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       <div className="flex items-center space-x-2 sm:space-x-3">
-        {/* Meta Setup Alert if not configured */}
-        {metaStatus && !metaStatus.isConfigured && (
+        {/* Meta Status Indicator */}
+        {accounts.length > 0 ? (
           <div
-            title="Meta Developer App credentials not yet set in environment. Switch to Meta Credentials tab or add variables."
+            title="WhatsApp Business Account is connected and ready to send messages."
+            className="hidden md:flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 text-emerald-800 dark:text-emerald-300 text-xs font-medium"
+          >
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+            <span>WhatsApp Ready</span>
+          </div>
+        ) : metaStatus && !metaStatus.isConfigured ? (
+          <div
+            title="No WhatsApp number connected yet. Click '+ Connect WhatsApp' to add your Phone Number ID & Token, or configure server variables."
             className="hidden md:flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 text-amber-800 dark:text-amber-300 text-xs font-medium cursor-help"
           >
             <ShieldAlert className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
-            <span>Meta Config Pending</span>
+            <span>No Account Connected</span>
           </div>
-        )}
+        ) : null}
 
         {/* WhatsApp Account Selector if multiple accounts exist */}
         {accounts.length > 0 ? (
