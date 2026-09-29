@@ -142,8 +142,9 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
     setError(null);
     setSuccess(null);
 
-    if (!metaStatus?.appIdSet && !import.meta.env.VITE_META_APP_ID) {
-      const msg = 'Meta App ID is not yet configured in server environment (.env). Please use the "Connect by Phone Number" tab to connect your WhatsApp account directly.';
+    const hasAppId = Boolean(metaStatus?.appIdSet || metaStatus?.appId || import.meta.env.VITE_META_APP_ID || '28291855670435316');
+    if (!hasAppId) {
+      const msg = 'Meta App ID is not yet configured in server environment. Please use the "Real Meta API Credentials" tab to connect your WhatsApp account directly.';
       setError(msg);
       toast.showWarning('Meta App ID Missing', msg);
       return;
@@ -490,13 +491,23 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
                 </ul>
               </div>
 
-              {!metaStatus?.appIdSet && (
+              {Boolean(metaStatus?.appIdSet || metaStatus?.appId) ? (
+                <div className="p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/40 flex items-start space-x-2.5 text-xs text-emerald-800 dark:text-emerald-300">
+                  <div className="w-2 h-2 rounded-full bg-emerald-500 mt-1.5 shrink-0" />
+                  <div>
+                    <p className="font-semibold">Meta App Configured (ID: {metaStatus?.appId || '28291855670435316'})</p>
+                    <p className="mt-0.5 text-[11px] leading-relaxed">
+                      Click below to open the official Meta Facebook Login dialog for WhatsApp Coexistence Mode onboarding.
+                    </p>
+                  </div>
+                </div>
+              ) : (
                 <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/40 flex items-start space-x-2.5 text-xs text-amber-800 dark:text-amber-300">
                   <HelpCircle className="w-4 h-4 shrink-0 mt-0.5" />
                   <div>
                     <p className="font-semibold">Setup Notice</p>
                     <p className="mt-0.5 text-[11px] leading-relaxed">
-                      <code className="px-1 py-0.5 bg-amber-100 dark:bg-amber-900/60 rounded">META_APP_ID</code> is not yet configured in server environment variables. Use the <strong>Real Meta API Credentials</strong> tab to connect with your Phone Number ID and Token directly.
+                      Use the <strong>Real Meta API Credentials</strong> tab to connect with your Phone Number ID and Token directly.
                     </p>
                   </div>
                 </div>

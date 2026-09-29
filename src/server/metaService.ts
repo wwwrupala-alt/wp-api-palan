@@ -35,12 +35,12 @@ export function addWebhookLog(log: Omit<WebhookEventRecord, 'id' | 'timestamp'>)
 
 // Meta configuration helper
 export function getMetaConfig() {
-  const appId = process.env.META_APP_ID || process.env.VITE_META_APP_ID || '';
-  const appSecret = process.env.META_APP_SECRET || '';
+  const appId = process.env.META_APP_ID || process.env.VITE_META_APP_ID || '28291855670435316';
+  const appSecret = process.env.META_APP_SECRET || '980d9e5cc7ef34822e00a35ca5939a79';
   const verifyToken = process.env.META_WEBHOOK_VERIFY_TOKEN || 'cloudwaba_verify_token_secure';
   const systemToken = process.env.META_SYSTEM_USER_ACCESS_TOKEN || '';
   const graphVersion = process.env.META_GRAPH_VERSION || 'v22.0';
-  const appUrl = process.env.APP_URL || 'https://ais-dev-wsnbrhcpsj4nuqz3ehuicl-587296134324.asia-east1.run.app';
+  const appUrl = process.env.APP_URL || 'https://wp-api-palan.vercel.app';
 
   return {
     appId,
@@ -59,6 +59,7 @@ export function handleGetMetaStatus(req: Request, res: Response) {
   res.json({
     isConfigured: config.isConfigured,
     appIdSet: Boolean(config.appId),
+    appId: config.appId,
     appSecretSet: Boolean(config.appSecret),
     webhookVerifyTokenSet: Boolean(config.verifyToken),
     systemTokenSet: Boolean(config.systemToken),

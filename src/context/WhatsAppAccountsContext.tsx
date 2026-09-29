@@ -166,15 +166,22 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
       document.body.appendChild(script);
 
       window.fbAsyncInit = function () {
-        if (window.FB && metaStatus?.appIdSet) {
+        if (window.FB && (metaStatus?.appId || (import.meta.env.VITE_META_APP_ID as string))) {
           window.FB.init({
-            appId: (import.meta.env.VITE_META_APP_ID as string) || '',
+            appId: metaStatus?.appId || (import.meta.env.VITE_META_APP_ID as string) || '28291855670435316',
             cookie: true,
             xfbml: true,
-            version: metaStatus.graphVersion || 'v22.0',
+            version: metaStatus?.graphVersion || 'v22.0',
           });
         }
       };
+    } else if (window.FB && (metaStatus?.appId || (import.meta.env.VITE_META_APP_ID as string))) {
+      window.FB.init({
+        appId: metaStatus?.appId || (import.meta.env.VITE_META_APP_ID as string) || '28291855670435316',
+        cookie: true,
+        xfbml: true,
+        version: metaStatus?.graphVersion || 'v22.0',
+      });
     }
   }, [metaStatus]);
 
@@ -182,9 +189,10 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
   const connectViaEmbeddedSignup = async (): Promise<void> => {
     if (!organization?.id) throw new Error('Organization not found. Please re-login.');
 
-    if (!metaStatus?.appIdSet && !import.meta.env.VITE_META_APP_ID) {
+    const resolvedAppId = metaStatus?.appId || (import.meta.env.VITE_META_APP_ID as string) || '28291855670435316';
+    if (!resolvedAppId) {
       throw new Error(
-        'Meta App ID is not yet configured in server environment (.env). Please use the "Connect by Phone Number" tab to connect your WhatsApp account directly.'
+        'Meta App ID is not yet configured in server environment. Please use the "Connect by Phone Number" tab to connect your WhatsApp account directly.'
       );
     }
 
@@ -226,46 +234,46 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
           loginOptions.config_id = configId;
         }
 
-        window.FB.login(async (response) => {
+        window.FB.login((response) => {
           clearTimeout(timer);
           if (response?.authResponse && response.authResponse.code) {
-            try {
-              // Exchange code via backend proxy
-              const res = await fetch('/api/meta/embedded-signup-exchange', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  code: response.authResponse.code,
-                  organizationId: organization.id,
-                }),
+            // Exchange code via backend proxy
+            fetch('/api/meta/embedded-signup-exchange', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                code: response.authResponse.code,
+                organizationId: organization.id,
+              }),
+            })
+              .then(async (res) => {
+                const data = await res.json();
+                if (!res.ok) {
+                  throw new Error(data.error || 'Failed to exchange Meta Embedded Signup code');
+                }
+
+                // Persist safe WhatsApp account metadata in Firestore
+                const accountId = data.phoneNumberId || `wa_${Date.now()}`;
+                const accountDocRef = doc(db, 'organizations', organization.id, 'whatsappAccounts', accountId);
+
+                const newAccount: Omit<WhatsAppAccount, 'id'> = {
+                  wabaId: data.wabaId,
+                  phoneNumberId: data.phoneNumberId,
+                  displayPhoneNumber: data.displayPhoneNumber,
+                  verifiedName: data.verifiedName,
+                  connectionStatus: 'connected',
+                  webhookStatus: 'active',
+                  qualityRating: data.qualityRating || 'GREEN',
+                  createdAt: new Date().toISOString(),
+                  updatedAt: new Date().toISOString(),
+                };
+
+                await setDoc(accountDocRef, newAccount);
+                resolve();
+              })
+              .catch((err) => {
+                reject(err);
               });
-
-              const data = await res.json();
-              if (!res.ok) {
-                throw new Error(data.error || 'Failed to exchange Meta Embedded Signup code');
-              }
-
-              // Persist safe WhatsApp account metadata in Firestore
-              const accountId = data.phoneNumberId || `wa_${Date.now()}`;
-              const accountDocRef = doc(db, 'organizations', organization.id, 'whatsappAccounts', accountId);
-
-              const newAccount: Omit<WhatsAppAccount, 'id'> = {
-                wabaId: data.wabaId,
-                phoneNumberId: data.phoneNumberId,
-                displayPhoneNumber: data.displayPhoneNumber,
-                verifiedName: data.verifiedName,
-                connectionStatus: 'connected',
-                webhookStatus: 'active',
-                qualityRating: data.qualityRating || 'GREEN',
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString(),
-              };
-
-              await setDoc(accountDocRef, newAccount);
-              resolve();
-            } catch (err) {
-              reject(err);
-            }
           } else {
             reject(new Error('Meta Facebook login was cancelled or closed.'));
           }

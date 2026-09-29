@@ -169,6 +169,7 @@ export interface WebhookLog {
 export interface MetaConfigStatus {
   isConfigured: boolean;
   appIdSet: boolean;
+  appId?: string;
   appSecretSet: boolean;
   webhookVerifyTokenSet: boolean;
   systemTokenSet: boolean;
