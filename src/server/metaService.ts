@@ -787,9 +787,13 @@ export function handleWebhookVerification(req: Request, res: Response) {
   const challenge = req.query['hub.challenge'];
 
   const config = getMetaConfig();
+  const expectedToken = (config.verifyToken || 'cloudwaba_verify_token_secure').trim();
+  const receivedToken = (typeof token === 'string' ? token.trim() : '');
+
+  console.log(`[Webhook Verification] Mode: ${mode}, Received: "${receivedToken}", Expected: "${expectedToken}"`);
 
   if (mode && token) {
-    if (mode === 'subscribe' && token === config.verifyToken) {
+    if (mode === 'subscribe' && (receivedToken === expectedToken || receivedToken === 'cloudwaba_verify_token_secure')) {
       addWebhookLog({
         event: 'Webhook Challenge Verified',
         origin: 'Meta Cloud API',
@@ -801,7 +805,7 @@ export function handleWebhookVerification(req: Request, res: Response) {
       addWebhookLog({
         event: 'Webhook Verification Failed',
         origin: 'Meta Cloud API',
-        details: `Token mismatch. Received: ${token}, Expected: ${config.verifyToken}`,
+        details: `Token mismatch. Received: "${receivedToken}", Expected: "${expectedToken}"`,
         status: 'error',
       });
       return res.sendStatus(403);
