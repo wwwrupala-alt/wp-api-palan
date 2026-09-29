@@ -19,6 +19,7 @@ export interface MetaMessageComponent {
     type: 'text' | 'image' | 'document' | 'video';
     text?: string;
     image?: { link: string };
+    video?: { link: string };
     document?: { link: string; filename?: string };
   }>;
 }
@@ -63,11 +64,30 @@ export function formatTemplateComponentsForSending(
             parameters: params,
           });
         }
-      } else if (headerFormat === 'IMAGE' && comp.example?.header_handle?.[0]) {
-        result.push({
-          type: 'header',
-          parameters: [{ type: 'image', image: { link: comp.example.header_handle[0] } }],
-        });
+      } else if (headerFormat === 'IMAGE') {
+        const imgLink = variableValues?.header_media_url || variableValues?.media_url || comp.example?.header_handle?.[0];
+        if (imgLink) {
+          result.push({
+            type: 'header',
+            parameters: [{ type: 'image', image: { link: imgLink } }],
+          });
+        }
+      } else if (headerFormat === 'VIDEO') {
+        const videoLink = variableValues?.header_media_url || variableValues?.media_url || comp.example?.header_handle?.[0];
+        if (videoLink) {
+          result.push({
+            type: 'header',
+            parameters: [{ type: 'video', video: { link: videoLink } as any }],
+          });
+        }
+      } else if (headerFormat === 'DOCUMENT') {
+        const docLink = variableValues?.header_media_url || variableValues?.media_url || comp.example?.header_handle?.[0];
+        if (docLink) {
+          result.push({
+            type: 'header',
+            parameters: [{ type: 'document', document: { link: docLink, filename: 'Document.pdf' } }],
+          });
+        }
       }
     }
 

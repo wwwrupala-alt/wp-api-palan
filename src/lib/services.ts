@@ -197,7 +197,7 @@ export async function syncTemplatesFromMeta(orgId: string, wabaId: string, accou
       language: t.language,
       category: t.category,
       status: t.status,
-      components: t.components || [],
+      components: sanitizeComponentsForFirestore(t.components || []),
       whatsAppAccountId: accountId,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -206,6 +206,24 @@ export async function syncTemplatesFromMeta(orgId: string, wabaId: string, accou
   }
 
   return count;
+}
+
+// Helper: Firestore doesn't support nested arrays (e.g. example.body_text: [["Rahul", "ORD-101"]])
+// Sanitize component objects before saving in Firestore while keeping them intact for UI
+function sanitizeComponentsForFirestore(components: any[]): any[] {
+  if (!Array.isArray(components)) return [];
+  return components.map((c) => {
+    const clean = { ...c };
+    if (clean.example && clean.example.body_text && Array.isArray(clean.example.body_text)) {
+      // Flatten or convert nested array to flat array or array of objects for Firestore compatibility
+      clean.example = {
+        ...clean.example,
+        body_text_flat: clean.example.body_text.flat(Infinity),
+      };
+      delete clean.example.body_text;
+    }
+    return clean;
+  });
 }
 
 export async function createTemplate(
@@ -220,7 +238,7 @@ export async function createTemplate(
   },
   customToken?: string
 ) {
-  // 1. Submit to Meta API
+  // 1. Submit to Meta API (Full Meta payload with nested example.body_text if needed)
   const res = await fetch('/api/meta/templates', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -233,7 +251,7 @@ export async function createTemplate(
 
   const data = await parseJsonResponse(res, 'Meta rejected template creation.');
 
-  // 2. Save in Firestore
+  // 2. Save in Firestore (Sanitized to avoid Firestore nested array error)
   const templateId = data.metaTemplateId || `tpl_${templateData.name}`;
   const tplRef = doc(db, 'organizations', orgId, 'templates', templateId);
 
@@ -243,13 +261,46 @@ export async function createTemplate(
     language: templateData.language,
     category: templateData.category,
     status: data.status || 'PENDING',
-    components: templateData.components,
+    components: sanitizeComponentsForFirestore(templateData.components),
     whatsAppAccountId: accountId,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   });
 
   return templateId;
+}
+
+export async function deleteTemplate(
+  orgId: string,
+  templateId: string,
+  templateName: string,
+  wabaId: string,
+  customToken?: string
+) {
+  // 1. Delete from Meta API
+  try {
+    const res = await fetch('/api/meta/templates', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        wabaId,
+        templateName,
+        customToken,
+      }),
+    });
+    // If Meta returns error (e.g. template already deleted or not found on Meta), proceed with local Firestore delete
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      console.warn('Meta template deletion response:', errData);
+    }
+  } catch (err) {
+    console.warn('Error calling Meta delete template API:', err);
+  }
+
+  // 2. Delete from Firestore
+  const tplRef = doc(db, 'organizations', orgId, 'templates', templateId);
+  await deleteDoc(tplRef);
+  return true;
 }
 
 // -------------------------------------------------------------
@@ -318,8 +369,9 @@ export async function launchCampaign(
   campaignId: string,
   phoneNumberId: string,
   template: { name: string; language: string; components?: any[] },
-  recipients: Array<{ phone: string; name?: string }>,
-  customToken?: string
+  recipients: Array<{ phone: string; name?: string; variableValues?: Record<string, string> }>,
+  customToken?: string,
+  variableValues?: Record<string, string>
 ) {
   // Update status to sending
   const campRef = doc(db, 'organizations', orgId, 'campaigns', campaignId);
@@ -336,6 +388,7 @@ export async function launchCampaign(
         phoneNumberId,
         template,
         recipients,
+        variableValues,
         customToken,
       }),
     });
@@ -442,6 +495,7 @@ export async function sendOutboundMessage(
       type: params.type || 'text',
       mediaUrl: params.mediaUrl,
       template: params.template,
+      variableValues: (params as any).variableValues,
       customToken: params.customToken,
     }),
   });

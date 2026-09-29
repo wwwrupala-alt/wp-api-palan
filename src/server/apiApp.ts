@@ -6,6 +6,7 @@ import {
   handleSyncMetaAccount,
   handleGetTemplates,
   handleCreateTemplate,
+  handleDeleteTemplate,
   handleSendMessage,
   handleSendCampaign,
   handleRegisterPhone,
@@ -30,6 +31,7 @@ apiApp.post('/api/meta/test-connection', handleTestConnection);
 apiApp.post('/api/meta/register-phone', handleRegisterPhone);
 apiApp.get('/api/meta/templates', handleGetTemplates);
 apiApp.post('/api/meta/templates', handleCreateTemplate);
+apiApp.delete('/api/meta/templates', handleDeleteTemplate);
 apiApp.post('/api/meta/send-message', handleSendMessage);
 apiApp.post('/api/meta/campaigns/send', handleSendCampaign);
 

@@ -14,6 +14,7 @@ import {
   Smartphone,
   Eye,
   Loader2,
+  Trash2,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -22,7 +23,9 @@ import {
   subscribeTemplates,
   syncTemplatesFromMeta,
   createTemplate,
+  deleteTemplate,
 } from '../lib/services.ts';
+import { TemplateBuilderModal } from '../components/TemplateBuilderModal.tsx';
 import type { Template, TemplateComponent } from '../types/index.ts';
 
 export const TemplatesPage: React.FC = () => {
@@ -40,18 +43,7 @@ export const TemplatesPage: React.FC = () => {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
-
-  // Form Fields
-  const [tplName, setTplName] = useState('');
-  const [tplCategory, setTplCategory] = useState<'MARKETING' | 'UTILITY' | 'AUTHENTICATION'>('UTILITY');
-  const [tplLang, setTplLang] = useState('en_US');
-  const [headerType, setHeaderType] = useState<'NONE' | 'TEXT' | 'IMAGE'>('NONE');
-  const [headerText, setHeaderText] = useState('');
-  const [bodyText, setBodyText] = useState('Hello {{1}}, your order {{2}} has been confirmed!');
-  const [footerText, setFooterText] = useState('Reply STOP to unsubscribe');
-  const [buttonType, setButtonType] = useState<'NONE' | 'QUICK_REPLY' | 'URL'>('QUICK_REPLY');
-  const [buttonText, setButtonText] = useState('View Details');
-  const [buttonUrl, setButtonUrl] = useState('https://example.com/order/{{1}}');
+  const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!organization?.id) return;
@@ -93,8 +85,12 @@ export const TemplatesPage: React.FC = () => {
     }
   };
 
-  const handleCreateSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleCreateSubmit = async (templateData: {
+    name: string;
+    category: 'UTILITY' | 'MARKETING' | 'AUTHENTICATION';
+    language: string;
+    components: TemplateComponent[];
+  }) => {
     if (!organization?.id || !activeAccount) {
       setCreateError('Please connect a WhatsApp Business Account first.');
       return;
@@ -103,78 +99,58 @@ export const TemplatesPage: React.FC = () => {
     setCreating(true);
     setCreateError(null);
 
-    const components: TemplateComponent[] = [];
-
-    // Header
-    if (headerType === 'TEXT' && headerText.trim()) {
-      components.push({
-        type: 'HEADER',
-        format: 'TEXT',
-        text: headerText.trim(),
-      });
-    } else if (headerType === 'IMAGE') {
-      components.push({
-        type: 'HEADER',
-        format: 'IMAGE',
-      });
-    }
-
-    // Body
-    components.push({
-      type: 'BODY',
-      text: bodyText.trim(),
-    });
-
-    // Footer
-    if (footerText.trim()) {
-      components.push({
-        type: 'FOOTER',
-        text: footerText.trim(),
-      });
-    }
-
-    // Buttons
-    if (buttonType === 'QUICK_REPLY' && buttonText.trim()) {
-      components.push({
-        type: 'BUTTONS',
-        buttons: [{ type: 'QUICK_REPLY', text: buttonText.trim() }],
-      });
-    } else if (buttonType === 'URL' && buttonText.trim() && buttonUrl.trim()) {
-      components.push({
-        type: 'BUTTONS',
-        buttons: [{ type: 'URL', text: buttonText.trim(), url: buttonUrl.trim() }],
-      });
-    }
-
     try {
       await createTemplate(
         organization.id,
         activeAccount.wabaId,
         activeAccount.id,
-        {
-          name: tplName.toLowerCase().replace(/[^a-z0-9_]/g, '_'),
-          language: tplLang,
-          category: tplCategory,
-          components,
-        },
+        templateData,
         activeAccount.customToken
       );
 
       toast.showSuccess(
         'Template Submitted to Meta',
-        `Template "${tplName}" sent for review. Meta usually approves within minutes.`
+        `Template "${templateData.name}" sent for review. Meta usually approves within minutes.`
       );
 
       setIsCreateOpen(false);
-      setTplName('');
-      setHeaderText('');
-      setBodyText('Hello {{1}}, your order {{2}} has been confirmed!');
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Error submitting template to Meta.';
       setCreateError(msg);
       toast.showError('Template Submission Failed', err);
     } finally {
       setCreating(false);
+    }
+  };
+
+  const handleDeleteTemplate = async (template: Template) => {
+    if (!organization?.id || !activeAccount) {
+      toast.showWarning('No Account', 'Please connect a WhatsApp Business Account.');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Are you sure you want to delete template "${template.name}"? This will delete it permanently from Meta and your account.`
+    );
+    if (!confirmed) return;
+
+    setDeletingTemplateId(template.id);
+    try {
+      await deleteTemplate(
+        organization.id,
+        template.id,
+        template.name,
+        activeAccount.wabaId,
+        activeAccount.customToken
+      );
+      toast.showSuccess(
+        'Template Deleted',
+        `Template "${template.name}" has been deleted successfully.`
+      );
+    } catch (err) {
+      toast.showError('Failed to Delete Template', err);
+    } finally {
+      setDeletingTemplateId(null);
     }
   };
 
@@ -367,9 +343,31 @@ export const TemplatesPage: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between text-[11px] text-neutral-400 pt-1 border-t border-neutral-100 dark:border-neutral-800">
-                  <span>ID: {t.metaTemplateId || t.id.slice(0, 14)}</span>
-                  <span>{new Date(t.createdAt).toLocaleDateString()}</span>
+                <div className="flex items-center justify-between text-[11px] text-neutral-400 pt-2 border-t border-neutral-100 dark:border-neutral-800">
+                  <div className="flex flex-col">
+                    <span className="font-mono text-[10px] text-neutral-400 truncate max-w-[120px]">
+                      {t.metaTemplateId || t.id.slice(0, 14)}
+                    </span>
+                    <span className="text-[10px] text-neutral-500">
+                      {new Date(t.createdAt).toLocaleDateString()}
+                    </span>
+                  </div>
+
+                  <button
+                    onClick={() => handleDeleteTemplate(t)}
+                    disabled={deletingTemplateId === t.id}
+                    title="Delete template from Meta"
+                    className="p-1.5 rounded-lg text-neutral-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors flex items-center space-x-1 cursor-pointer disabled:opacity-50"
+                  >
+                    {deletingTemplateId === t.id ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-rose-500" />
+                    ) : (
+                      <>
+                        <Trash2 className="w-4 h-4" />
+                        <span className="text-[10.5px] font-medium text-neutral-500 hover:text-rose-600">Delete</span>
+                      </>
+                    )}
+                  </button>
                 </div>
               </div>
             );
@@ -377,199 +375,14 @@ export const TemplatesPage: React.FC = () => {
         </div>
       )}
 
-      {/* Create Template Modal */}
-      {isCreateOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl w-full max-w-xl shadow-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between border-b border-neutral-200 dark:border-neutral-800 pb-3">
-              <h3 className="font-semibold text-neutral-900 dark:text-white text-base">
-                Create &amp; Submit Meta Template
-              </h3>
-              <button onClick={() => setIsCreateOpen(false)} className="text-neutral-400 hover:text-neutral-600">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {createError && (
-              <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 text-xs text-red-700 dark:text-red-300">
-                {createError}
-              </div>
-            )}
-
-            <form onSubmit={handleCreateSubmit} className="space-y-4 text-xs">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="sm:col-span-2">
-                  <label className="block font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
-                    Template Name <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="order_confirmation_v1"
-                    value={tplName}
-                    onChange={(e) => setTplName(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white font-mono"
-                  />
-                  <p className="text-[10px] text-neutral-400 mt-1">Lowercase letters, numbers, and underscores only</p>
-                </div>
-
-                <div>
-                  <label className="block font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
-                    Category <span className="text-red-500">*</span>
-                  </label>
-                  <select
-                    value={tplCategory}
-                    onChange={(e) => setTplCategory(e.target.value as any)}
-                    className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white"
-                  >
-                    <option value="UTILITY">Utility</option>
-                    <option value="MARKETING">Marketing</option>
-                    <option value="AUTHENTICATION">Authentication</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-neutral-700 dark:text-neutral-300 mb-1">Language</label>
-                  <select
-                    value={tplLang}
-                    onChange={(e) => setTplLang(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white"
-                  >
-                    <option value="en_US">English (US)</option>
-                    <option value="en_GB">English (UK)</option>
-                    <option value="es">Spanish</option>
-                    <option value="fr">French</option>
-                    <option value="de">German</option>
-                    <option value="hi">Hindi</option>
-                    <option value="pt_BR">Portuguese (BR)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block font-semibold text-neutral-700 dark:text-neutral-300 mb-1">Header Type</label>
-                  <select
-                    value={headerType}
-                    onChange={(e) => setHeaderType(e.target.value as any)}
-                    className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white"
-                  >
-                    <option value="NONE">None</option>
-                    <option value="TEXT">Text</option>
-                    <option value="IMAGE">Image Media</option>
-                  </select>
-                </div>
-              </div>
-
-              {headerType === 'TEXT' && (
-                <div>
-                  <label className="block font-semibold text-neutral-700 dark:text-neutral-300 mb-1">Header Text</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Order Update"
-                    value={headerText}
-                    onChange={(e) => setHeaderText(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white"
-                  />
-                </div>
-              )}
-
-              <div>
-                <label className="block font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
-                  Message Body Text <span className="text-red-500">*</span>
-                </label>
-                <textarea
-                  rows={4}
-                  required
-                  placeholder="Enter message text with variables like {{1}}, {{2}}..."
-                  value={bodyText}
-                  onChange={(e) => setBodyText(e.target.value)}
-                  className="w-full p-3 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white leading-relaxed"
-                />
-                <p className="text-[10px] text-neutral-400 mt-1">Use double braces for parameters: {'{{1}}'}, {'{{2}}'}</p>
-              </div>
-
-              <div>
-                <label className="block font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
-                  Footer (Optional)
-                </label>
-                <input
-                  type="text"
-                  placeholder="Reply STOP to unsubscribe"
-                  value={footerText}
-                  onChange={(e) => setFooterText(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white"
-                />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-neutral-700 dark:text-neutral-300 mb-1">Interactive Button</label>
-                  <select
-                    value={buttonType}
-                    onChange={(e) => setButtonType(e.target.value as any)}
-                    className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white"
-                  >
-                    <option value="NONE">None</option>
-                    <option value="QUICK_REPLY">Quick Reply Button</option>
-                    <option value="URL">Website URL Button</option>
-                  </select>
-                </div>
-
-                {buttonType !== 'NONE' && (
-                  <div>
-                    <label className="block font-semibold text-neutral-700 dark:text-neutral-300 mb-1">Button Label</label>
-                    <input
-                      type="text"
-                      placeholder="e.g. View Order"
-                      value={buttonText}
-                      onChange={(e) => setButtonText(e.target.value)}
-                      className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white"
-                    />
-                  </div>
-                )}
-              </div>
-
-              {buttonType === 'URL' && (
-                <div>
-                  <label className="block font-semibold text-neutral-700 dark:text-neutral-300 mb-1">URL Address</label>
-                  <input
-                    type="url"
-                    placeholder="https://acme.com/orders/{{1}}"
-                    value={buttonUrl}
-                    onChange={(e) => setButtonUrl(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white font-mono"
-                  />
-                </div>
-              )}
-
-              <div className="pt-3 border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-end space-x-2">
-                <button
-                  type="button"
-                  onClick={() => setIsCreateOpen(false)}
-                  className="px-4 py-2 rounded-xl border border-neutral-200 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 font-medium"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={creating}
-                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium flex items-center space-x-1.5 disabled:opacity-50"
-                >
-                  {creating ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>Submitting to Meta...</span>
-                    </>
-                  ) : (
-                    <span>Submit Template</span>
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* Advanced Create Template Modal with Live Smartphone Preview */}
+      <TemplateBuilderModal
+        isOpen={isCreateOpen}
+        onClose={() => setIsCreateOpen(false)}
+        onSubmit={handleCreateSubmit}
+        creating={creating}
+        createError={createError}
+      />
     </div>
   );
 };

@@ -48,6 +48,8 @@ export const CampaignsPage: React.FC = () => {
   const [selectedGroupId, setSelectedGroupId] = useState('all');
   const [testPhone, setTestPhone] = useState('');
   const [testStatus, setTestStatus] = useState<string | null>(null);
+  const [templateVariables, setTemplateVariables] = useState<Record<string, string>>({});
+  const [campaignMediaUrl, setCampaignMediaUrl] = useState('');
 
   useEffect(() => {
     if (!organization?.id) return;
@@ -90,6 +92,14 @@ export const CampaignsPage: React.FC = () => {
 
   const selectedTemplate = templates.find((t) => t.id === selectedTemplateId || t.metaTemplateId === selectedTemplateId);
 
+  // Extract variables needed by template body
+  const bodyText = selectedTemplate?.components?.find((c) => c.type === 'BODY')?.text || '';
+  const bodyMatches = bodyText.match(/\{\{(\d+)\}\}/g) || [];
+  const requiredVariables = Array.from(new Set(bodyMatches.map((m) => m.replace(/[\{\}]/g, ''))));
+  const hasHeaderMedia = ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(
+    String(selectedTemplate?.components?.find((c) => c.type === 'HEADER')?.format || '').toUpperCase()
+  );
+
   // Calculate target recipients (only opted-in contacts)
   const targetRecipients = contacts.filter((c) => {
     if (c.optInStatus !== 'opted_in') return false;
@@ -106,6 +116,14 @@ export const CampaignsPage: React.FC = () => {
     }
     setTestStatus('Sending test message via Meta Cloud API...');
     try {
+      const variablePayload: Record<string, string> = {};
+      requiredVariables.forEach((k) => {
+        variablePayload[`body_${k}`] = templateVariables[k] || `Customer`;
+      });
+      if (campaignMediaUrl.trim()) {
+        variablePayload.header_media_url = campaignMediaUrl.trim();
+      }
+
       const res = await fetch('/api/meta/send-message', {
         method: 'POST',
         headers: {
@@ -117,6 +135,7 @@ export const CampaignsPage: React.FC = () => {
           recipientPhone: testPhone.trim(),
           type: 'template',
           customToken: activeAccount.customToken,
+          variableValues: variablePayload,
           template: {
             name: selectedTemplate.name,
             language: selectedTemplate.language || 'en_US',
@@ -177,6 +196,14 @@ export const CampaignsPage: React.FC = () => {
       if (!campaignId) throw new Error('Failed to create campaign record');
 
       // 2. Dispatch via Meta Cloud API
+      const campaignVariables: Record<string, string> = {};
+      requiredVariables.forEach((k) => {
+        campaignVariables[`body_${k}`] = templateVariables[k] || `Customer`;
+      });
+      if (campaignMediaUrl.trim()) {
+        campaignVariables.header_media_url = campaignMediaUrl.trim();
+      }
+
       await launchCampaign(
         organization.id,
         campaignId,
@@ -186,8 +213,16 @@ export const CampaignsPage: React.FC = () => {
           language: selectedTemplate.language || 'en_US',
           components: selectedTemplate.components,
         },
-        targetRecipients.map((c) => ({ phone: c.phone, name: c.name })),
-        activeAccount.customToken
+        targetRecipients.map((c) => ({
+          phone: c.phone,
+          name: c.name,
+          variableValues: {
+            ...campaignVariables,
+            body_1: c.name || campaignVariables.body_1 || 'Customer',
+          },
+        })),
+        activeAccount.customToken,
+        campaignVariables
       );
 
       toast.showSuccess(
@@ -408,15 +443,61 @@ export const CampaignsPage: React.FC = () => {
                 </p>
               </div>
 
-              {/* Template Preview */}
+              {/* Template Preview & Dynamic Variables Input */}
               {selectedTemplate && (
-                <div className="p-3.5 rounded-xl bg-neutral-50 dark:bg-neutral-800/60 border border-neutral-200 dark:border-neutral-700 space-y-2">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
-                    Template Live Preview
-                  </span>
-                  <p className="text-xs text-neutral-800 dark:text-neutral-200 whitespace-pre-wrap">
-                    {selectedTemplate.components?.find((c) => c.type === 'BODY')?.text || '(Body)'}
-                  </p>
+                <div className="space-y-3">
+                  <div className="p-3.5 rounded-xl bg-neutral-50 dark:bg-neutral-800/60 border border-neutral-200 dark:border-neutral-700 space-y-2">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
+                      Template Message Format
+                    </span>
+                    <p className="text-xs text-neutral-800 dark:text-neutral-200 whitespace-pre-wrap">
+                      {bodyText || '(No body text)'}
+                    </p>
+                  </div>
+
+                  {/* Header Media URL if template requires IMAGE/VIDEO/DOCUMENT */}
+                  {hasHeaderMedia && (
+                    <div className="p-3 rounded-xl bg-neutral-50 dark:bg-neutral-800/60 border border-neutral-200 dark:border-neutral-700 space-y-1">
+                      <label className="block text-xs font-semibold text-neutral-700 dark:text-neutral-300">
+                        Header Media Direct Link (Image/Video/PDF) <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="url"
+                        placeholder="https://example.com/promotions/banner.jpg"
+                        value={campaignMediaUrl}
+                        onChange={(e) => setCampaignMediaUrl(e.target.value)}
+                        className="w-full px-3 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 text-xs text-neutral-900 dark:text-white font-mono"
+                      />
+                    </div>
+                  )}
+
+                  {/* Template Dynamic Variables Input Fields */}
+                  {requiredVariables.length > 0 && (
+                    <div className="p-3.5 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200/60 dark:border-emerald-800/40 space-y-2.5">
+                      <div className="flex items-center justify-between text-xs text-emerald-800 dark:text-emerald-300 font-semibold">
+                        <span>Fill Template Variable Values</span>
+                        <span className="text-[11px] font-normal text-neutral-500">
+                          {`{{1}}`} is auto-personalized to contact name if blank
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {requiredVariables.map((v) => (
+                          <div key={v} className="space-y-1">
+                            <label className="text-[11px] font-medium text-neutral-700 dark:text-neutral-300">
+                              Value for <code className="bg-emerald-100 dark:bg-emerald-900/60 px-1 py-0.5 rounded text-emerald-700 dark:text-emerald-300">{`{{${v}}}`}</code>
+                            </label>
+                            <input
+                              type="text"
+                              placeholder={v === '1' ? 'e.g. Customer Name' : v === '2' ? 'e.g. ORD-901' : `Value for {{${v}}}`}
+                              value={templateVariables[v] || ''}
+                              onChange={(e) => setTemplateVariables({ ...templateVariables, [v]: e.target.value })}
+                              className="w-full px-2.5 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 text-xs text-neutral-900 dark:text-white"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 

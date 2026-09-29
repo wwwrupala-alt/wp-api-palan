@@ -411,6 +411,49 @@ export async function handleCreateTemplate(req: Request, res: Response) {
       });
     }
 
+    // Format and sanitize components for Meta template creation
+    // If body or header has {{1}}, Meta requires "example" object with sample values!
+    const sanitizedComponents = components.map((comp: any) => {
+      const type = String(comp.type || '').toUpperCase();
+      const updated = { ...comp, type };
+
+      if (type === 'HEADER') {
+        const format = String(comp.format || 'TEXT').toUpperCase();
+        updated.format = format;
+        if (format === 'TEXT' && comp.text) {
+          const matches = comp.text.match(/\{\{(\d+)\}\}/g);
+          if (matches && (!comp.example || !comp.example.header_text)) {
+            updated.example = {
+              ...(comp.example || {}),
+              header_text: matches.map((_: string, idx: number) => `Sample ${idx + 1}`),
+            };
+          }
+        } else if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(format)) {
+          if (!comp.example || !comp.example.header_handle) {
+            // Provide Meta sample media handle if not provided so Meta review bot can preview
+            updated.example = {
+              ...(comp.example || {}),
+              header_handle: [
+                comp.mediaSampleUrl ||
+                  comp.exampleUrl ||
+                  'https://upload.wikimedia.org/wikipedia/commons/thumb/6/6b/WhatsApp.svg/800px-WhatsApp.svg.png',
+              ],
+            };
+          }
+        }
+      } else if (type === 'BODY' && comp.text) {
+        const matches = comp.text.match(/\{\{(\d+)\}\}/g);
+        if (matches && (!comp.example || !comp.example.body_text)) {
+          updated.example = {
+            ...(comp.example || {}),
+            body_text: [matches.map((_: string, idx: number) => `Sample ${idx + 1}`)],
+          };
+        }
+      }
+
+      return updated;
+    });
+
     const createUrl = `https://graph.facebook.com/${config.graphVersion}/${wabaId}/message_templates`;
     const createRes = await fetch(createUrl, {
       method: 'POST',
@@ -422,7 +465,7 @@ export async function handleCreateTemplate(req: Request, res: Response) {
         name: name.toLowerCase().replace(/[^a-z0-9_]/g, '_'),
         category,
         language,
-        components,
+        components: sanitizedComponents,
       }),
     });
 
@@ -447,10 +490,66 @@ export async function handleCreateTemplate(req: Request, res: Response) {
   }
 }
 
+// Handler: Delete Template on Meta WhatsApp Graph API
+export async function handleDeleteTemplate(req: Request, res: Response) {
+  try {
+    const { wabaId, templateName, templateId, customToken } = req.body;
+    const config = getMetaConfig();
+    const token =
+      customToken ||
+      (req.headers['x-meta-token'] as string) ||
+      config.systemToken;
+
+    if (!wabaId || (!templateName && !templateId)) {
+      return res.status(400).json({
+        error: 'wabaId and templateName (or templateId) are required to delete a template.',
+        code: 'MISSING_FIELDS',
+      });
+    }
+
+    if (!token) {
+      return res.status(400).json({
+        error: 'Meta system user access token is required.',
+        code: 'TOKEN_REQUIRED',
+      });
+    }
+
+    // According to Meta Cloud API:
+    // DELETE https://graph.facebook.com/v21.0/{waba-id}/message_templates?name={template-name}
+    // Or if templateId is provided, DELETE https://graph.facebook.com/v21.0/{template-id}
+    let deleteUrl = `https://graph.facebook.com/${config.graphVersion}/${wabaId}/message_templates?name=${encodeURIComponent(templateName)}`;
+    if (templateId && !templateName) {
+      deleteUrl = `https://graph.facebook.com/${config.graphVersion}/${templateId}`;
+    }
+
+    const deleteRes = await fetch(deleteUrl, {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const deleteData = await deleteRes.json();
+
+    if (!deleteRes.ok || (deleteData.error && !deleteData.success)) {
+      return res.status(400).json({
+        error: deleteData.error?.message || 'Meta rejected template deletion.',
+        code: 'TEMPLATE_DELETE_FAILED',
+        details: deleteData.error,
+      });
+    }
+
+    return res.json({ success: true, message: 'Template successfully deleted from Meta.' });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Error deleting template from Meta';
+    return res.status(500).json({ error: message, code: 'SERVER_ERROR' });
+  }
+}
+
 // Handler: Send Message via Meta WhatsApp Cloud API
 export async function handleSendMessage(req: Request, res: Response) {
   try {
-    const { phoneNumberId, recipientPhone, type, body, template, mediaUrl, customToken } = req.body;
+    const { phoneNumberId, recipientPhone, type, body, template, mediaUrl, variableValues, customToken } = req.body;
     const config = getMetaConfig();
     const token =
       customToken ||
@@ -480,7 +579,7 @@ export async function handleSendMessage(req: Request, res: Response) {
     };
 
     if (type === 'template' && template) {
-      const formattedComponents = formatTemplateComponentsForSending(template.components);
+      const formattedComponents = formatTemplateComponentsForSending(template.components, variableValues);
       payload = {
         ...payload,
         type: 'template',
@@ -562,7 +661,7 @@ export async function handleSendMessage(req: Request, res: Response) {
 // Handler: Dispatch Campaign Broadcast via Meta Cloud API
 export async function handleSendCampaign(req: Request, res: Response) {
   try {
-    const { phoneNumberId, template, recipients, customToken } = req.body;
+    const { phoneNumberId, template, recipients, variableValues, customToken } = req.body;
     const config = getMetaConfig();
     const token =
       customToken ||
@@ -590,7 +689,8 @@ export async function handleSendCampaign(req: Request, res: Response) {
     // Send messages in batches adhering to Meta rate limits
     for (const recipient of recipients) {
       const cleanPhone = (recipient.phone || recipient).replace(/[^0-9]/g, '');
-      const formattedComponents = formatTemplateComponentsForSending(template.components);
+      const recipientVariables = recipient.variableValues || variableValues || {};
+      const formattedComponents = formatTemplateComponentsForSending(template.components, recipientVariables);
       try {
         const sendUrl = `https://graph.facebook.com/${config.graphVersion}/${phoneNumberId}/messages`;
         const resMeta = await fetch(sendUrl, {
