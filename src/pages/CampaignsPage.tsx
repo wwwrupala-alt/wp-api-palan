@@ -184,14 +184,16 @@ export const CampaignsPage: React.FC = () => {
 
     try {
       // 1. Create campaign document
-      const campaignId = await createCampaign(organization.id, {
+      const campaignPayload = {
         name: campName.trim(),
         whatsAppAccountId: activeAccount.id,
         templateId: selectedTemplate.id,
         templateName: selectedTemplate.name,
-        groupId: selectedGroupId !== 'all' ? selectedGroupId : undefined,
+        ...(selectedGroupId !== 'all' && selectedGroupId ? { groupId: selectedGroupId } : {}),
         recipientCount: targetRecipients.length,
-      });
+      };
+
+      const campaignId = await createCampaign(organization.id, campaignPayload);
 
       if (!campaignId) throw new Error('Failed to create campaign record');
 

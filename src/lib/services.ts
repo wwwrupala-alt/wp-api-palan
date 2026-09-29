@@ -47,6 +47,24 @@ async function parseJsonResponse<T = any>(res: Response, fallbackError: string):
   return json;
 }
 
+/**
+ * Removes undefined fields from objects recursively.
+ * Cloud Firestore throws: "Unsupported field value: undefined" if any property is undefined.
+ */
+export function removeUndefined<T extends Record<string, any>>(obj: T): Partial<T> {
+  const clean: any = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+        clean[key] = removeUndefined(value);
+      } else {
+        clean[key] = value;
+      }
+    }
+  }
+  return clean;
+}
+
 // -------------------------------------------------------------
 // CONTACTS & GROUPS
 // -------------------------------------------------------------
@@ -80,11 +98,13 @@ export async function addContact(orgId: string, contactData: Omit<Contact, 'id' 
   const path = `organizations/${orgId}/contacts/${contactId}`;
   const now = new Date().toISOString();
 
-  const record: Omit<Contact, 'id'> = {
+  const rawRecord: Omit<Contact, 'id'> = {
     ...contactData,
     createdAt: now,
     updatedAt: now,
   };
+
+  const record = removeUndefined(rawRecord);
 
   try {
     await setDoc(doc(db, 'organizations', orgId, 'contacts', contactId), record);
@@ -96,11 +116,12 @@ export async function addContact(orgId: string, contactData: Omit<Contact, 'id' 
 
 export async function updateContact(orgId: string, contactId: string, updates: Partial<Contact>) {
   const path = `organizations/${orgId}/contacts/${contactId}`;
+  const cleanUpdates = removeUndefined({
+    ...updates,
+    updatedAt: new Date().toISOString(),
+  });
   try {
-    await updateDoc(doc(db, 'organizations', orgId, 'contacts', contactId), {
-      ...updates,
-      updatedAt: new Date().toISOString(),
-    });
+    await updateDoc(doc(db, 'organizations', orgId, 'contacts', contactId), cleanUpdates);
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, path);
   }
@@ -344,7 +365,7 @@ export async function createCampaign(
 ) {
   const campaignId = `cmp_${Date.now()}`;
   const path = `organizations/${orgId}/campaigns/${campaignId}`;
-  const record: Omit<Campaign, 'id'> = {
+  const rawRecord: Omit<Campaign, 'id'> = {
     ...campaignData,
     status: campaignData.scheduledAt ? 'scheduled' : 'draft',
     createdAt: new Date().toISOString(),
@@ -355,6 +376,8 @@ export async function createCampaign(
       failed: 0,
     },
   };
+
+  const record = removeUndefined(rawRecord);
 
   try {
     await setDoc(doc(db, 'organizations', orgId, 'campaigns', campaignId), record);
@@ -575,12 +598,14 @@ export async function addAutomation(
   const path = `organizations/${orgId}/automations/${autoId}`;
   const now = new Date().toISOString();
 
+  const record = removeUndefined({
+    ...rule,
+    createdAt: now,
+    updatedAt: now,
+  });
+
   try {
-    await setDoc(doc(db, 'organizations', orgId, 'automations', autoId), {
-      ...rule,
-      createdAt: now,
-      updatedAt: now,
-    });
+    await setDoc(doc(db, 'organizations', orgId, 'automations', autoId), record);
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
   }

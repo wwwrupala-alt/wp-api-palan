@@ -13,8 +13,10 @@ import {
   Clock,
   X,
   Filter,
+  Loader2,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
+import { useToast } from '../context/ToastContext.tsx';
 import {
   subscribeContacts,
   subscribeGroups,
@@ -27,6 +29,7 @@ import type { Contact, ContactGroup } from '../types/index.ts';
 
 export const ContactsPage: React.FC = () => {
   const { organization } = useAuth();
+  const toast = useToast();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [groups, setGroups] = useState<ContactGroup[]>([]);
   const [loading, setLoading] = useState(true);
@@ -37,6 +40,7 @@ export const ContactsPage: React.FC = () => {
 
   // Modal states
   const [isAddOpen, setIsAddOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
@@ -78,27 +82,40 @@ export const ContactsPage: React.FC = () => {
 
   const handleSaveContact = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!organization?.id || !formPhone.trim()) return;
-
-    if (editingContact) {
-      await updateContact(organization.id, editingContact.id, {
-        name: formName.trim() || formPhone.trim(),
-        phone: formPhone.trim(),
-        email: formEmail.trim() || undefined,
-        optInStatus: formOptIn,
-        groups: formGroups,
-      });
-    } else {
-      await addContact(organization.id, {
-        name: formName.trim() || formPhone.trim(),
-        phone: formPhone.trim(),
-        email: formEmail.trim() || undefined,
-        optInStatus: formOptIn,
-        groups: formGroups,
-      });
+    if (!organization?.id) {
+      toast.showError('Organization Required', 'No active workspace or organization found.');
+      return;
     }
 
-    resetForm();
+    const cleanPhone = formPhone.trim().replace(/\s+/g, '');
+    if (!cleanPhone) {
+      toast.showWarning('Phone Required', 'Please enter a valid WhatsApp phone number.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const contactPayload = {
+        name: formName.trim() || cleanPhone,
+        phone: cleanPhone,
+        ...(formEmail.trim() ? { email: formEmail.trim() } : {}),
+        optInStatus: formOptIn,
+        groups: formGroups,
+      };
+
+      if (editingContact) {
+        await updateContact(organization.id, editingContact.id, contactPayload);
+        toast.showSuccess('Contact Updated', `Contact "${contactPayload.name}" updated successfully.`);
+      } else {
+        await addContact(organization.id, contactPayload);
+        toast.showSuccess('Contact Added', `Contact "${contactPayload.name}" saved successfully.`);
+      }
+      resetForm();
+    } catch (err) {
+      toast.showError('Failed to Save Contact', err);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const resetForm = () => {
@@ -499,9 +516,17 @@ export const ContactsPage: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium"
+                  disabled={isSubmitting}
+                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-medium flex items-center space-x-1.5 cursor-pointer shadow-xs transition-all"
                 >
-                  {editingContact ? 'Update Contact' : 'Save Contact'}
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : (
+                    <span>{editingContact ? 'Update Contact' : 'Save Contact'}</span>
+                  )}
                 </button>
               </div>
             </form>
