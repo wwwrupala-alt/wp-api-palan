@@ -3,6 +3,7 @@ import {
   fetchAndSyncMetaAccount,
   updateFirestoreWhatsAppAccount,
 } from './metaAccountSyncService.ts';
+import { formatTemplateComponentsForSending } from './templateUtils.ts';
 
 // In-memory webhook event logs buffer for real-time visibility in the Admin panel
 export interface WebhookEventRecord {
@@ -479,13 +480,14 @@ export async function handleSendMessage(req: Request, res: Response) {
     };
 
     if (type === 'template' && template) {
+      const formattedComponents = formatTemplateComponentsForSending(template.components);
       payload = {
         ...payload,
         type: 'template',
         template: {
           name: template.name,
           language: { code: template.language || 'en_US' },
-          components: template.components || [],
+          ...(formattedComponents.length > 0 ? { components: formattedComponents } : {}),
         },
       };
     } else if (type === 'image' && mediaUrl) {
@@ -588,6 +590,7 @@ export async function handleSendCampaign(req: Request, res: Response) {
     // Send messages in batches adhering to Meta rate limits
     for (const recipient of recipients) {
       const cleanPhone = (recipient.phone || recipient).replace(/[^0-9]/g, '');
+      const formattedComponents = formatTemplateComponentsForSending(template.components);
       try {
         const sendUrl = `https://graph.facebook.com/${config.graphVersion}/${phoneNumberId}/messages`;
         const resMeta = await fetch(sendUrl, {
@@ -604,7 +607,7 @@ export async function handleSendCampaign(req: Request, res: Response) {
             template: {
               name: template.name,
               language: { code: template.language || 'en_US' },
-              components: template.components || [],
+              ...(formattedComponents.length > 0 ? { components: formattedComponents } : {}),
             },
           }),
         });

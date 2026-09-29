@@ -160,6 +160,14 @@ function translateKnownMetaError(rawMsg: string, code?: string): { title: string
     };
   }
 
+  if (lower.includes('unexpected key') || (lower.includes('param') && lower.includes('template.components'))) {
+    return {
+      title: 'Template Parameters Formatted',
+      message: 'Meta WhatsApp templates only require variable values when sending. Definition fields have been sanitized automatically.',
+      code: code || 'TEMPLATE_PAYLOAD_MISMATCH',
+    };
+  }
+
   return {
     title: 'API Error',
     message: rawMsg,
