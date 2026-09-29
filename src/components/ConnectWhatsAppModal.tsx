@@ -495,9 +495,12 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
                 <div className="p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/40 flex items-start space-x-2.5 text-xs text-emerald-800 dark:text-emerald-300">
                   <div className="w-2 h-2 rounded-full bg-emerald-500 mt-1.5 shrink-0" />
                   <div>
-                    <p className="font-semibold">Meta App Configured (ID: {metaStatus?.appId || '28291855670435316'})</p>
+                    <p className="font-semibold">Meta App & Config Connected</p>
                     <p className="mt-0.5 text-[11px] leading-relaxed">
-                      Click below to open the official Meta Facebook Login dialog for WhatsApp Coexistence Mode onboarding.
+                      App ID: <code>{metaStatus?.appId || '28291855670435316'}</code> • Config ID: <code>{metaStatus?.configId || '1030431656687202'}</code>
+                    </p>
+                    <p className="mt-1 text-[11px] text-emerald-700 dark:text-emerald-400">
+                      Click below to open Meta's Embedded Signup popup for Coexistence Mode onboarding.
                     </p>
                   </div>
                 </div>

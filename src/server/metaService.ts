@@ -37,6 +37,7 @@ export function addWebhookLog(log: Omit<WebhookEventRecord, 'id' | 'timestamp'>)
 export function getMetaConfig() {
   const appId = process.env.META_APP_ID || process.env.VITE_META_APP_ID || '28291855670435316';
   const appSecret = process.env.META_APP_SECRET || '980d9e5cc7ef34822e00a35ca5939a79';
+  const configId = process.env.META_CONFIG_ID || process.env.VITE_META_CONFIG_ID || '1030431656687202';
   const verifyToken = process.env.META_WEBHOOK_VERIFY_TOKEN || 'cloudwaba_verify_token_secure';
   const systemToken = process.env.META_SYSTEM_USER_ACCESS_TOKEN || '';
   const graphVersion = process.env.META_GRAPH_VERSION || 'v22.0';
@@ -45,6 +46,7 @@ export function getMetaConfig() {
   return {
     appId,
     appSecret,
+    configId,
     verifyToken,
     systemToken,
     graphVersion,
@@ -60,6 +62,7 @@ export function handleGetMetaStatus(req: Request, res: Response) {
     isConfigured: config.isConfigured,
     appIdSet: Boolean(config.appId),
     appId: config.appId,
+    configId: config.configId,
     appSecretSet: Boolean(config.appSecret),
     webhookVerifyTokenSet: Boolean(config.verifyToken),
     systemTokenSet: Boolean(config.systemToken),

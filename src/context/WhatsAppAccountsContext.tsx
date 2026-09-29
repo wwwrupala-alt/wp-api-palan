@@ -217,10 +217,10 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
           return;
         }
 
-        const configId = (import.meta.env.VITE_META_CONFIG_ID as string) || '';
+        const configId = metaStatus?.configId || (import.meta.env.VITE_META_CONFIG_ID as string) || '1030431656687202';
 
         const loginOptions: Record<string, unknown> = {
-          scope: 'whatsapp_business_management,whatsapp_business_messaging',
+          config_id: configId,
           response_type: 'code',
           override_default_response_type: true,
           extras: {
@@ -229,10 +229,6 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
             },
           },
         };
-
-        if (configId) {
-          loginOptions.config_id = configId;
-        }
 
         window.FB.login((response) => {
           clearTimeout(timer);

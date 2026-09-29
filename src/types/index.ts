@@ -170,6 +170,7 @@ export interface MetaConfigStatus {
   isConfigured: boolean;
   appIdSet: boolean;
   appId?: string;
+  configId?: string;
   appSecretSet: boolean;
   webhookVerifyTokenSet: boolean;
   systemTokenSet: boolean;
