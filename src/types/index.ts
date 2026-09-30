@@ -1,12 +1,27 @@
-export type UserRole = 'owner' | 'admin' | 'agent';
+export type UserRole = 'master_admin' | 'owner' | 'admin' | 'agent';
+
+export interface UserSubscription {
+  planName: 'trial' | 'basic' | 'pro' | 'enterprise';
+  maxWhatsAppNumbers: number;
+  maxMonthlyBroadcasts: number;
+  maxContacts: number;
+  expiresAt: string; // ISO date string
+  status: 'active' | 'expired' | 'suspended';
+  coexistenceAllowed: boolean;
+  notes?: string;
+}
 
 export interface UserProfile {
   uid: string;
   email: string;
   displayName: string;
+  phone?: string;
   photoURL?: string;
   role: UserRole;
   organizationId: string;
+  loginPassword?: string; // Stored securely for Admin credential management
+  subscription?: UserSubscription;
+  managedByAdminId?: string; // Hierarchical tracking for future Master Admin
   createdAt: string;
   updatedAt: string;
 }
@@ -16,6 +31,12 @@ export interface Organization {
   name: string;
   ownerId: string;
   status: 'active' | 'suspended';
+  subscription?: UserSubscription;
+  metaAppConfig?: {
+    appId?: string;
+    appSecret?: string;
+    configId?: string;
+  };
   createdAt: string;
   updatedAt: string;
 }

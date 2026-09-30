@@ -38,9 +38,12 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
   onClose,
   onSuccess,
 }) => {
-  const { metaStatus, connectViaEmbeddedSignup, connectManualAccount, testMetaCredentials } = useWhatsAppAccounts();
+  const { accounts, metaStatus, connectViaEmbeddedSignup, connectManualAccount, testMetaCredentials } = useWhatsAppAccounts();
   const { userProfile } = useAuth();
   const toast = useToast();
+
+  const maxAllowedNumbers = userProfile?.subscription?.maxWhatsAppNumbers ?? 1;
+  const isLimitReached = accounts.length >= maxAllowedNumbers;
 
   // Tab: 'direct' (Phone number / ID) or 'embedded' (Facebook SDK)
   const [activeTab, setActiveTab] = useState<'direct' | 'embedded'>('direct');
@@ -142,6 +145,13 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
     setError(null);
     setSuccess(null);
 
+    if (isLimitReached) {
+      const limitMsg = `Your account plan allows a maximum of ${maxAllowedNumbers} connected WhatsApp number(s). Please contact your Administrator to upgrade your limit.`;
+      setError(limitMsg);
+      toast.showWarning('Number Limit Reached', limitMsg);
+      return;
+    }
+
     const hasAppId = Boolean(metaStatus?.appIdSet || metaStatus?.appId || import.meta.env.VITE_META_APP_ID || '28291855670435316');
     if (!hasAppId) {
       const msg = 'Meta App ID is not yet configured in server environment. Please use the "Real Meta API Credentials" tab to connect your WhatsApp account directly.';
@@ -171,6 +181,14 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
 
   const handleDirectConnect = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (isLimitReached) {
+      const limitMsg = `Your account plan allows a maximum of ${maxAllowedNumbers} connected WhatsApp number(s). Please contact your Administrator to upgrade your limit.`;
+      setError(limitMsg);
+      toast.showWarning('Number Limit Reached', limitMsg);
+      return;
+    }
+
     const cleanPhoneId = phoneNumberId.trim() || displayPhone.replace(/[^0-9]/g, '');
     if (!cleanPhoneId) {
       const msg = 'Please enter a valid Phone Number ID or WhatsApp Mobile Number.';
@@ -490,6 +508,29 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
                   <li>Webhook endpoints are registered automatically upon completion.</li>
                 </ul>
               </div>
+
+              {/* User Subscription Quota Badge */}
+              <div className="p-3 rounded-2xl bg-neutral-100 dark:bg-neutral-800/60 border border-neutral-200 dark:border-neutral-700 flex items-center justify-between text-xs">
+                <span className="text-neutral-600 dark:text-neutral-400 font-medium">
+                  Your WhatsApp Number Quota:
+                </span>
+                <span className={`font-bold font-mono px-2 py-0.5 rounded ${
+                  isLimitReached
+                    ? 'bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300'
+                    : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+                }`}>
+                  {accounts.length} / {maxAllowedNumbers} Numbers Connected
+                </span>
+              </div>
+
+              {isLimitReached && (
+                <div className="p-3 rounded-2xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/40 text-xs text-rose-700 dark:text-rose-300">
+                  <p className="font-semibold">Account Quota Limit Reached</p>
+                  <p className="text-[11px] mt-0.5">
+                    Your assigned plan allows a maximum of {maxAllowedNumbers} number(s). Contact your Administrator to upgrade your limit.
+                  </p>
+                </div>
+              )}
 
               {Boolean(metaStatus?.appIdSet || metaStatus?.appId) ? (
                 <div className="p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/40 flex items-start space-x-2.5 text-xs text-emerald-800 dark:text-emerald-300">

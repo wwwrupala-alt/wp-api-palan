@@ -1,6 +1,7 @@
 import {
   collection,
   doc,
+  getDoc,
   setDoc,
   updateDoc,
   deleteDoc,
@@ -629,5 +630,170 @@ export async function deleteAutomation(orgId: string, autoId: string) {
     await deleteDoc(doc(db, 'organizations', orgId, 'automations', autoId));
   } catch (err) {
     handleFirestoreError(err, OperationType.DELETE, path);
+  }
+}
+
+// -------------------------------------------------------------
+// ADMIN MULTI-TENANT USER & SUBSCRIPTION MANAGEMENT
+// -------------------------------------------------------------
+
+export function subscribeManagedUsers(
+  onData: (users: UserProfile[]) => void,
+  onError: (err: unknown) => void
+) {
+  const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const list: UserProfile[] = [];
+      snapshot.forEach((d) => {
+        list.push({ uid: d.id, ...(d.data() as Omit<UserProfile, 'uid'>) });
+      });
+      onData(list);
+    },
+    (err) => {
+      onError(err);
+    }
+  );
+}
+
+export async function createManagedUser(
+  adminUid: string,
+  data: {
+    displayName: string;
+    phoneOrEmail: string;
+    password: string;
+    role: 'owner' | 'admin' | 'agent';
+    maxWhatsAppNumbers: number;
+    maxMonthlyBroadcasts: number;
+    maxContacts: number;
+    validityDays: number;
+    planName: 'trial' | 'basic' | 'pro' | 'enterprise';
+    coexistenceAllowed: boolean;
+  }
+) {
+  const cleanId = data.phoneOrEmail.trim().replace(/\s+/g, '');
+  const uid = `user_${cleanId.replace(/[^0-9a-zA-Z]/g, '_')}`;
+  const orgId = `org_${cleanId.replace(/[^0-9a-zA-Z]/g, '_')}`;
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + data.validityDays * 24 * 60 * 60 * 1000).toISOString();
+
+  // 1. Create separate Organization tenant for this user
+  const orgRef = doc(db, 'organizations', orgId);
+  await setDoc(orgRef, {
+    name: `${data.displayName}'s Organization`,
+    ownerId: uid,
+    status: 'active',
+    subscription: {
+      planName: data.planName,
+      maxWhatsAppNumbers: data.maxWhatsAppNumbers,
+      maxMonthlyBroadcasts: data.maxMonthlyBroadcasts,
+      maxContacts: data.maxContacts,
+      expiresAt,
+      status: 'active',
+      coexistenceAllowed: data.coexistenceAllowed,
+    },
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+  });
+
+  // 2. Create User document with credential login & subscription limits
+  const userRef = doc(db, 'users', uid);
+  const userProfile: UserProfile = {
+    uid,
+    email: cleanId.includes('@') ? cleanId : `${cleanId}@cloudwaba.internal`,
+    phone: cleanId.replace(/[^0-9+]/g, ''),
+    displayName: data.displayName,
+    role: data.role,
+    organizationId: orgId,
+    loginPassword: data.password.trim(),
+    managedByAdminId: adminUid,
+    subscription: {
+      planName: data.planName,
+      maxWhatsAppNumbers: data.maxWhatsAppNumbers,
+      maxMonthlyBroadcasts: data.maxMonthlyBroadcasts,
+      maxContacts: data.maxContacts,
+      expiresAt,
+      status: 'active',
+      coexistenceAllowed: data.coexistenceAllowed,
+    },
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+  };
+
+  await setDoc(userRef, userProfile);
+  return { uid, orgId, userProfile };
+}
+
+export async function updateManagedUserSubscription(
+  uid: string,
+  orgId: string,
+  updates: {
+    loginPassword?: string;
+    maxWhatsAppNumbers?: number;
+    maxMonthlyBroadcasts?: number;
+    maxContacts?: number;
+    expiresAt?: string;
+    status?: 'active' | 'expired' | 'suspended';
+    planName?: 'trial' | 'basic' | 'pro' | 'enterprise';
+    coexistenceAllowed?: boolean;
+    notes?: string;
+  }
+) {
+  const userRef = doc(db, 'users', uid);
+  const userSnap = await getDoc(userRef);
+
+  if (!userSnap.exists()) {
+    throw new Error('User not found in system.');
+  }
+
+  const existing = userSnap.data() as UserProfile;
+  const currentSub = existing.subscription || {
+    planName: 'basic',
+    maxWhatsAppNumbers: 1,
+    maxMonthlyBroadcasts: 1000,
+    maxContacts: 500,
+    expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+    status: 'active',
+    coexistenceAllowed: true,
+  };
+
+  const updatedSubscription = {
+    ...currentSub,
+    ...(updates.planName ? { planName: updates.planName } : {}),
+    ...(updates.maxWhatsAppNumbers !== undefined ? { maxWhatsAppNumbers: updates.maxWhatsAppNumbers } : {}),
+    ...(updates.maxMonthlyBroadcasts !== undefined ? { maxMonthlyBroadcasts: updates.maxMonthlyBroadcasts } : {}),
+    ...(updates.maxContacts !== undefined ? { maxContacts: updates.maxContacts } : {}),
+    ...(updates.expiresAt ? { expiresAt: updates.expiresAt } : {}),
+    ...(updates.status ? { status: updates.status } : {}),
+    ...(updates.coexistenceAllowed !== undefined ? { coexistenceAllowed: updates.coexistenceAllowed } : {}),
+    ...(updates.notes !== undefined ? { notes: updates.notes } : {}),
+  };
+
+  // Update user doc
+  await updateDoc(userRef, {
+    ...(updates.loginPassword ? { loginPassword: updates.loginPassword } : {}),
+    subscription: updatedSubscription,
+    updatedAt: new Date().toISOString(),
+  });
+
+  // Sync with organization doc
+  if (orgId) {
+    const orgRef = doc(db, 'organizations', orgId);
+    await updateDoc(orgRef, {
+      subscription: updatedSubscription,
+      ...(updates.status ? { status: updates.status === 'suspended' ? 'suspended' : 'active' } : {}),
+      updatedAt: new Date().toISOString(),
+    });
+  }
+}
+
+export async function deleteManagedUser(uid: string, orgId: string) {
+  const userRef = doc(db, 'users', uid);
+  await deleteDoc(userRef);
+
+  if (orgId && orgId !== 'org_admin_master') {
+    const orgRef = doc(db, 'organizations', orgId);
+    await deleteDoc(orgRef);
   }
 }

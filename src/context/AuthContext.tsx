@@ -175,7 +175,112 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const cleanId = identifier.trim().replace(/\s+/g, '');
     const cleanPass = pass.trim();
 
-    // Check specific credentials: 9974428034 / 11111111 or custom
+    // 1. Primary requested Admin login: 12345689 (or 123456789) / 123456789
+    if (
+      (cleanId === '12345689' || cleanId === '123456789') &&
+      (cleanPass === '123456789' || cleanPass === '12345689')
+    ) {
+      const adminUser: CustomUser = {
+        uid: 'admin_master_12345689',
+        email: 'admin@wp-api-palan.vercel.app',
+        displayName: 'Master Administrator',
+      };
+
+      // Set admin profile & dedicated tenant in Firestore
+      try {
+        const userRef = doc(db, 'users', adminUser.uid);
+        const orgRef = doc(db, 'organizations', 'org_admin_master');
+        await setDoc(
+          orgRef,
+          {
+            name: 'CloudWABA Master Admin Org',
+            ownerId: adminUser.uid,
+            status: 'active',
+            subscription: {
+              planName: 'enterprise',
+              maxWhatsAppNumbers: 9999,
+              maxMonthlyBroadcasts: 9999999,
+              maxContacts: 9999999,
+              expiresAt: '2099-12-31T23:59:59.000Z',
+              status: 'active',
+              coexistenceAllowed: true,
+              notes: 'Root Admin Account',
+            },
+            updatedAt: new Date().toISOString(),
+          },
+          { merge: true }
+        );
+
+        await setDoc(
+          userRef,
+          {
+            uid: adminUser.uid,
+            email: adminUser.email,
+            displayName: adminUser.displayName,
+            phone: cleanId,
+            role: 'master_admin',
+            organizationId: 'org_admin_master',
+            loginPassword: cleanPass,
+            subscription: {
+              planName: 'enterprise',
+              maxWhatsAppNumbers: 9999,
+              maxMonthlyBroadcasts: 9999999,
+              maxContacts: 9999999,
+              expiresAt: '2099-12-31T23:59:59.000Z',
+              status: 'active',
+              coexistenceAllowed: true,
+            },
+            updatedAt: new Date().toISOString(),
+          },
+          { merge: true }
+        );
+      } catch (err) {
+        console.warn('Admin user sync error:', err);
+      }
+
+      localStorage.setItem('cw_custom_session', JSON.stringify(adminUser));
+      setCurrentUser(adminUser);
+      await loadUserData(adminUser);
+      return;
+    }
+
+    // 2. Check if a managed user was created in Firestore by Admin
+    try {
+      const userRef = doc(db, 'users', `user_${cleanId.replace(/[^0-9a-zA-Z]/g, '_')}`);
+      const userSnap = await getDoc(userRef);
+
+      if (userSnap.exists()) {
+        const userData = userSnap.data() as UserProfile;
+        if (userData.loginPassword && userData.loginPassword !== cleanPass) {
+          throw new Error('Incorrect password. Please verify the credentials provided by your Administrator.');
+        }
+
+        // Check subscription expiry
+        if (userData.subscription?.expiresAt) {
+          const expiryTime = new Date(userData.subscription.expiresAt).getTime();
+          if (Date.now() > expiryTime) {
+            throw new Error(`Your account subscription expired on ${new Date(userData.subscription.expiresAt).toLocaleDateString()}. Please contact your Administrator to renew.`);
+          }
+        }
+
+        const customUser: CustomUser = {
+          uid: userData.uid,
+          email: userData.email,
+          displayName: userData.displayName || cleanId,
+        };
+
+        localStorage.setItem('cw_custom_session', JSON.stringify(customUser));
+        setCurrentUser(customUser);
+        await loadUserData(customUser);
+        return;
+      }
+    } catch (dbErr: any) {
+      if (dbErr?.message?.includes('Incorrect password') || dbErr?.message?.includes('subscription expired')) {
+        throw dbErr;
+      }
+    }
+
+    // 3. Fallback direct credentials check: 9974428034 / 11111111 or standard password >= 6
     if (cleanId === '9974428034' && cleanPass === '11111111') {
       const customUser: CustomUser = {
         uid: 'user_9974428034',
@@ -189,7 +294,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
 
-    // Allow general mobile / email credential login if pass is valid (at least 6 chars)
     if (cleanPass.length >= 6) {
       const uid = `user_${cleanId.replace(/[^0-9a-zA-Z]/g, '_')}`;
       const customUser: CustomUser = {
