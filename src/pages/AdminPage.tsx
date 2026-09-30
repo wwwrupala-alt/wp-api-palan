@@ -28,6 +28,10 @@ import {
   Loader2,
   Database,
   Building,
+  Crown,
+  Save,
+  Globe,
+  HelpCircle,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -37,6 +41,7 @@ import {
   createManagedUser,
   updateManagedUserSubscription,
   deleteManagedUser,
+  saveOrganizationMetaConfig,
 } from '../lib/services.ts';
 import type { WebhookLog, UserProfile, UserSubscription } from '../types/index.ts';
 
@@ -45,16 +50,27 @@ export const AdminPage: React.FC = () => {
   const { accounts, metaStatus, refreshMetaStatus } = useWhatsAppAccounts();
   const toast = useToast();
 
+  const isSuperMaster =
+    userProfile?.role === 'master_admin' ||
+    currentUser?.uid?.includes('super_master_admin') ||
+    userProfile?.email?.includes('master') ||
+    userProfile?.phone === '9974428034';
+
   const [activeTab, setActiveTab] = useState<'users' | 'meta_app' | 'logs'>('users');
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [copiedToken, setCopiedToken] = useState(false);
+  const [copiedRedirect, setCopiedRedirect] = useState(false);
 
   // Managed Users List
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(true);
 
-  // Create User Modal
+  // Filter for Master Admin: 'all' | 'admins' | 'clients'
+  const [userFilter, setUserFilter] = useState<'all' | 'admins' | 'clients'>('all');
+
+  // Create User / Admin Modal
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [newRole, setNewRole] = useState<'admin' | 'owner'>('owner');
   const [newDisplayName, setNewDisplayName] = useState('');
   const [newPhoneOrEmail, setNewPhoneOrEmail] = useState('');
   const [newPassword, setNewPassword] = useState('12345678');
@@ -75,14 +91,27 @@ export const AdminPage: React.FC = () => {
   const [editStatus, setEditStatus] = useState<'active' | 'expired' | 'suspended'>('active');
   const [savingEdit, setSavingEdit] = useState(false);
 
+  // Meta App Custom Config Fields for this Admin Tenant
+  const [metaAppIdInput, setMetaAppIdInput] = useState(
+    organization?.metaAppConfig?.appId || ''
+  );
+  const [metaAppSecretInput, setMetaAppSecretInput] = useState(
+    organization?.metaAppConfig?.appSecret || ''
+  );
+  const [metaConfigIdInput, setMetaConfigIdInput] = useState(
+    organization?.metaAppConfig?.configId || ''
+  );
+  const [metaSystemTokenInput, setMetaSystemTokenInput] = useState(
+    organization?.metaAppConfig?.systemUserToken || ''
+  );
+  const [metaWabaIdInput, setMetaWabaIdInput] = useState(
+    organization?.metaAppConfig?.wabaId || ''
+  );
+  const [savingMetaConfig, setSavingMetaConfig] = useState(false);
+
   // Webhook Logs
   const [webhookLogs, setWebhookLogs] = useState<WebhookLog[]>([]);
   const [loadingLogs, setLoadingLogs] = useState(true);
-
-  const isMasterAdmin =
-    userProfile?.role === 'master_admin' ||
-    userProfile?.email?.includes('admin') ||
-    userProfile?.uid?.includes('admin');
 
   // Load Users
   useEffect(() => {
@@ -120,32 +149,61 @@ export const AdminPage: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
-  const copyText = (text: string, type: 'url' | 'token') => {
+  const copyText = (text: string, type: 'url' | 'token' | 'redirect') => {
     navigator.clipboard.writeText(text);
     if (type === 'url') {
       setCopiedUrl(true);
       setTimeout(() => setCopiedUrl(false), 2000);
-    } else {
+    } else if (type === 'token') {
       setCopiedToken(true);
       setTimeout(() => setCopiedToken(false), 2000);
+    } else {
+      setCopiedRedirect(true);
+      setTimeout(() => setCopiedRedirect(false), 2000);
     }
   };
 
-  // Handle Create User
+  // Handle Save Custom Meta App Details
+  const handleSaveMetaAppConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!organization?.id) return;
+    setSavingMetaConfig(true);
+
+    try {
+      await saveOrganizationMetaConfig(organization.id, {
+        appId: metaAppIdInput.trim(),
+        appSecret: metaAppSecretInput.trim(),
+        configId: metaConfigIdInput.trim(),
+        systemUserToken: metaSystemTokenInput.trim() || undefined,
+        wabaId: metaWabaIdInput.trim() || undefined,
+      });
+
+      toast.showSuccess(
+        'Meta App Configuration Saved',
+        'Your custom Meta App credentials and Embedded Signup settings have been saved.'
+      );
+    } catch (err: any) {
+      toast.showError('Save Failed', err?.message || 'Failed to save Meta App configuration.');
+    } finally {
+      setSavingMetaConfig(false);
+    }
+  };
+
+  // Handle Create User or Sub-Admin
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newDisplayName.trim() || !newPhoneOrEmail.trim() || !newPassword.trim()) {
-      toast.showWarning('Missing Info', 'Please provide user name, mobile/email, and password.');
+      toast.showWarning('Missing Info', 'Please provide name, mobile/email, and password.');
       return;
     }
 
     setCreatingUser(true);
     try {
-      await createManagedUser(currentUser?.uid || 'admin', {
+      await createManagedUser(currentUser?.uid || 'master_admin', {
         displayName: newDisplayName.trim(),
         phoneOrEmail: newPhoneOrEmail.trim(),
         password: newPassword.trim(),
-        role: 'owner',
+        role: newRole,
         maxWhatsAppNumbers: Number(newMaxNumbers),
         maxMonthlyBroadcasts: Number(newMaxBroadcasts),
         maxContacts: Number(newMaxContacts),
@@ -155,8 +213,8 @@ export const AdminPage: React.FC = () => {
       });
 
       toast.showSuccess(
-        'User Created Successfully',
-        `User ${newDisplayName} created with separate tenant & ${newValidityDays} days validity.`
+        newRole === 'admin' ? 'Sub-Admin Created' : 'Client User Created',
+        `${newDisplayName} account created with separate isolated database.`
       );
 
       setIsCreateModalOpen(false);
@@ -164,7 +222,7 @@ export const AdminPage: React.FC = () => {
       setNewPhoneOrEmail('');
       setNewPassword('12345678');
     } catch (err: any) {
-      toast.showError('User Creation Failed', err?.message || 'Could not create user.');
+      toast.showError('Creation Failed', err?.message || 'Could not create account.');
     } finally {
       setCreatingUser(false);
     }
@@ -186,7 +244,6 @@ export const AdminPage: React.FC = () => {
     setSavingEdit(true);
 
     try {
-      // Calculate new expiry if days were extended
       let newExpiresAt = editingUser.subscription?.expiresAt;
       if (editDaysToAdd > 0) {
         const currentExp = newExpiresAt ? new Date(newExpiresAt).getTime() : Date.now();
@@ -203,12 +260,12 @@ export const AdminPage: React.FC = () => {
       });
 
       toast.showSuccess(
-        'User Settings Updated',
-        `Successfully updated limits and subscription for ${editingUser.displayName}.`
+        'Account Updated',
+        `Successfully updated limits and renewed plan for ${editingUser.displayName}.`
       );
       setEditingUser(null);
     } catch (err: any) {
-      toast.showError('Update Failed', err?.message || 'Failed to update user.');
+      toast.showError('Update Failed', err?.message || 'Failed to update account.');
     } finally {
       setSavingEdit(false);
     }
@@ -216,16 +273,22 @@ export const AdminPage: React.FC = () => {
 
   // Handle Delete User
   const handleDeleteUser = async (u: UserProfile) => {
-    if (!confirm(`Are you sure you want to permanently delete user "${u.displayName}" (${u.email || u.phone}) and their isolated database?`)) {
+    if (!confirm(`Are you sure you want to permanently delete "${u.displayName}" (${u.email || u.phone}) and their isolated database?`)) {
       return;
     }
     try {
       await deleteManagedUser(u.uid, u.organizationId);
-      toast.showSuccess('User Deleted', `User ${u.displayName} removed.`);
+      toast.showSuccess('Deleted', `Account ${u.displayName} removed.`);
     } catch (err: any) {
-      toast.showError('Delete Failed', err?.message || 'Failed to delete user.');
+      toast.showError('Delete Failed', err?.message || 'Failed to delete account.');
     }
   };
+
+  const filteredUsers = users.filter((u) => {
+    if (userFilter === 'admins') return u.role === 'admin' || u.role === 'master_admin';
+    if (userFilter === 'clients') return u.role === 'owner' || u.role === 'agent';
+    return true;
+  });
 
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-7xl mx-auto animate-fadeIn">
@@ -234,17 +297,33 @@ export const AdminPage: React.FC = () => {
         <div>
           <div className="flex items-center space-x-2.5">
             <h2 className="text-xl font-bold tracking-tight text-neutral-900 dark:text-white flex items-center space-x-2">
-              <span>Admin Management Portal</span>
+              {isSuperMaster ? (
+                <>
+                  <Crown className="w-5 h-5 text-amber-500" />
+                  <span>Super Master Admin Control Panel</span>
+                </>
+              ) : (
+                <>
+                  <ShieldCheck className="w-5 h-5 text-purple-600" />
+                  <span>Admin Management Portal</span>
+                </>
+              )}
             </h2>
-            <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
-              {isMasterAdmin ? 'Master Admin' : 'Admin'}
+            <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border ${
+              isSuperMaster
+                ? 'bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-800'
+                : 'bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800'
+            }`}>
+              {isSuperMaster ? 'SUPER MASTER ROOT' : 'TENANT ADMIN'}
             </span>
             <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400">
-              Portal: wp-api-palan.vercel.app
+              wp-api-palan.vercel.app
             </span>
           </div>
           <p className="text-xs sm:text-sm text-neutral-500 dark:text-neutral-400">
-            Create and manage client users, set WhatsApp number limits, expiry dates, renew plans, and audit system events.
+            {isSuperMaster
+              ? 'Root Authority: Assign new Sub-Admins, manage client users, and configure independent Meta Apps with isolated databases.'
+              : 'Admin Authority: Create and manage client users, set WhatsApp number limits, expiry dates & renew packages.'}
           </p>
         </div>
 
@@ -254,7 +333,7 @@ export const AdminPage: React.FC = () => {
             className="inline-flex items-center space-x-1.5 px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
           >
             <UserPlus className="w-4 h-4" />
-            <span>Create New User</span>
+            <span>{isSuperMaster ? 'Assign New Admin / User' : 'Create New User'}</span>
           </button>
 
           <button
@@ -281,7 +360,7 @@ export const AdminPage: React.FC = () => {
           }`}
         >
           <Users className="w-4 h-4" />
-          <span>User Accounts &amp; Limits ({users.length})</span>
+          <span>{isSuperMaster ? 'Admins & Client Accounts' : 'User Accounts & Limits'} ({users.length})</span>
         </button>
 
         <button
@@ -293,7 +372,7 @@ export const AdminPage: React.FC = () => {
           }`}
         >
           <Lock className="w-4 h-4" />
-          <span>Meta App &amp; Webhook Credentials</span>
+          <span>Admin Meta App &amp; Embedded Signup Setup</span>
         </button>
 
         <button
@@ -309,21 +388,29 @@ export const AdminPage: React.FC = () => {
         </button>
       </div>
 
-      {/* TAB 1: USERS & TENANT LIMITS */}
+      {/* TAB 1: USERS & ADMINS LIST */}
       {activeTab === 'users' && (
         <div className="space-y-4">
+          {/* Stats Bar */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
             <div className="p-4 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 space-y-1 shadow-xs">
-              <span className="text-neutral-500">Total Managed Users</span>
+              <span className="text-neutral-500">Total Accounts</span>
               <p className="text-2xl font-bold text-neutral-900 dark:text-white font-mono">{users.length}</p>
-              <p className="text-[10px] text-emerald-600">Separate isolated organizations</p>
+              <p className="text-[10px] text-emerald-600">All data in 100% separate tenants</p>
+            </div>
+            <div className="p-4 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 space-y-1 shadow-xs">
+              <span className="text-neutral-500">Sub-Admins Assigned</span>
+              <p className="text-2xl font-bold text-purple-600 font-mono">
+                {users.filter((u) => u.role === 'admin' || u.role === 'master_admin').length}
+              </p>
+              <p className="text-[10px] text-neutral-400">Can manage their own client networks</p>
             </div>
             <div className="p-4 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 space-y-1 shadow-xs">
               <span className="text-neutral-500">Active Subscriptions</span>
               <p className="text-2xl font-bold text-emerald-600 font-mono">
                 {users.filter((u) => u.subscription?.status === 'active' || !u.subscription).length}
               </p>
-              <p className="text-[10px] text-neutral-400">Can send WhatsApp broadcasts</p>
+              <p className="text-[10px] text-neutral-400">Broadcasting &amp; Coexistence enabled</p>
             </div>
             <div className="p-4 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 space-y-1 shadow-xs">
               <span className="text-neutral-500">Expired / Due for Renew</span>
@@ -335,14 +422,46 @@ export const AdminPage: React.FC = () => {
                   }).length
                 }
               </p>
-              <p className="text-[10px] text-neutral-400">Needs admin renewal extension</p>
-            </div>
-            <div className="p-4 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 space-y-1 shadow-xs">
-              <span className="text-neutral-500">Hierarchy Architecture</span>
-              <p className="text-sm font-bold text-purple-600">Master Admin Ready</p>
-              <p className="text-[10px] text-neutral-400">Multi-tenant ready for Super Admin scaling</p>
+              <p className="text-[10px] text-neutral-400">Quick 30/60/90 days extension available</p>
             </div>
           </div>
+
+          {/* Filter Pills */}
+          {isSuperMaster && (
+            <div className="flex items-center space-x-2 text-xs">
+              <span className="text-neutral-400 text-[11px]">Filter View:</span>
+              <button
+                onClick={() => setUserFilter('all')}
+                className={`px-3 py-1 rounded-lg font-medium transition-all ${
+                  userFilter === 'all'
+                    ? 'bg-purple-600 text-white shadow-xs'
+                    : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400'
+                }`}
+              >
+                All Accounts ({users.length})
+              </button>
+              <button
+                onClick={() => setUserFilter('admins')}
+                className={`px-3 py-1 rounded-lg font-medium transition-all ${
+                  userFilter === 'admins'
+                    ? 'bg-purple-600 text-white shadow-xs'
+                    : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400'
+                }`}
+              >
+                Admins ({users.filter((u) => u.role === 'admin' || u.role === 'master_admin').length})
+              </button>
+              <button
+                onClick={() => setUserFilter('clients')}
+                className={`px-3 py-1 rounded-lg font-medium transition-all ${
+                  userFilter === 'clients'
+                    ? 'bg-purple-600 text-white shadow-xs'
+                    : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400'
+                }`}
+              >
+                Client Users ({users.filter((u) => u.role === 'owner' || u.role === 'agent').length})
+              </button>
+            </div>
+          )}
 
           {/* User Table */}
           <div className="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 overflow-hidden shadow-xs">
@@ -350,7 +469,7 @@ export const AdminPage: React.FC = () => {
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
                   <tr className="border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-800/40 text-neutral-500 dark:text-neutral-400 uppercase text-[10px] tracking-wider font-semibold">
-                    <th className="py-3 px-4">User &amp; Organization</th>
+                    <th className="py-3 px-4">Account &amp; Hierarchy</th>
                     <th className="py-3 px-4">Login Credentials</th>
                     <th className="py-3 px-4">Plan &amp; Limits</th>
                     <th className="py-3 px-4">Validity / Expiry</th>
@@ -359,14 +478,14 @@ export const AdminPage: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800">
-                  {users.length === 0 ? (
+                  {filteredUsers.length === 0 ? (
                     <tr>
                       <td colSpan={6} className="py-10 text-center text-neutral-400">
-                        No users created yet. Click "Create New User" to issue login credentials to a client.
+                        No accounts found in this category.
                       </td>
                     </tr>
                   ) : (
-                    users.map((u) => {
+                    filteredUsers.map((u) => {
                       const isExpired = u.subscription?.expiresAt
                         ? new Date(u.subscription.expiresAt).getTime() < Date.now()
                         : false;
@@ -377,9 +496,17 @@ export const AdminPage: React.FC = () => {
                             <div>
                               <div className="flex items-center space-x-1.5">
                                 <p className="font-semibold text-neutral-900 dark:text-white">{u.displayName}</p>
-                                {u.role === 'master_admin' && (
-                                  <span className="text-[9px] bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300 font-bold px-1.5 py-0.2 rounded">
-                                    ADMIN
+                                {u.role === 'master_admin' ? (
+                                  <span className="text-[9px] bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 font-bold px-1.5 py-0.2 rounded border border-amber-200">
+                                    MASTER
+                                  </span>
+                                ) : u.role === 'admin' ? (
+                                  <span className="text-[9px] bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300 font-bold px-1.5 py-0.2 rounded border border-purple-200">
+                                    SUB-ADMIN
+                                  </span>
+                                ) : (
+                                  <span className="text-[9px] bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 font-semibold px-1.5 py-0.2 rounded">
+                                    CLIENT
                                   </span>
                                 )}
                               </div>
@@ -464,7 +591,7 @@ export const AdminPage: React.FC = () => {
                               {u.uid !== currentUser?.uid && (
                                 <button
                                   onClick={() => handleDeleteUser(u)}
-                                  title="Delete user and organization"
+                                  title="Delete account and isolated database"
                                   className="p-1.5 text-neutral-400 hover:text-rose-600 dark:hover:text-rose-400 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
@@ -483,98 +610,246 @@ export const AdminPage: React.FC = () => {
         </div>
       )}
 
-      {/* TAB 2: META APP & CREDENTIALS CONFIG */}
+      {/* TAB 2: META APP & EMBEDDED SIGNUP (DETAILS PROVIDED BY PLATFORM & BLANK FIELDS FOR ADMIN'S OWN META APP) */}
       {activeTab === 'meta_app' && (
         <div className="space-y-6">
-          <div className="p-6 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 shadow-xs space-y-5">
+          <form onSubmit={handleSaveMetaAppConfig} className="p-6 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 shadow-xs space-y-6">
             <div>
-              <h3 className="font-bold text-base text-neutral-900 dark:text-white">
-                Meta WhatsApp Business Platform Connection Credentials
-              </h3>
+              <div className="flex items-center space-x-2">
+                <ShieldCheck className="w-5 h-5 text-purple-600" />
+                <h3 className="font-bold text-base text-neutral-900 dark:text-white">
+                  Admin Meta App &amp; Embedded Signup Integration Settings
+                </h3>
+              </div>
               <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-1">
-                Aapka official Meta App ID, Secret aur Configuration ID yahan connected hain. Embedded signup form ke zariye clients aur admin dono ka connection yahin se route hota hai.
+                Yahan aap apna <strong>khud ka Meta App</strong> connect kar sakte hain. Website ki taraf se jo details Meta Console me daalni hoti hain wo neeche <strong>Read-Only</strong> di gayi hain, aur aapke Meta App ki details ke liye <strong>Input Fields blank</strong> chhod di gayi hain taaki aap apni details fill karke save kar sakein.
               </p>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-              <div className="p-4 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50/70 dark:bg-neutral-800/40 space-y-1.5">
-                <span className="text-[10px] font-bold uppercase text-neutral-400">Meta App ID</span>
-                <p className="font-mono text-neutral-900 dark:text-white font-bold text-sm">
-                  {metaStatus?.appId || '28291855670435316'}
-                </p>
-                <p className="text-[10px] text-emerald-600 dark:text-emerald-400">✓ Connected to CloudWABA Platform</p>
+            {/* SECTION A: ADMIN META APP INPUT FIELDS (FILL YOUR DETAILS HERE) */}
+            <div className="p-5 rounded-2xl bg-neutral-50/70 dark:bg-neutral-800/40 border border-neutral-200 dark:border-neutral-700 space-y-4">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-xs uppercase tracking-wider text-purple-700 dark:text-purple-300 flex items-center space-x-1.5">
+                  <Lock className="w-4 h-4" />
+                  <span>1. Fill Your Meta App Details (Meta Developer Console Se Le Kar Daalein)</span>
+                </span>
+                <span className="text-[11px] text-neutral-500">Blank fields to enter your own App</span>
               </div>
 
-              <div className="p-4 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50/70 dark:bg-neutral-800/40 space-y-1.5">
-                <span className="text-[10px] font-bold uppercase text-neutral-400">Configuration ID</span>
-                <p className="font-mono text-neutral-900 dark:text-white font-bold text-sm">
-                  {metaStatus?.configId || '1030431656687202'}
-                </p>
-                <p className="text-[10px] text-emerald-600 dark:text-emerald-400">✓ Coexistence Mode Enabled</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                {/* 1. Configuration ID */}
+                <div className="space-y-1">
+                  <label className="font-semibold text-neutral-800 dark:text-neutral-200 flex items-center justify-between">
+                    <span>Facebook Login for Business: Configuration ID <span className="text-red-500">*</span></span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. 1030431656687202"
+                    value={metaConfigIdInput}
+                    onChange={(e) => setMetaConfigIdInput(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 text-xs font-mono text-neutral-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                  />
+                  <p className="text-[10px] text-neutral-500">
+                    Meta Developers &gt; WhatsApp &gt; Quickstart &gt; Configuration ID (Coexistence onboarding ke liye).
+                  </p>
+                </div>
+
+                {/* 2. Meta App ID */}
+                <div className="space-y-1">
+                  <label className="font-semibold text-neutral-800 dark:text-neutral-200 flex items-center justify-between">
+                    <span>Meta App ID <span className="text-red-500">*</span></span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. 28291855670435316"
+                    value={metaAppIdInput}
+                    onChange={(e) => setMetaAppIdInput(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 text-xs font-mono text-neutral-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                  />
+                  <p className="text-[10px] text-neutral-500">
+                    Aapke Meta App dashboard ke top-left me diya gaya App ID.
+                  </p>
+                </div>
+
+                {/* 3. App Secret */}
+                <div className="space-y-1">
+                  <label className="font-semibold text-neutral-800 dark:text-neutral-200 flex items-center justify-between">
+                    <span>Meta App Secret <span className="text-red-500">*</span></span>
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    placeholder="••••••••••••••••••••••••••••••••"
+                    value={metaAppSecretInput}
+                    onChange={(e) => setMetaAppSecretInput(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 text-xs font-mono text-neutral-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                  />
+                  <p className="text-[10px] text-neutral-500">
+                    App Settings &gt; Basic &gt; App Secret (Server-side token exchange ke liye).
+                  </p>
+                </div>
+
+                {/* 4. System User Access Token */}
+                <div className="space-y-1">
+                  <label className="font-semibold text-neutral-800 dark:text-neutral-200 flex items-center justify-between">
+                    <span>System User Access Token (Permanent Token)</span>
+                  </label>
+                  <input
+                    type="password"
+                    placeholder="EAAB..."
+                    value={metaSystemTokenInput}
+                    onChange={(e) => setMetaSystemTokenInput(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 text-xs font-mono text-neutral-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                  />
+                  <p className="text-[10px] text-neutral-500">
+                    Business Manager &gt; System Users &gt; Generate Token (Permanent broadcast sending).
+                  </p>
+                </div>
+
+                {/* 5. Default WABA ID */}
+                <div className="space-y-1 md:col-span-2">
+                  <label className="font-semibold text-neutral-800 dark:text-neutral-200 flex items-center justify-between">
+                    <span>WhatsApp Business Account ID (WABA ID) (Optional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. 10928374829102"
+                    value={metaWabaIdInput}
+                    onChange={(e) => setMetaWabaIdInput(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 text-xs font-mono text-neutral-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                  />
+                  <p className="text-[10px] text-neutral-500">
+                    Aapka main WABA ID jahan approved templates create aur manage hote hain.
+                  </p>
+                </div>
               </div>
 
-              <div className="p-4 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50/70 dark:bg-neutral-800/40 space-y-1.5">
-                <span className="text-[10px] font-bold uppercase text-neutral-400">Published Portal Domain</span>
-                <p className="font-mono text-neutral-900 dark:text-white font-bold text-sm">
-                  https://wp-api-palan.vercel.app/
-                </p>
-                <p className="text-[10px] text-neutral-500">Live Production URL for OAuth &amp; Webhooks</p>
-              </div>
-
-              <div className="p-4 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50/70 dark:bg-neutral-800/40 space-y-1.5">
-                <span className="text-[10px] font-bold uppercase text-neutral-400">Meta Graph API Version</span>
-                <p className="font-mono text-neutral-900 dark:text-white font-bold text-sm">
-                  {metaStatus?.graphVersion || 'v22.0'}
-                </p>
-                <p className="text-[10px] text-emerald-600 dark:text-emerald-400">✓ Latest Graph API</p>
+              <div className="flex justify-end pt-2">
+                <button
+                  type="submit"
+                  disabled={savingMetaConfig}
+                  className="px-6 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-medium text-xs flex items-center space-x-2 transition-all shadow-xs disabled:opacity-50 cursor-pointer"
+                >
+                  {savingMetaConfig ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Saving Meta App...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Save className="w-4 h-4" />
+                      <span>Save Meta App Configuration</span>
+                    </>
+                  )}
+                </button>
               </div>
             </div>
 
-            {/* Webhook Callback & Verify Token Section */}
-            <div className="p-4 rounded-2xl bg-neutral-50 dark:bg-neutral-800/50 border border-neutral-200 dark:border-neutral-700 space-y-3">
-              <span className="font-semibold text-neutral-900 dark:text-white text-xs block">
-                Meta Developer Console Webhook Callback Configuration:
+            {/* SECTION B: DETAILS PROVIDED BY OUR WEBSITE TO PASTE IN META CONSOLE */}
+            <div className="p-5 rounded-2xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/40 space-y-4">
+              <span className="font-bold text-xs uppercase tracking-wider text-emerald-800 dark:text-emerald-300 flex items-center space-x-1.5">
+                <Globe className="w-4 h-4" />
+                <span>2. Details Provided By Website (Copy &amp; Paste in Your Meta Developer Console)</span>
               </span>
 
-              <div className="space-y-2">
-                <label className="text-[11px] text-neutral-500 font-medium">Callback URL</label>
-                <div className="flex items-center space-x-2">
-                  <input
-                    type="text"
-                    readOnly
-                    value="https://wp-api-palan.vercel.app/api/meta/webhook"
-                    className="flex-1 px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 font-mono text-xs text-neutral-900 dark:text-white"
-                  />
-                  <button
-                    onClick={() => copyText('https://wp-api-palan.vercel.app/api/meta/webhook', 'url')}
-                    className="px-3.5 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-medium text-xs flex items-center space-x-1 cursor-pointer"
-                  >
-                    {copiedUrl ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                    <span>{copiedUrl ? 'Copied' : 'Copy URL'}</span>
-                  </button>
+              <div className="space-y-3.5 text-xs">
+                {/* 1. Valid OAuth Redirect URIs */}
+                <div className="space-y-1">
+                  <label className="font-semibold text-neutral-800 dark:text-neutral-200">
+                    Valid OAuth Redirect URIs (Facebook Login for Business &gt; Settings)
+                  </label>
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value="https://wp-api-palan.vercel.app/"
+                      className="flex-1 px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 font-mono text-xs text-neutral-900 dark:text-white"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => copyText('https://wp-api-palan.vercel.app/', 'redirect')}
+                      className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs flex items-center space-x-1 cursor-pointer shrink-0"
+                    >
+                      {copiedRedirect ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedRedirect ? 'Copied' : 'Copy URI'}</span>
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-neutral-500">
+                    Meta App Console &gt; Facebook Login for Business &gt; Settings &gt; Valid OAuth Redirect URIs me ise paste karein.
+                  </p>
                 </div>
-              </div>
 
-              <div className="space-y-2">
-                <label className="text-[11px] text-neutral-500 font-medium">Verify Token</label>
-                <div className="flex items-center space-x-2">
-                  <input
-                    type="text"
-                    readOnly
-                    value="cloudwaba_verify_token_secure"
-                    className="flex-1 px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 font-mono text-xs text-neutral-900 dark:text-white"
-                  />
-                  <button
-                    onClick={() => copyText('cloudwaba_verify_token_secure', 'token')}
-                    className="px-3.5 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-white font-medium text-xs flex items-center space-x-1 cursor-pointer"
-                  >
-                    {copiedToken ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                    <span>{copiedToken ? 'Copied' : 'Copy Token'}</span>
-                  </button>
+                {/* 2. Webhook Callback URL */}
+                <div className="space-y-1">
+                  <label className="font-semibold text-neutral-800 dark:text-neutral-200">
+                    Webhook Callback URL (WhatsApp &gt; Configuration &gt; Webhook)
+                  </label>
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value="https://wp-api-palan.vercel.app/api/meta/webhook"
+                      className="flex-1 px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 font-mono text-xs text-neutral-900 dark:text-white"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => copyText('https://wp-api-palan.vercel.app/api/meta/webhook', 'url')}
+                      className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs flex items-center space-x-1 cursor-pointer shrink-0"
+                    >
+                      {copiedUrl ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedUrl ? 'Copied' : 'Copy Callback'}</span>
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-neutral-500">
+                    Meta App Console &gt; WhatsApp &gt; Configuration &gt; Callback URL me ise paste karein.
+                  </p>
+                </div>
+
+                {/* 3. Webhook Verify Token */}
+                <div className="space-y-1">
+                  <label className="font-semibold text-neutral-800 dark:text-neutral-200">
+                    Verify Token (Webhook Verification)
+                  </label>
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value="cloudwaba_verify_token_secure"
+                      className="flex-1 px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 font-mono text-xs text-neutral-900 dark:text-white"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => copyText('cloudwaba_verify_token_secure', 'token')}
+                      className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs flex items-center space-x-1 cursor-pointer shrink-0"
+                    >
+                      {copiedToken ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedToken ? 'Copied' : 'Copy Token'}</span>
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-neutral-500">
+                    Webhook setup karte waqt Meta Verify Token me <code>cloudwaba_verify_token_secure</code> paste karein.
+                  </p>
+                </div>
+
+                {/* 4. App Domains & URLs for Basic Settings */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                  <div className="p-3 rounded-xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 space-y-1">
+                    <span className="text-[10px] font-bold text-neutral-500 uppercase">App Domain</span>
+                    <p className="font-mono text-xs text-neutral-900 dark:text-white select-all">wp-api-palan.vercel.app</p>
+                    <p className="text-[10px] text-neutral-400">Settings &gt; Basic &gt; App Domains</p>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 space-y-1">
+                    <span className="text-[10px] font-bold text-neutral-500 uppercase">Privacy Policy URL</span>
+                    <p className="font-mono text-xs text-neutral-900 dark:text-white select-all">https://wp-api-palan.vercel.app/privacy</p>
+                    <p className="text-[10px] text-neutral-400">Settings &gt; Basic &gt; Privacy Policy URL</p>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
+          </form>
         </div>
       )}
 
@@ -625,7 +900,7 @@ export const AdminPage: React.FC = () => {
         </div>
       )}
 
-      {/* CREATE USER MODAL */}
+      {/* CREATE NEW ADMIN OR USER MODAL */}
       {isCreateModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fadeIn">
           <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-3xl w-full max-w-lg shadow-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto">
@@ -633,7 +908,7 @@ export const AdminPage: React.FC = () => {
               <div className="flex items-center space-x-2">
                 <UserPlus className="w-5 h-5 text-purple-600" />
                 <h3 className="font-bold text-neutral-900 dark:text-white text-base">
-                  Create New Client User &amp; Credentials
+                  {isSuperMaster ? 'Create Account (Sub-Admin or Client)' : 'Create New Client User'}
                 </h3>
               </div>
               <button
@@ -645,14 +920,56 @@ export const AdminPage: React.FC = () => {
             </div>
 
             <form onSubmit={handleCreateUser} className="space-y-4 text-xs">
+              {/* Account Role Selector if Master Admin */}
+              {isSuperMaster && (
+                <div>
+                  <label className="block font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
+                    Account Type / Role <span className="text-red-500">*</span>
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setNewRole('admin')}
+                      className={`p-3 rounded-xl border text-left flex items-start space-x-2 transition-all cursor-pointer ${
+                        newRole === 'admin'
+                          ? 'border-purple-600 bg-purple-50/80 dark:bg-purple-950/40 text-purple-950 dark:text-purple-300'
+                          : 'border-neutral-200 dark:border-neutral-700 text-neutral-600'
+                      }`}
+                    >
+                      <ShieldCheck className="w-4 h-4 text-purple-600 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-bold text-xs">Sub-Administrator</p>
+                        <p className="text-[10px] text-neutral-500">Can manage users &amp; add their own Meta App</p>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setNewRole('owner')}
+                      className={`p-3 rounded-xl border text-left flex items-start space-x-2 transition-all cursor-pointer ${
+                        newRole === 'owner'
+                          ? 'border-emerald-600 bg-emerald-50/80 dark:bg-emerald-950/40 text-emerald-950 dark:text-emerald-300'
+                          : 'border-neutral-200 dark:border-neutral-700 text-neutral-600'
+                      }`}
+                    >
+                      <Users className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-bold text-xs">Client User</p>
+                        <p className="text-[10px] text-neutral-500">Normal WhatsApp Business account</p>
+                      </div>
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div>
                 <label className="block font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
-                  Client / Business Name <span className="text-red-500">*</span>
+                  Name / Business Name <span className="text-red-500">*</span>
                 </label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Ramesh Ceramics / Shanti Textiles"
+                  placeholder="e.g. Ramesh Admin / Global Marketing"
                   value={newDisplayName}
                   onChange={(e) => setNewDisplayName(e.target.value)}
                   className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white"
@@ -662,7 +979,7 @@ export const AdminPage: React.FC = () => {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
-                    Login ID (Mobile or Email) <span className="text-red-500">*</span>
+                    Login Mobile Number or Email <span className="text-red-500">*</span>
                   </label>
                   <input
                     type="text"
@@ -692,7 +1009,7 @@ export const AdminPage: React.FC = () => {
               {/* Subscription & Limits Config */}
               <div className="p-3.5 rounded-2xl bg-purple-50/60 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800/50 space-y-3">
                 <span className="font-semibold text-purple-900 dark:text-purple-300 block text-xs">
-                  User Limitations &amp; Validity Package
+                  Limitations &amp; Validity Package
                 </span>
 
                 <div className="grid grid-cols-2 gap-3">
@@ -729,7 +1046,7 @@ export const AdminPage: React.FC = () => {
                 <div className="grid grid-cols-3 gap-2">
                   <div>
                     <label className="text-[10px] text-neutral-600 dark:text-neutral-400 block mb-1">
-                      Max WhatsApp Numbers
+                      Max Numbers
                     </label>
                     <input
                       type="number"
@@ -778,7 +1095,7 @@ export const AdminPage: React.FC = () => {
                     className="rounded border-neutral-300 text-purple-600"
                   />
                   <label htmlFor="coexistence" className="text-[11px] text-neutral-700 dark:text-neutral-300 cursor-pointer">
-                    Allow Coexistence Mode (Use WhatsApp Business App + Cloud API simultaneously)
+                    Allow Coexistence Mode (WhatsApp App + Cloud API simultaneously)
                   </label>
                 </div>
               </div>
@@ -800,12 +1117,12 @@ export const AdminPage: React.FC = () => {
                   {creatingUser ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>Creating User &amp; Tenant...</span>
+                      <span>Creating Account...</span>
                     </>
                   ) : (
                     <>
                       <UserPlus className="w-4 h-4" />
-                      <span>Create Client Account</span>
+                      <span>Create Account</span>
                     </>
                   )}
                 </button>
@@ -822,7 +1139,7 @@ export const AdminPage: React.FC = () => {
             <div className="flex items-center justify-between border-b border-neutral-200 dark:border-neutral-800 pb-3">
               <div>
                 <h3 className="font-bold text-neutral-900 dark:text-white text-base">
-                  Renew / Edit User: {editingUser.displayName}
+                  Renew / Edit Account: {editingUser.displayName}
                 </h3>
                 <p className="text-[11px] text-neutral-500 font-mono">
                   ID: {editingUser.phone || editingUser.email}

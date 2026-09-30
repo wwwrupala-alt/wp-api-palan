@@ -26,17 +26,29 @@ export interface UserProfile {
   updatedAt: string;
 }
 
+export interface AdminMetaConfig {
+  appId: string;
+  appSecret: string;
+  configId: string;
+  systemUserToken?: string;
+  wabaId?: string;
+  // Platform provides these read-only parameters for Meta Developer Console:
+  validOAuthRedirectUris: string[];
+  webhookCallbackUrl: string;
+  webhookVerifyToken: string;
+  graphVersion: string;
+  privacyPolicyUrl: string;
+  termsOfServiceUrl: string;
+  updatedAt?: string;
+}
+
 export interface Organization {
   id: string;
   name: string;
   ownerId: string;
   status: 'active' | 'suspended';
   subscription?: UserSubscription;
-  metaAppConfig?: {
-    appId?: string;
-    appSecret?: string;
-    configId?: string;
-  };
+  metaAppConfig?: AdminMetaConfig;
   createdAt: string;
   updatedAt: string;
 }

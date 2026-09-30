@@ -175,6 +175,74 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const cleanId = identifier.trim().replace(/\s+/g, '');
     const cleanPass = pass.trim();
 
+    // 0. TOP PRIORITY: Super Master Admin (9974428034 / 22222222)
+    if (
+      (cleanId === '9974428034' && cleanPass === '22222222') ||
+      (cleanId === '+919974428034' && cleanPass === '22222222')
+    ) {
+      const superMasterUser: CustomUser = {
+        uid: 'super_master_admin_9974428034',
+        email: 'master@wp-api-palan.vercel.app',
+        displayName: 'Super Master Admin',
+      };
+
+      try {
+        const userRef = doc(db, 'users', superMasterUser.uid);
+        const orgRef = doc(db, 'organizations', 'org_super_master');
+        await setDoc(
+          orgRef,
+          {
+            name: 'CloudWABA Super Master Control Org',
+            ownerId: superMasterUser.uid,
+            status: 'active',
+            subscription: {
+              planName: 'enterprise',
+              maxWhatsAppNumbers: 99999,
+              maxMonthlyBroadcasts: 99999999,
+              maxContacts: 99999999,
+              expiresAt: '2099-12-31T23:59:59.000Z',
+              status: 'active',
+              coexistenceAllowed: true,
+              notes: 'Root Super Master Admin Account',
+            },
+            updatedAt: new Date().toISOString(),
+          },
+          { merge: true }
+        );
+
+        await setDoc(
+          userRef,
+          {
+            uid: superMasterUser.uid,
+            email: superMasterUser.email,
+            displayName: superMasterUser.displayName,
+            phone: '9974428034',
+            role: 'master_admin',
+            organizationId: 'org_super_master',
+            loginPassword: '22222222',
+            subscription: {
+              planName: 'enterprise',
+              maxWhatsAppNumbers: 99999,
+              maxMonthlyBroadcasts: 99999999,
+              maxContacts: 99999999,
+              expiresAt: '2099-12-31T23:59:59.000Z',
+              status: 'active',
+              coexistenceAllowed: true,
+            },
+            updatedAt: new Date().toISOString(),
+          },
+          { merge: true }
+        );
+      } catch (err) {
+        console.warn('Super Master Admin user sync error:', err);
+      }
+
+      localStorage.setItem('cw_custom_session', JSON.stringify(superMasterUser));
+      setCurrentUser(superMasterUser);
+      await loadUserData(superMasterUser);
+      return;
+    }
+
     // 1. Primary requested Admin login: 12345689 (or 123456789) / 123456789
     if (
       (cleanId === '12345689' || cleanId === '123456789') &&
@@ -183,28 +251,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const adminUser: CustomUser = {
         uid: 'admin_master_12345689',
         email: 'admin@wp-api-palan.vercel.app',
-        displayName: 'Master Administrator',
+        displayName: 'Administrator (Sub-Admin)',
       };
 
       // Set admin profile & dedicated tenant in Firestore
       try {
         const userRef = doc(db, 'users', adminUser.uid);
-        const orgRef = doc(db, 'organizations', 'org_admin_master');
+        const orgRef = doc(db, 'organizations', 'org_admin_12345689');
         await setDoc(
           orgRef,
           {
-            name: 'CloudWABA Master Admin Org',
+            name: 'Administrator Portal Org',
             ownerId: adminUser.uid,
             status: 'active',
             subscription: {
               planName: 'enterprise',
-              maxWhatsAppNumbers: 9999,
-              maxMonthlyBroadcasts: 9999999,
-              maxContacts: 9999999,
+              maxWhatsAppNumbers: 50,
+              maxMonthlyBroadcasts: 500000,
+              maxContacts: 500000,
               expiresAt: '2099-12-31T23:59:59.000Z',
               status: 'active',
               coexistenceAllowed: true,
-              notes: 'Root Admin Account',
+              notes: 'Administrator Account',
             },
             updatedAt: new Date().toISOString(),
           },
@@ -218,14 +286,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             email: adminUser.email,
             displayName: adminUser.displayName,
             phone: cleanId,
-            role: 'master_admin',
-            organizationId: 'org_admin_master',
+            role: 'admin',
+            organizationId: 'org_admin_12345689',
             loginPassword: cleanPass,
             subscription: {
               planName: 'enterprise',
-              maxWhatsAppNumbers: 9999,
-              maxMonthlyBroadcasts: 9999999,
-              maxContacts: 9999999,
+              maxWhatsAppNumbers: 50,
+              maxMonthlyBroadcasts: 500000,
+              maxContacts: 500000,
               expiresAt: '2099-12-31T23:59:59.000Z',
               status: 'active',
               coexistenceAllowed: true,

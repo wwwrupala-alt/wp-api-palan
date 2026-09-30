@@ -797,3 +797,40 @@ export async function deleteManagedUser(uid: string, orgId: string) {
     await deleteDoc(orgRef);
   }
 }
+
+export async function saveOrganizationMetaConfig(
+  orgId: string,
+  metaConfig: {
+    appId: string;
+    appSecret: string;
+    configId: string;
+    systemUserToken?: string;
+    wabaId?: string;
+  }
+) {
+  const orgRef = doc(db, 'organizations', orgId);
+  const fullMetaConfig = {
+    ...metaConfig,
+    validOAuthRedirectUris: [
+      'https://wp-api-palan.vercel.app/',
+      'https://wp-api-palan.vercel.app/api/meta/oauth/callback',
+    ],
+    webhookCallbackUrl: 'https://wp-api-palan.vercel.app/api/meta/webhook',
+    webhookVerifyToken: 'cloudwaba_verify_token_secure',
+    graphVersion: 'v22.0',
+    privacyPolicyUrl: 'https://wp-api-palan.vercel.app/privacy-policy',
+    termsOfServiceUrl: 'https://wp-api-palan.vercel.app/terms-of-service',
+    updatedAt: new Date().toISOString(),
+  };
+
+  await setDoc(
+    orgRef,
+    {
+      metaAppConfig: removeUndefined(fullMetaConfig),
+      updatedAt: new Date().toISOString(),
+    },
+    { merge: true }
+  );
+
+  return fullMetaConfig;
+}
