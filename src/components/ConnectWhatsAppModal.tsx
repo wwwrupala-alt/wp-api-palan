@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Smartphone,
@@ -81,6 +81,18 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
 
   const webhookUrl = metaStatus?.webhookUrl || `${window.location.origin}/api/meta/webhook`;
   const verifyToken = metaStatus?.webhookVerifyToken || 'cloudwaba_verify_token_secure';
+
+  // Automatically pre-fill WABA ID and Token from Admin's saved Meta App configuration
+  useEffect(() => {
+    if (organization?.metaAppConfig) {
+      if (organization.metaAppConfig.wabaId) {
+        setWabaId((prev) => prev || organization.metaAppConfig!.wabaId || '');
+      }
+      if (organization.metaAppConfig.systemUserToken) {
+        setCustomToken((prev) => prev || organization.metaAppConfig!.systemUserToken || '');
+      }
+    }
+  }, [organization?.metaAppConfig, isOpen]);
 
   if (!isOpen) return null;
 

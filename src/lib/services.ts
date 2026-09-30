@@ -22,6 +22,7 @@ import type {
   Conversation,
   Automation,
   UserProfile,
+  Organization,
 } from '../types/index.ts';
 
 /**
@@ -642,13 +643,144 @@ export function subscribeManagedUsers(
   onData: (users: UserProfile[]) => void,
   onError: (err: unknown) => void
 ) {
-  const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
+  // Query all users without orderBy to avoid dropping documents without createdAt
+  const q = collection(db, 'users');
   return onSnapshot(
     q,
     (snapshot) => {
       const list: UserProfile[] = [];
       snapshot.forEach((d) => {
         list.push({ uid: d.id, ...(d.data() as Omit<UserProfile, 'uid'>) });
+      });
+      // Sort in-memory by newest first
+      list.sort((a, b) => {
+        const timeA = new Date(a.createdAt || a.updatedAt || 0).getTime();
+        const timeB = new Date(b.createdAt || b.updatedAt || 0).getTime();
+        return timeB - timeA;
+      });
+      onData(list);
+    },
+    (err) => {
+      onError(err);
+    }
+  );
+}
+
+// Ensure the Primary Administrator account (12345689 / 123456789) is seeded in Firestore
+export async function ensureDefaultAdminAccount(): Promise<void> {
+  const adminUid = 'admin_master_12345689';
+  const orgId = 'org_admin_12345689';
+
+  try {
+    const userRef = doc(db, 'users', adminUid);
+    const userSnap = await getDoc(userRef);
+
+    if (!userSnap.exists()) {
+      const now = new Date().toISOString();
+      const orgRef = doc(db, 'organizations', orgId);
+      await setDoc(
+        orgRef,
+        {
+          name: 'Administrator Portal Org',
+          ownerId: adminUid,
+          status: 'active',
+          subscription: {
+            planName: 'enterprise',
+            maxWhatsAppNumbers: 50,
+            maxMonthlyBroadcasts: 500000,
+            maxContacts: 500000,
+            expiresAt: '2099-12-31T23:59:59.000Z',
+            status: 'active',
+            coexistenceAllowed: true,
+            notes: 'Primary Sub-Administrator Account',
+          },
+          createdAt: now,
+          updatedAt: now,
+        },
+        { merge: true }
+      );
+
+      await setDoc(
+        userRef,
+        {
+          uid: adminUid,
+          email: 'admin@wp-api-palan.vercel.app',
+          displayName: 'Administrator (Sub-Admin)',
+          phone: '12345689',
+          role: 'admin',
+          organizationId: orgId,
+          loginPassword: '123456789',
+          subscription: {
+            planName: 'enterprise',
+            maxWhatsAppNumbers: 50,
+            maxMonthlyBroadcasts: 500000,
+            maxContacts: 500000,
+            expiresAt: '2099-12-31T23:59:59.000Z',
+            status: 'active',
+            coexistenceAllowed: true,
+          },
+          createdAt: now,
+          updatedAt: now,
+        },
+        { merge: true }
+      );
+    }
+  } catch (err) {
+    console.warn('ensureDefaultAdminAccount notice:', err);
+  }
+}
+
+// Reassign user to a specific Admin
+export async function reassignUserToAdmin(userId: string, newAdminId: string): Promise<void> {
+  const userRef = doc(db, 'users', userId);
+  await setDoc(
+    userRef,
+    {
+      managedByAdminId: newAdminId,
+      updatedAt: new Date().toISOString(),
+    },
+    { merge: true }
+  );
+}
+
+// Global Platform Meta App configuration listener
+export function subscribeGlobalMetaConfig(
+  onData: (config: any) => void
+) {
+  const globalRef = doc(db, 'system_settings', 'meta_config');
+  return onSnapshot(
+    globalRef,
+    (snapshot) => {
+      if (snapshot.exists()) {
+        onData(snapshot.data());
+      } else {
+        // Fallback to localStorage cache
+        try {
+          const cached = localStorage.getItem('cw_global_meta_config');
+          if (cached) onData(JSON.parse(cached));
+        } catch (e) {}
+      }
+    },
+    () => {
+      try {
+        const cached = localStorage.getItem('cw_global_meta_config');
+        if (cached) onData(JSON.parse(cached));
+      } catch (e) {}
+    }
+  );
+}
+
+export function subscribeOrganizations(
+  onData: (orgs: Organization[]) => void,
+  onError: (err: unknown) => void
+) {
+  const q = collection(db, 'organizations');
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const list: Organization[] = [];
+      snapshot.forEach((d) => {
+        list.push({ id: d.id, ...(d.data() as Omit<Organization, 'id'>) });
       });
       onData(list);
     },
@@ -671,6 +803,7 @@ export async function createManagedUser(
     validityDays: number;
     planName: 'trial' | 'basic' | 'pro' | 'enterprise';
     coexistenceAllowed: boolean;
+    managedByAdminId?: string;
   }
 ) {
   const cleanId = data.phoneOrEmail.trim().replace(/\s+/g, '');
@@ -708,7 +841,7 @@ export async function createManagedUser(
     role: data.role,
     organizationId: orgId,
     loginPassword: data.password.trim(),
-    managedByAdminId: adminUid,
+    managedByAdminId: data.managedByAdminId || adminUid,
     subscription: {
       planName: data.planName,
       maxWhatsAppNumbers: data.maxWhatsAppNumbers,
@@ -739,6 +872,7 @@ export async function updateManagedUserSubscription(
     planName?: 'trial' | 'basic' | 'pro' | 'enterprise';
     coexistenceAllowed?: boolean;
     notes?: string;
+    managedByAdminId?: string;
   }
 ) {
   const userRef = doc(db, 'users', uid);
@@ -774,6 +908,7 @@ export async function updateManagedUserSubscription(
   // Update user doc
   await updateDoc(userRef, {
     ...(updates.loginPassword ? { loginPassword: updates.loginPassword } : {}),
+    ...(updates.managedByAdminId !== undefined ? { managedByAdminId: updates.managedByAdminId } : {}),
     subscription: updatedSubscription,
     updatedAt: new Date().toISOString(),
   });
@@ -807,7 +942,8 @@ export async function saveOrganizationMetaConfig(
     configId: string;
     systemUserToken?: string;
     wabaId?: string;
-  }
+  },
+  applyGlobally: boolean = true
 ) {
   const fullMetaConfig = {
     appId: metaConfig.appId || '',
@@ -844,8 +980,41 @@ export async function saveOrganizationMetaConfig(
     console.warn('Notice: Server API meta-config sync error:', apiErr);
   }
 
-  // 2. Persist in Firestore
-  if (orgId) {
+  // 2. Always persist Global Platform Meta Config so all Admin panels stay synchronized!
+  try {
+    localStorage.setItem('cw_global_meta_config', JSON.stringify(fullMetaConfig));
+    if (orgId) {
+      localStorage.setItem(`cw_meta_config_${orgId}`, JSON.stringify(fullMetaConfig));
+    }
+  } catch (e) {}
+
+  if (applyGlobally) {
+    try {
+      const globalRef = doc(db, 'system_settings', 'meta_config');
+      await setDoc(globalRef, removeUndefined(fullMetaConfig), { merge: true });
+    } catch (gErr) {
+      console.warn('Global meta config doc notice:', gErr);
+    }
+
+    // Sync to root master and primary admin orgs
+    const keyOrgs = ['org_super_master', 'org_admin_12345689'];
+    for (const kOrg of keyOrgs) {
+      try {
+        const kRef = doc(db, 'organizations', kOrg);
+        await setDoc(
+          kRef,
+          {
+            metaAppConfig: removeUndefined(fullMetaConfig),
+            updatedAt: new Date().toISOString(),
+          },
+          { merge: true }
+        );
+      } catch (kErr) {}
+    }
+  }
+
+  // 3. Persist in specific tenant Organization
+  if (orgId && orgId !== 'org_super_master' && orgId !== 'org_admin_12345689') {
     try {
       const orgRef = doc(db, 'organizations', orgId);
       await setDoc(
@@ -858,10 +1027,6 @@ export async function saveOrganizationMetaConfig(
       );
     } catch (fsErr: any) {
       console.warn('Firestore metaAppConfig save notice:', fsErr);
-      // If Firestore is running in offline resilience, store in localStorage as well
-      try {
-        localStorage.setItem(`cw_meta_config_${orgId}`, JSON.stringify(fullMetaConfig));
-      } catch (e) {}
     }
   }
 

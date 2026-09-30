@@ -9,8 +9,10 @@ import {
   doc,
   getDoc,
   setDoc,
+  onSnapshot,
 } from 'firebase/firestore';
 import { auth, db, googleProvider, handleFirestoreError, OperationType, testConnection } from '../lib/firebase.ts';
+import { ensureDefaultAdminAccount } from '../lib/services.ts';
 import type { UserProfile, Organization, UserRole } from '../types/index.ts';
 
 export interface CustomUser {
@@ -56,13 +58,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const profile = userSnap.data() as UserProfile;
         setUserProfile(profile);
 
-        // Fetch organization
+        // Fetch and listen to organization in real-time
         if (profile.organizationId) {
           const orgRef = doc(db, 'organizations', profile.organizationId);
-          const orgSnap = await getDoc(orgRef);
-          if (orgSnap.exists()) {
-            setOrganization({ id: orgSnap.id, ...orgSnap.data() } as Organization);
-          }
+          onSnapshot(orgRef, (orgSnap) => {
+            if (orgSnap.exists()) {
+              const rawData = orgSnap.data() as Organization;
+              let metaAppConfig = rawData.metaAppConfig;
+              if (!metaAppConfig?.appId || !metaAppConfig?.configId) {
+                try {
+                  const globalCached = localStorage.getItem('cw_global_meta_config');
+                  if (globalCached) {
+                    const parsed = JSON.parse(globalCached);
+                    if (parsed.appId) {
+                      metaAppConfig = { ...parsed, ...(metaAppConfig || {}) };
+                    }
+                  }
+                } catch (e) {}
+              }
+              setOrganization({
+                ...rawData,
+                id: orgSnap.id,
+                ...(metaAppConfig ? { metaAppConfig } : {}),
+              } as Organization);
+            }
+          });
         }
       } else {
         // First-time user: Provision organization and clean user profile
@@ -239,6 +259,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       localStorage.setItem('cw_custom_session', JSON.stringify(superMasterUser));
       setCurrentUser(superMasterUser);
+      ensureDefaultAdminAccount().catch(() => {});
       await loadUserData(superMasterUser);
       return;
     }

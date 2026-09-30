@@ -32,18 +32,30 @@ import {
   Save,
   Globe,
   HelpCircle,
+  ChevronDown,
+  ChevronRight,
+  Search,
+  Eye,
+  EyeOff,
+  FolderTree,
+  UserCheck,
+  Plus,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
 import { useToast } from '../context/ToastContext.tsx';
 import {
   subscribeManagedUsers,
+  subscribeOrganizations,
   createManagedUser,
   updateManagedUserSubscription,
   deleteManagedUser,
   saveOrganizationMetaConfig,
+  ensureDefaultAdminAccount,
+  reassignUserToAdmin,
+  subscribeGlobalMetaConfig,
 } from '../lib/services.ts';
-import type { WebhookLog, UserProfile, UserSubscription } from '../types/index.ts';
+import type { WebhookLog, UserProfile, UserSubscription, Organization } from '../types/index.ts';
 
 export const AdminPage: React.FC = () => {
   const { userProfile, organization, currentUser, refreshProfile } = useAuth();
@@ -63,14 +75,29 @@ export const AdminPage: React.FC = () => {
 
   // Managed Users List
   const [users, setUsers] = useState<UserProfile[]>([]);
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(true);
 
-  // Filter for Master Admin: 'all' | 'admins' | 'clients'
+  // Search & Filter for Master Admin
+  const [searchQuery, setSearchQuery] = useState('');
   const [userFilter, setUserFilter] = useState<'all' | 'admins' | 'clients'>('all');
+  const [viewMode, setViewMode] = useState<'hierarchy' | 'flat'>('hierarchy');
+
+  // Expand/collapse individual Admin cards in hierarchical view
+  const [expandedAdmins, setExpandedAdmins] = useState<Record<string, boolean>>({});
+
+  // Show/hide passwords
+  const [revealedPasswords, setRevealedPasswords] = useState<Record<string, boolean>>({});
+
+  // Reassign User to Admin Modal
+  const [reassigningUser, setReassigningUser] = useState<UserProfile | null>(null);
+  const [reassignTargetAdminId, setReassignTargetAdminId] = useState<string>('');
+  const [savingReassign, setSavingReassign] = useState(false);
 
   // Create User / Admin Modal
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [newRole, setNewRole] = useState<'admin' | 'owner'>('owner');
+  const [newAssignedAdminId, setNewAssignedAdminId] = useState<string>('');
   const [newDisplayName, setNewDisplayName] = useState('');
   const [newPhoneOrEmail, setNewPhoneOrEmail] = useState('');
   const [newPassword, setNewPassword] = useState('12345678');
@@ -84,6 +111,7 @@ export const AdminPage: React.FC = () => {
 
   // Edit / Renew Modal
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
+  const [editAssignedAdminId, setEditAssignedAdminId] = useState<string>('');
   const [editDaysToAdd, setEditDaysToAdd] = useState(30);
   const [editMaxNumbers, setEditMaxNumbers] = useState(1);
   const [editMaxBroadcasts, setEditMaxBroadcasts] = useState(1000);
@@ -107,6 +135,7 @@ export const AdminPage: React.FC = () => {
   const [metaWabaIdInput, setMetaWabaIdInput] = useState(
     organization?.metaAppConfig?.wabaId || ''
   );
+  const [syncGlobally, setSyncGlobally] = useState(true);
   const [savingMetaConfig, setSavingMetaConfig] = useState(false);
 
   // Sync inputs whenever organization metadata updates
@@ -124,9 +153,11 @@ export const AdminPage: React.FC = () => {
   const [webhookLogs, setWebhookLogs] = useState<WebhookLog[]>([]);
   const [loadingLogs, setLoadingLogs] = useState(true);
 
-  // Load Users
+  // Load Users & Organizations in real-time
   useEffect(() => {
-    const unsub = subscribeManagedUsers(
+    ensureDefaultAdminAccount().catch(() => {});
+
+    const unsubUsers = subscribeManagedUsers(
       (data) => {
         setUsers(data);
         setLoadingUsers(false);
@@ -136,7 +167,31 @@ export const AdminPage: React.FC = () => {
         setLoadingUsers(false);
       }
     );
-    return () => unsub();
+
+    const unsubOrgs = subscribeOrganizations(
+      (data) => {
+        setOrganizations(data);
+      },
+      (err) => {
+        console.warn('Organizations subscribe error:', err);
+      }
+    );
+
+    const unsubGlobal = subscribeGlobalMetaConfig((gConfig) => {
+      if (gConfig) {
+        if (!metaAppIdInput && gConfig.appId) setMetaAppIdInput(gConfig.appId);
+        if (!metaConfigIdInput && gConfig.configId) setMetaConfigIdInput(gConfig.configId);
+        if (!metaAppSecretInput && gConfig.appSecret) setMetaAppSecretInput(gConfig.appSecret);
+        if (!metaSystemTokenInput && gConfig.systemUserToken) setMetaSystemTokenInput(gConfig.systemUserToken);
+        if (!metaWabaIdInput && gConfig.wabaId) setMetaWabaIdInput(gConfig.wabaId);
+      }
+    });
+
+    return () => {
+      unsubUsers();
+      unsubOrgs();
+      unsubGlobal();
+    };
   }, []);
 
   // Fetch Webhook Logs
@@ -197,13 +252,17 @@ export const AdminPage: React.FC = () => {
     setSavingMetaConfig(true);
 
     try {
-      await saveOrganizationMetaConfig(targetOrgId, {
-        appId: cleanAppId,
-        appSecret: cleanSecret || undefined,
-        configId: cleanConfigId,
-        systemUserToken: cleanToken || undefined,
-        wabaId: cleanWaba || undefined,
-      });
+      await saveOrganizationMetaConfig(
+        targetOrgId,
+        {
+          appId: cleanAppId,
+          appSecret: cleanSecret || undefined,
+          configId: cleanConfigId,
+          systemUserToken: cleanToken || undefined,
+          wabaId: cleanWaba || undefined,
+        },
+        syncGlobally
+      );
 
       if (refreshProfile) {
         await refreshProfile().catch(() => {});
@@ -213,14 +272,54 @@ export const AdminPage: React.FC = () => {
       }
 
       toast.showSuccess(
-        'Meta App Configuration Saved!',
-        `Configuration ID (${cleanConfigId || 'Configured'}) aur Meta App ID (${cleanAppId || 'Configured'}) successfully save ho chuke hain.`
+        'Meta App Configuration Saved Globally!',
+        `Configuration ID (${cleanConfigId || 'Configured'}) aur Meta App ID (${cleanAppId || 'Configured'}) successfully save ho chuke hain aur sabhi Admin panels me synchronize ho chuke hain.`
       );
     } catch (err: any) {
       toast.showError('Save Failed', err?.message || 'Failed to save Meta App configuration.');
     } finally {
       setSavingMetaConfig(false);
     }
+  };
+
+  // Helper to open create modal for specific Sub-Admin
+  const openCreateModalForAdmin = (adminUid: string) => {
+    setNewRole('owner');
+    setNewAssignedAdminId(adminUid);
+    setNewDisplayName('');
+    setNewPhoneOrEmail('');
+    setNewPassword('12345678');
+    setNewMaxNumbers(3);
+    setNewMaxBroadcasts(10000);
+    setNewPlanName('pro');
+    setIsCreateModalOpen(true);
+  };
+
+  // Helper to open create modal for a new Sub-Admin
+  const openCreateAdminModal = () => {
+    setNewRole('admin');
+    setNewAssignedAdminId('');
+    setNewDisplayName('');
+    setNewPhoneOrEmail('');
+    setNewPassword('12345678');
+    setNewMaxNumbers(50);
+    setNewMaxBroadcasts(500000);
+    setNewPlanName('enterprise');
+    setIsCreateModalOpen(true);
+  };
+
+  const toggleAdminExpand = (adminUid: string) => {
+    setExpandedAdmins((prev) => ({
+      ...prev,
+      [adminUid]: prev[adminUid] === false ? true : false,
+    }));
+  };
+
+  const togglePasswordReveal = (uid: string) => {
+    setRevealedPasswords((prev) => ({
+      ...prev,
+      [uid]: !prev[uid],
+    }));
   };
 
   // Handle Create User or Sub-Admin
@@ -233,6 +332,13 @@ export const AdminPage: React.FC = () => {
 
     setCreatingUser(true);
     try {
+      const managingAdminId =
+        newRole === 'admin'
+          ? undefined
+          : isSuperMaster
+          ? (newAssignedAdminId || allSubAdmins[0]?.uid || 'admin_master_12345689')
+          : currentUser?.uid;
+
       await createManagedUser(currentUser?.uid || 'master_admin', {
         displayName: newDisplayName.trim(),
         phoneOrEmail: newPhoneOrEmail.trim(),
@@ -244,17 +350,19 @@ export const AdminPage: React.FC = () => {
         validityDays: Number(newValidityDays),
         planName: newPlanName,
         coexistenceAllowed: newCoexistence,
+        managedByAdminId: managingAdminId,
       });
 
       toast.showSuccess(
         newRole === 'admin' ? 'Sub-Admin Created' : 'Client User Created',
-        `${newDisplayName} account created with separate isolated database.`
+        `${newDisplayName} account created successfully under ${newRole === 'admin' ? 'Platform' : allSubAdmins.find(a => a.uid === managingAdminId)?.displayName || 'Admin'}.`
       );
 
       setIsCreateModalOpen(false);
       setNewDisplayName('');
       setNewPhoneOrEmail('');
       setNewPassword('12345678');
+      setNewAssignedAdminId('');
     } catch (err: any) {
       toast.showError('Creation Failed', err?.message || 'Could not create account.');
     } finally {
@@ -270,6 +378,7 @@ export const AdminPage: React.FC = () => {
     setEditMaxBroadcasts(u.subscription?.maxMonthlyBroadcasts || 1000);
     setEditPassword(u.loginPassword || '');
     setEditStatus(u.subscription?.status || 'active');
+    setEditAssignedAdminId(u.managedByAdminId || '');
   };
 
   // Handle Save Edit / Renewal
@@ -291,6 +400,7 @@ export const AdminPage: React.FC = () => {
         maxMonthlyBroadcasts: Number(editMaxBroadcasts),
         expiresAt: newExpiresAt,
         status: editStatus,
+        managedByAdminId: isSuperMaster ? (editAssignedAdminId || undefined) : undefined,
       });
 
       toast.showSuccess(
@@ -318,11 +428,136 @@ export const AdminPage: React.FC = () => {
     }
   };
 
-  const filteredUsers = users.filter((u) => {
-    if (userFilter === 'admins') return u.role === 'admin' || u.role === 'master_admin';
-    if (userFilter === 'clients') return u.role === 'owner' || u.role === 'agent';
-    return true;
+  // List of all Sub-Admins / Reseller Admins
+  const allSubAdmins: UserProfile[] = React.useMemo(() => {
+    const list = users.filter((u) => u.role === 'admin' || (u.role as string) === 'sub_admin');
+    if (!list.some((a) => a.uid === 'admin_master_12345689' || a.phone === '12345689')) {
+      list.unshift({
+        uid: 'admin_master_12345689',
+        displayName: 'Administrator (Primary Sub-Admin)',
+        phone: '12345689',
+        email: 'admin@wp-api-palan.vercel.app',
+        role: 'admin',
+        organizationId: 'org_admin_12345689',
+        loginPassword: '123456789',
+        subscription: {
+          planName: 'enterprise',
+          maxWhatsAppNumbers: 50,
+          maxMonthlyBroadcasts: 500000,
+          maxContacts: 500000,
+          expiresAt: '2099-12-31T23:59:59.000Z',
+          status: 'active',
+          coexistenceAllowed: true,
+        },
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    }
+    return list;
+  }, [users]);
+
+  const matchesSearch = (str?: string) => {
+    if (!searchQuery.trim()) return true;
+    return (str || '').toLowerCase().includes(searchQuery.toLowerCase().trim());
+  };
+
+  // Client users under a specific Admin
+  const getClientsFor = (adm: UserProfile) => {
+    return users.filter((u) => {
+      if (u.role === 'master_admin' || u.role === 'admin' || u.uid === adm.uid) return false;
+      const isUnder =
+        u.managedByAdminId === adm.uid ||
+        (adm.phone && u.managedByAdminId === adm.phone) ||
+        (adm.email && u.managedByAdminId === adm.email) ||
+        u.organizationId === adm.organizationId;
+      if (!isUnder) return false;
+      if (!searchQuery.trim()) return true;
+      return (
+        matchesSearch(u.displayName) ||
+        matchesSearch(u.phone) ||
+        matchesSearch(u.email) ||
+        matchesSearch(adm.displayName)
+      );
+    });
+  };
+
+  // Direct platform users not claimed by any Sub-Admin
+  const directUsers = users.filter((u) => {
+    if (u.role === 'master_admin' || u.role === 'admin') return false;
+    const isUnderAnyAdmin = allSubAdmins.some((adm) =>
+      u.managedByAdminId === adm.uid ||
+      (adm.phone && u.managedByAdminId === adm.phone) ||
+      (adm.email && u.managedByAdminId === adm.email) ||
+      u.organizationId === adm.organizationId
+    );
+    if (isUnderAnyAdmin) return false;
+    return matchesSearch(u.displayName) || matchesSearch(u.phone) || matchesSearch(u.email);
   });
+
+  // Client users for regular Sub-Admin (isolated to their own tenant)
+  const subAdminMyUsers = users.filter((u) => {
+    if (u.role === 'master_admin' || u.role === 'admin') return false;
+    const isMine =
+      u.managedByAdminId === currentUser?.uid ||
+      (userProfile?.phone && u.managedByAdminId === userProfile.phone) ||
+      u.organizationId === userProfile?.organizationId;
+    if (!isMine) return false;
+    if (!searchQuery.trim()) return true;
+    return matchesSearch(u.displayName) || matchesSearch(u.phone) || matchesSearch(u.email);
+  });
+
+  // Filtered Sub-Admins for Super Master hierarchy view
+  const filteredSubAdmins = allSubAdmins.filter((adm) => {
+    if (!searchQuery.trim()) return true;
+    const adminMatches =
+      matchesSearch(adm.displayName) ||
+      matchesSearch(adm.phone) ||
+      matchesSearch(adm.email) ||
+      matchesSearch(adm.organizationId);
+    const underUsersMatch = users.some(
+      (u) =>
+        (u.managedByAdminId === adm.uid ||
+          (adm.phone && u.managedByAdminId === adm.phone) ||
+          (adm.email && u.managedByAdminId === adm.email) ||
+          u.organizationId === adm.organizationId) &&
+        (matchesSearch(u.displayName) || matchesSearch(u.phone) || matchesSearch(u.email))
+    );
+    return adminMatches || underUsersMatch;
+  });
+
+  // Handle reassigning user to an Admin
+  const handleReassignUser = async () => {
+    if (!reassigningUser || !reassignTargetAdminId) return;
+    setSavingReassign(true);
+    try {
+      await reassignUserToAdmin(reassigningUser.uid, reassignTargetAdminId);
+      const targetAdmin = allSubAdmins.find((a) => a.uid === reassignTargetAdminId);
+      toast.showSuccess(
+        'User Reassigned',
+        `${reassigningUser.displayName} has been assigned to ${targetAdmin?.displayName || 'selected Admin'}.`
+      );
+      setReassigningUser(null);
+    } catch (err: any) {
+      toast.showError('Reassign Failed', err?.message || 'Could not reassign user.');
+    } finally {
+      setSavingReassign(false);
+    }
+  };
+
+  const handleAssignAllUnassignedToPrimaryAdmin = async (unassignedList: UserProfile[]) => {
+    if (unassignedList.length === 0) return;
+    try {
+      for (const u of unassignedList) {
+        await reassignUserToAdmin(u.uid, 'admin_master_12345689');
+      }
+      toast.showSuccess(
+        'Assigned Successfully',
+        `${unassignedList.length} users assigned to Administrator (12345689).`
+      );
+    } catch (err: any) {
+      toast.showError('Assign Failed', err?.message || 'Failed to assign users.');
+    }
+  };
 
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-7xl mx-auto animate-fadeIn">
@@ -424,30 +659,35 @@ export const AdminPage: React.FC = () => {
 
       {/* TAB 1: USERS & ADMINS LIST */}
       {activeTab === 'users' && (
-        <div className="space-y-4">
-          {/* Stats Bar */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
+        <div className="space-y-5">
+          {/* Top Stats Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
             <div className="p-4 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 space-y-1 shadow-xs">
-              <span className="text-neutral-500">Total Accounts</span>
-              <p className="text-2xl font-bold text-neutral-900 dark:text-white font-mono">{users.length}</p>
-              <p className="text-[10px] text-emerald-600">All data in 100% separate tenants</p>
-            </div>
-            <div className="p-4 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 space-y-1 shadow-xs">
-              <span className="text-neutral-500">Sub-Admins Assigned</span>
+              <span className="text-neutral-500 font-medium">Sub-Admins (Resellers)</span>
               <p className="text-2xl font-bold text-purple-600 font-mono">
-                {users.filter((u) => u.role === 'admin' || u.role === 'master_admin').length}
+                {users.filter((u) => u.role === 'admin' || (u.role as string) === 'sub_admin').length}
               </p>
               <p className="text-[10px] text-neutral-400">Can manage their own client networks</p>
             </div>
+
             <div className="p-4 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 space-y-1 shadow-xs">
-              <span className="text-neutral-500">Active Subscriptions</span>
+              <span className="text-neutral-500 font-medium">Users Under Admins</span>
               <p className="text-2xl font-bold text-emerald-600 font-mono">
-                {users.filter((u) => u.subscription?.status === 'active' || !u.subscription).length}
+                {users.filter((u) => u.role !== 'admin' && u.role !== 'master_admin').length}
               </p>
-              <p className="text-[10px] text-neutral-400">Broadcasting &amp; Coexistence enabled</p>
+              <p className="text-[10px] text-emerald-600">Client WhatsApp workspaces</p>
             </div>
+
             <div className="p-4 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 space-y-1 shadow-xs">
-              <span className="text-neutral-500">Expired / Due for Renew</span>
+              <span className="text-neutral-500 font-medium">Total Organizations</span>
+              <p className="text-2xl font-bold text-neutral-900 dark:text-white font-mono">
+                {organizations.length || users.length}
+              </p>
+              <p className="text-[10px] text-neutral-400">100% separate isolated databases</p>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 space-y-1 shadow-xs">
+              <span className="text-neutral-500 font-medium">Expired / Due Renew</span>
               <p className="text-2xl font-bold text-amber-500 font-mono">
                 {
                   users.filter((u) => {
@@ -456,191 +696,851 @@ export const AdminPage: React.FC = () => {
                   }).length
                 }
               </p>
-              <p className="text-[10px] text-neutral-400">Quick 30/60/90 days extension available</p>
+              <p className="text-[10px] text-neutral-400">Quick 30/60/90 days extension</p>
             </div>
           </div>
 
-          {/* Filter Pills */}
-          {isSuperMaster && (
-            <div className="flex items-center space-x-2 text-xs">
-              <span className="text-neutral-400 text-[11px]">Filter View:</span>
+          {/* Search, Filter & View Controls */}
+          <div className="p-4 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 shadow-xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 text-xs">
+            {/* Search Input */}
+            <div className="relative flex-1 max-w-md">
+              <Search className="w-4 h-4 text-neutral-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder="Search by Admin name, Client name, Mobile, Org ID..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-9 pr-3 py-2 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800 text-xs text-neutral-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-purple-500"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-neutral-600 text-xs font-bold"
+                >
+                  &times;
+                </button>
+              )}
+            </div>
+
+            {/* View Switcher & Action Buttons for Super Master Admin */}
+            <div className="flex flex-wrap items-center gap-2">
+              {isSuperMaster && (
+                <div className="flex items-center p-1 rounded-xl bg-neutral-100 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700">
+                  <button
+                    onClick={() => setViewMode('hierarchy')}
+                    className={`px-3 py-1.5 rounded-lg font-semibold flex items-center space-x-1.5 transition-all cursor-pointer ${
+                      viewMode === 'hierarchy'
+                        ? 'bg-purple-600 text-white shadow-xs'
+                        : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900'
+                    }`}
+                  >
+                    <FolderTree className="w-3.5 h-3.5" />
+                    <span>Hierarchy (Admins &amp; Users)</span>
+                  </button>
+                  <button
+                    onClick={() => setViewMode('flat')}
+                    className={`px-3 py-1.5 rounded-lg font-semibold flex items-center space-x-1.5 transition-all cursor-pointer ${
+                      viewMode === 'flat'
+                        ? 'bg-purple-600 text-white shadow-xs'
+                        : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900'
+                    }`}
+                  >
+                    <Layers className="w-3.5 h-3.5" />
+                    <span>Flat Table</span>
+                  </button>
+                </div>
+              )}
+
+              {isSuperMaster && (
+                <button
+                  onClick={openCreateAdminModal}
+                  className="px-3 py-2 rounded-xl bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 hover:bg-purple-200 font-semibold border border-purple-200 dark:border-purple-800 flex items-center space-x-1.5 transition-colors cursor-pointer"
+                >
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  <span>+ Assign New Admin</span>
+                </button>
+              )}
+
               <button
-                onClick={() => setUserFilter('all')}
-                className={`px-3 py-1 rounded-lg font-medium transition-all ${
-                  userFilter === 'all'
-                    ? 'bg-purple-600 text-white shadow-xs'
-                    : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400'
-                }`}
+                onClick={() => {
+                  setNewRole('owner');
+                  setNewAssignedAdminId('');
+                  setIsCreateModalOpen(true);
+                }}
+                className="px-3.5 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-semibold flex items-center space-x-1.5 transition-colors shadow-xs cursor-pointer"
               >
-                All Accounts ({users.length})
+                <UserPlus className="w-3.5 h-3.5" />
+                <span>+ Create Client User</span>
               </button>
-              <button
-                onClick={() => setUserFilter('admins')}
-                className={`px-3 py-1 rounded-lg font-medium transition-all ${
-                  userFilter === 'admins'
-                    ? 'bg-purple-600 text-white shadow-xs'
-                    : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400'
-                }`}
-              >
-                Admins ({users.filter((u) => u.role === 'admin' || u.role === 'master_admin').length})
-              </button>
-              <button
-                onClick={() => setUserFilter('clients')}
-                className={`px-3 py-1 rounded-lg font-medium transition-all ${
-                  userFilter === 'clients'
-                    ? 'bg-purple-600 text-white shadow-xs'
-                    : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400'
-                }`}
-              >
-                Client Users ({users.filter((u) => u.role === 'owner' || u.role === 'agent').length})
-              </button>
+            </div>
+          </div>
+
+          {/* VIEW 1: HIERARCHICAL TREE VIEW (ADMINS AND USERS UNDER EACH ADMIN) */}
+          {isSuperMaster && viewMode === 'hierarchy' && (
+            <div className="space-y-4">
+              {(() => {
+                const subAdmins = allSubAdmins;
+                const matchesSearch = (str?: string) => {
+                  if (!searchQuery.trim()) return true;
+                  return (str || '').toLowerCase().includes(searchQuery.toLowerCase().trim());
+                };
+
+                const filteredSubAdmins = subAdmins.filter((adm) => {
+                  if (!searchQuery.trim()) return true;
+                  const adminMatches =
+                    matchesSearch(adm.displayName) ||
+                    matchesSearch(adm.phone) ||
+                    matchesSearch(adm.email) ||
+                    matchesSearch(adm.organizationId);
+                  const underUsersMatch = users.some(
+                    (u) =>
+                      (u.managedByAdminId === adm.uid ||
+                        (adm.phone && u.managedByAdminId === adm.phone) ||
+                        (adm.email && u.managedByAdminId === adm.email) ||
+                        u.organizationId === adm.organizationId) &&
+                      (matchesSearch(u.displayName) || matchesSearch(u.phone) || matchesSearch(u.email))
+                  );
+                  return adminMatches || underUsersMatch;
+                });
+
+                // Client users under each admin
+                const getClientsFor = (adm: UserProfile) => {
+                  return users.filter((u) => {
+                    if (u.role === 'master_admin' || u.role === 'admin' || (u.role as string) === 'sub_admin' || u.uid === adm.uid) return false;
+                    const isExplicitlyUnder =
+                      u.managedByAdminId === adm.uid ||
+                      (adm.phone && u.managedByAdminId === adm.phone) ||
+                      (adm.email && u.managedByAdminId === adm.email) ||
+                      u.organizationId === adm.organizationId;
+
+                    // If user is not under another sub-admin, and this adm is the primary admin (or only admin), group under this admin
+                    const isUnderAnotherAdmin = subAdmins.some(
+                      (other) =>
+                        other.uid !== adm.uid &&
+                        (u.managedByAdminId === other.uid ||
+                          (other.phone && u.managedByAdminId === other.phone) ||
+                          (other.email && u.managedByAdminId === other.email) ||
+                          u.organizationId === other.organizationId)
+                    );
+                    const isDefaultAdminFallback =
+                      !isUnderAnotherAdmin && (adm.phone === '12345689' || adm.uid === 'admin_master_12345689' || subAdmins.length === 1);
+
+                    const isUnder = isExplicitlyUnder || isDefaultAdminFallback;
+                    if (!isUnder) return false;
+                    if (!searchQuery.trim()) return true;
+                    return (
+                      matchesSearch(u.displayName) ||
+                      matchesSearch(u.phone) ||
+                      matchesSearch(u.email) ||
+                      matchesSearch(adm.displayName)
+                    );
+                  });
+                };
+
+                // Direct Platform users (only if not under any sub-admin and not defaulted)
+                const directUsers = users.filter((u) => {
+                  if (u.role === 'master_admin' || u.role === 'admin' || (u.role as string) === 'sub_admin') return false;
+                  const isUnderAnyAdmin = subAdmins.some((adm) => {
+                    return (
+                      u.managedByAdminId === adm.uid ||
+                      (adm.phone && u.managedByAdminId === adm.phone) ||
+                      (adm.email && u.managedByAdminId === adm.email) ||
+                      u.organizationId === adm.organizationId ||
+                      (adm.phone === '12345689' || adm.uid === 'admin_master_12345689')
+                    );
+                  });
+                  if (isUnderAnyAdmin) return false;
+                  return matchesSearch(u.displayName) || matchesSearch(u.phone) || matchesSearch(u.email);
+                });
+
+                if (filteredSubAdmins.length === 0 && directUsers.length === 0) {
+                  return (
+                    <div className="p-12 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 text-center space-y-3 shadow-xs">
+                      <ShieldCheck className="w-10 h-10 text-purple-400 mx-auto opacity-60" />
+                      <p className="font-bold text-neutral-800 dark:text-neutral-200">
+                        {searchQuery ? 'No Admins or Users match your search.' : 'No Sub-Admins created yet.'}
+                      </p>
+                      <p className="text-xs text-neutral-500 max-w-md mx-auto">
+                        Super Master Admin can assign new Sub-Admins. Each Sub-Admin gets their own admin portal, isolated database, and can connect their own Meta App.
+                      </p>
+                      <button
+                        onClick={openCreateAdminModal}
+                        className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-semibold text-xs inline-flex items-center space-x-1.5 cursor-pointer"
+                      >
+                        <UserPlus className="w-4 h-4" />
+                        <span>+ Assign First Sub-Admin</span>
+                      </button>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="space-y-4">
+                    {/* SUB-ADMINS & CLIENTS UNDER THEM */}
+                    {filteredSubAdmins.map((admin) => {
+                      const clients = getClientsFor(admin);
+                      const isExpanded = expandedAdmins[admin.uid] !== false;
+                      const adminOrg = organizations.find((o) => o.id === admin.organizationId);
+                      const metaConfig = adminOrg?.metaAppConfig;
+                      const isMetaConfigured = Boolean(metaConfig?.appId && metaConfig?.configId);
+                      const isPasswordShown = Boolean(revealedPasswords[admin.uid]);
+
+                      return (
+                        <div
+                          key={admin.uid}
+                          className="rounded-2xl border-2 border-purple-200/90 dark:border-purple-900/60 bg-white dark:bg-neutral-900 shadow-sm overflow-hidden transition-all"
+                        >
+                          {/* ADMIN HEADER CARD */}
+                          <div className="p-4 sm:p-5 bg-gradient-to-r from-purple-50/80 via-neutral-50/50 to-white dark:from-purple-950/30 dark:via-neutral-900 dark:to-neutral-900 border-b border-purple-100 dark:border-neutral-800">
+                            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                              {/* Left: Admin identity, badges, and credentials */}
+                              <div className="flex items-start space-x-3">
+                                <button
+                                  type="button"
+                                  onClick={() => toggleAdminExpand(admin.uid)}
+                                  className="p-1 rounded-lg text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/50 transition-colors cursor-pointer mt-0.5"
+                                  title={isExpanded ? 'Collapse Users List' : 'Expand Users List'}
+                                >
+                                  {isExpanded ? (
+                                    <ChevronDown className="w-5 h-5" />
+                                  ) : (
+                                    <ChevronRight className="w-5 h-5" />
+                                  )}
+                                </button>
+
+                                <div className="w-10 h-10 rounded-2xl bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 flex items-center justify-center font-bold text-base shrink-0 border border-purple-200 dark:border-purple-800 shadow-xs">
+                                  {admin.displayName[0] || 'A'}
+                                </div>
+
+                                <div className="space-y-1.5 min-w-0">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <h3 className="font-bold text-sm sm:text-base text-neutral-900 dark:text-white flex items-center space-x-1.5">
+                                      <span>{admin.displayName}</span>
+                                    </h3>
+                                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
+                                      SUB-ADMIN
+                                    </span>
+                                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400">
+                                      Org: {admin.organizationId}
+                                    </span>
+                                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-200">
+                                      👥 {clients.length} Client User{clients.length === 1 ? '' : 's'} Under this Admin
+                                    </span>
+                                  </div>
+
+                                  {/* Credentials & Meta status preview */}
+                                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-neutral-600 dark:text-neutral-300">
+                                    <div className="flex items-center space-x-1 font-mono">
+                                      <span className="text-neutral-400 text-[11px]">Login ID:</span>
+                                      <strong className="text-purple-700 dark:text-purple-400">{admin.phone || admin.email}</strong>
+                                    </div>
+
+                                    <div className="flex items-center space-x-1 font-mono">
+                                      <span className="text-neutral-400 text-[11px]">Pass:</span>
+                                      <span>{isPasswordShown ? admin.loginPassword || '••••••••' : '••••••••'}</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => togglePasswordReveal(admin.uid)}
+                                        className="p-0.5 text-neutral-400 hover:text-purple-600 cursor-pointer"
+                                        title={isPasswordShown ? 'Hide Password' : 'Show Password'}
+                                      >
+                                        {isPasswordShown ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                                      </button>
+                                    </div>
+
+                                    {/* Meta App Config Status for this Admin */}
+                                    <div className="flex items-center space-x-1">
+                                      {isMetaConfigured ? (
+                                        <span className="inline-flex items-center space-x-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-800">
+                                          <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" />
+                                          <span>Meta App Configured (App: {metaConfig?.appId})</span>
+                                        </span>
+                                      ) : (
+                                        <span className="inline-flex items-center space-x-1 text-[11px] text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 px-2 py-0.5 rounded-md border border-amber-200 dark:border-amber-800">
+                                          <AlertCircle className="w-3 h-3 text-amber-600 shrink-0" />
+                                          <span>Meta App Pending Setup</span>
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {/* Sub-Admin limits badge */}
+                                  <div className="flex flex-wrap items-center gap-2 pt-0.5 text-[11px] text-neutral-500">
+                                    <span>Plan: <strong className="uppercase text-neutral-700 dark:text-neutral-300">{admin.subscription?.planName || 'Enterprise'}</strong></span>
+                                    <span>&bull;</span>
+                                    <span>Max Numbers: <strong className="text-neutral-700 dark:text-neutral-300">{admin.subscription?.maxWhatsAppNumbers ?? 50}</strong></span>
+                                    <span>&bull;</span>
+                                    <span>Broadcasts: <strong className="text-neutral-700 dark:text-neutral-300">{(admin.subscription?.maxMonthlyBroadcasts ?? 500000).toLocaleString()}</strong></span>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Right: Actions for this Sub-Admin */}
+                              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => openCreateModalForAdmin(admin.uid)}
+                                  className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-semibold text-xs flex items-center space-x-1.5 shadow-xs transition-colors cursor-pointer"
+                                >
+                                  <UserPlus className="w-3.5 h-3.5" />
+                                  <span>+ Add User under this Admin</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => openEditModal(admin)}
+                                  title="Edit Sub-Admin Limits & Renew"
+                                  className="p-2 text-neutral-600 dark:text-neutral-400 hover:text-purple-600 dark:hover:text-purple-400 rounded-xl hover:bg-neutral-100 dark:hover:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 transition-colors cursor-pointer"
+                                >
+                                  <Edit className="w-4 h-4" />
+                                </button>
+
+                                {admin.uid !== currentUser?.uid && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteUser(admin)}
+                                    title="Delete Sub-Admin and their tenant"
+                                    className="p-2 text-neutral-400 hover:text-rose-600 rounded-xl hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-neutral-200 dark:border-neutral-700 transition-colors cursor-pointer"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* USERS UNDER THIS SUB-ADMIN (NESTED TABLE) */}
+                          {isExpanded && (
+                            <div className="p-4 sm:p-5 bg-neutral-50/50 dark:bg-neutral-900/50 space-y-3">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center space-x-2">
+                                  <Users className="w-4 h-4 text-purple-600" />
+                                  <h4 className="font-bold text-xs uppercase tracking-wider text-neutral-700 dark:text-neutral-300">
+                                    Client Users under {admin.displayName} ({clients.length})
+                                  </h4>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => openCreateModalForAdmin(admin.uid)}
+                                  className="text-[11px] font-semibold text-purple-600 dark:text-purple-400 hover:underline flex items-center space-x-1 cursor-pointer"
+                                >
+                                  <Plus className="w-3.5 h-3.5" />
+                                  <span>Add Client User</span>
+                                </button>
+                              </div>
+
+                              {clients.length === 0 ? (
+                                <div className="p-6 rounded-xl border border-dashed border-neutral-300 dark:border-neutral-700 text-center space-y-2 bg-white dark:bg-neutral-900">
+                                  <p className="text-xs text-neutral-500">
+                                    Is Sub-Admin ke under abhi koi client user nahi hai.
+                                  </p>
+                                  <button
+                                    type="button"
+                                    onClick={() => openCreateModalForAdmin(admin.uid)}
+                                    className="px-3.5 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold cursor-pointer inline-flex items-center space-x-1 shadow-xs"
+                                  >
+                                    <UserPlus className="w-3.5 h-3.5" />
+                                    <span>+ Create First Client User for {admin.displayName}</span>
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 overflow-hidden shadow-xs">
+                                  <div className="overflow-x-auto">
+                                    <table className="w-full text-left text-xs">
+                                      <thead>
+                                        <tr className="bg-neutral-50 dark:bg-neutral-800/60 text-neutral-500 text-[10px] uppercase font-semibold border-b border-neutral-200 dark:border-neutral-800">
+                                          <th className="py-2.5 px-3.5">Client User Name</th>
+                                          <th className="py-2.5 px-3.5">Login Mobile / Pass</th>
+                                          <th className="py-2.5 px-3.5">Plan &amp; Limits</th>
+                                          <th className="py-2.5 px-3.5">Validity</th>
+                                          <th className="py-2.5 px-3.5">Status</th>
+                                          <th className="py-2.5 px-3.5 text-right">Actions</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800">
+                                        {clients.map((client) => {
+                                          const isExpired = client.subscription?.expiresAt
+                                            ? new Date(client.subscription.expiresAt).getTime() < Date.now()
+                                            : false;
+                                          const isPassShown = Boolean(revealedPasswords[client.uid]);
+
+                                          return (
+                                            <tr
+                                              key={client.uid}
+                                              className="hover:bg-purple-50/30 dark:hover:bg-neutral-800/50 transition-colors"
+                                            >
+                                              <td className="py-3 px-3.5">
+                                                <div>
+                                                  <div className="flex items-center space-x-1.5">
+                                                    <p className="font-bold text-neutral-900 dark:text-white">
+                                                      {client.displayName}
+                                                    </p>
+                                                    <span className="text-[9px] font-semibold px-1.5 py-0.2 rounded bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400">
+                                                      CLIENT
+                                                    </span>
+                                                  </div>
+                                                  <p className="text-[10px] text-neutral-400 font-mono">
+                                                    Tenant Org: {client.organizationId}
+                                                  </p>
+                                                </div>
+                                              </td>
+
+                                              <td className="py-3 px-3.5 font-mono text-[11px]">
+                                                <div className="space-y-0.5">
+                                                  <p className="text-neutral-800 dark:text-neutral-200">
+                                                    ID: <span className="font-semibold text-emerald-600">{client.phone || client.email}</span>
+                                                  </p>
+                                                  <p className="text-neutral-500 text-[10px] flex items-center space-x-1">
+                                                    <span>Pass:</span>
+                                                    <span>{isPassShown ? client.loginPassword || '••••••••' : '••••••••'}</span>
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => togglePasswordReveal(client.uid)}
+                                                      className="p-0.5 text-neutral-400 hover:text-purple-600 cursor-pointer"
+                                                    >
+                                                      {isPassShown ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                                                    </button>
+                                                  </p>
+                                                </div>
+                                              </td>
+
+                                              <td className="py-3 px-3.5">
+                                                <div className="space-y-0.5 text-[11px]">
+                                                  <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300">
+                                                    {client.subscription?.planName || 'Pro'}
+                                                  </span>
+                                                  <p className="text-neutral-600 dark:text-neutral-400 text-[10px]">
+                                                    Numbers: <strong>{client.subscription?.maxWhatsAppNumbers ?? 1}</strong> &bull; Broadcasts: <strong>{(client.subscription?.maxMonthlyBroadcasts ?? 1000).toLocaleString()}</strong>
+                                                  </p>
+                                                </div>
+                                              </td>
+
+                                              <td className="py-3 px-3.5">
+                                                {client.subscription?.expiresAt ? (
+                                                  <div>
+                                                    <p
+                                                      className={`font-medium text-[11px] ${
+                                                        isExpired ? 'text-rose-600 dark:text-rose-400 font-bold' : 'text-neutral-700 dark:text-neutral-300'
+                                                      }`}
+                                                    >
+                                                      {new Date(client.subscription.expiresAt).toLocaleDateString()}
+                                                    </p>
+                                                    <p className="text-[10px] text-neutral-400">
+                                                      {isExpired
+                                                        ? 'Expired'
+                                                        : `${Math.ceil(
+                                                            (new Date(client.subscription.expiresAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24)
+                                                          )} days left`}
+                                                    </p>
+                                                  </div>
+                                                ) : (
+                                                  <span className="text-neutral-400 text-[11px]">No Expiry</span>
+                                                )}
+                                              </td>
+
+                                              <td className="py-3 px-3.5">
+                                                <span
+                                                  className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                                                    isExpired || client.subscription?.status === 'expired'
+                                                      ? 'bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-400'
+                                                      : client.subscription?.status === 'suspended'
+                                                      ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400'
+                                                      : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400'
+                                                  }`}
+                                                >
+                                                  {isExpired ? 'EXPIRED' : (client.subscription?.status || 'ACTIVE').toUpperCase()}
+                                                </span>
+                                              </td>
+
+                                              <td className="py-3 px-3.5 text-right">
+                                                <div className="flex items-center justify-end space-x-1.5">
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => openEditModal(client)}
+                                                    title="Edit limits & Renew validity"
+                                                    className="p-1.5 text-neutral-500 hover:text-purple-600 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
+                                                  >
+                                                    <Edit className="w-3.5 h-3.5" />
+                                                  </button>
+
+                                                  {isSuperMaster && allSubAdmins.length > 1 && (
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => {
+                                                        setReassigningUser(client);
+                                                        setReassignTargetAdminId(admin.uid);
+                                                      }}
+                                                      title="Move to another Admin"
+                                                      className="p-1.5 text-neutral-500 hover:text-purple-600 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
+                                                    >
+                                                      <FolderTree className="w-3.5 h-3.5" />
+                                                    </button>
+                                                  )}
+
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => handleDeleteUser(client)}
+                                                    title="Delete client account"
+                                                    className="p-1.5 text-neutral-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
+                                                  >
+                                                    <Trash2 className="w-3.5 h-3.5" />
+                                                  </button>
+                                                </div>
+                                              </td>
+                                            </tr>
+                                          );
+                                        })}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+
+                    {/* DIRECT PLATFORM USERS (USERS NOT UNDER ANY SUB-ADMIN) */}
+                    {directUsers.length > 0 && (
+                      <div className="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5 space-y-3 shadow-xs">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-2">
+                            <Crown className="w-4 h-4 text-amber-500" />
+                            <h4 className="font-bold text-xs uppercase tracking-wider text-neutral-800 dark:text-neutral-200">
+                              Direct Platform Users (Super Master Admin Direct Clients) ({directUsers.length})
+                            </h4>
+                          </div>
+                          <span className="text-[11px] text-neutral-500">Not assigned under any Sub-Admin</span>
+                        </div>
+
+                        <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 overflow-hidden">
+                          <table className="w-full text-left text-xs">
+                            <thead>
+                              <tr className="bg-neutral-50 dark:bg-neutral-800/60 text-neutral-500 text-[10px] uppercase font-semibold border-b border-neutral-200 dark:border-neutral-800">
+                                <th className="py-2.5 px-3.5">User Name</th>
+                                <th className="py-2.5 px-3.5">Login Mobile / Pass</th>
+                                <th className="py-2.5 px-3.5">Plan &amp; Limits</th>
+                                <th className="py-2.5 px-3.5">Validity</th>
+                                <th className="py-2.5 px-3.5">Status</th>
+                                <th className="py-2.5 px-3.5 text-right">Actions</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800">
+                              {directUsers.map((du) => {
+                                const isExpired = du.subscription?.expiresAt
+                                  ? new Date(du.subscription.expiresAt).getTime() < Date.now()
+                                  : false;
+                                const isPassShown = Boolean(revealedPasswords[du.uid]);
+
+                                return (
+                                  <tr key={du.uid} className="hover:bg-neutral-50/50 dark:hover:bg-neutral-800/50">
+                                    <td className="py-3 px-3.5">
+                                      <p className="font-bold text-neutral-900 dark:text-white">{du.displayName}</p>
+                                      <p className="text-[10px] text-neutral-400 font-mono">Org: {du.organizationId}</p>
+                                    </td>
+                                    <td className="py-3 px-3.5 font-mono text-[11px]">
+                                      <p className="text-emerald-600 font-semibold">{du.phone || du.email}</p>
+                                      <p className="text-neutral-500 text-[10px] flex items-center space-x-1">
+                                        <span>Pass:</span>
+                                        <span>{isPassShown ? du.loginPassword || '••••••••' : '••••••••'}</span>
+                                        <button
+                                          type="button"
+                                          onClick={() => togglePasswordReveal(du.uid)}
+                                          className="p-0.5 text-neutral-400 hover:text-purple-600 cursor-pointer"
+                                        >
+                                          {isPassShown ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                                        </button>
+                                      </p>
+                                    </td>
+                                    <td className="py-3 px-3.5 text-[11px]">
+                                      <span className="font-bold uppercase text-[10px] px-1.5 py-0.5 rounded bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300">
+                                        {du.subscription?.planName || 'Standard'}
+                                      </span>
+                                      <p className="text-[10px] text-neutral-500 mt-0.5">
+                                        {du.subscription?.maxWhatsAppNumbers ?? 1} Numbers &bull; {(du.subscription?.maxMonthlyBroadcasts ?? 1000).toLocaleString()} Broadcasts
+                                      </p>
+                                    </td>
+                                    <td className="py-3 px-3.5 text-[11px]">
+                                      {du.subscription?.expiresAt
+                                        ? new Date(du.subscription.expiresAt).toLocaleDateString()
+                                        : 'No Expiry'}
+                                    </td>
+                                    <td className="py-3 px-3.5">
+                                      <span
+                                        className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                                          isExpired
+                                            ? 'bg-rose-50 text-rose-700'
+                                            : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400'
+                                        }`}
+                                      >
+                                        {isExpired ? 'EXPIRED' : (du.subscription?.status || 'ACTIVE').toUpperCase()}
+                                      </span>
+                                    </td>
+                                    <td className="py-3 px-3.5 text-right">
+                                      <div className="flex items-center justify-end space-x-1.5">
+                                        <button
+                                          type="button"
+                                          onClick={() => openEditModal(du)}
+                                          title="Reassign to Sub-Admin or Edit Limits"
+                                          className="p-1.5 text-neutral-500 hover:text-purple-600 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
+                                        >
+                                          <Edit className="w-3.5 h-3.5" />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleDeleteUser(du)}
+                                          title="Delete user"
+                                          className="p-1.5 text-neutral-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 cursor-pointer"
+                                        >
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           )}
 
-          {/* User Table */}
-          <div className="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 overflow-hidden shadow-xs">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-800/40 text-neutral-500 dark:text-neutral-400 uppercase text-[10px] tracking-wider font-semibold">
-                    <th className="py-3 px-4">Account &amp; Hierarchy</th>
-                    <th className="py-3 px-4">Login Credentials</th>
-                    <th className="py-3 px-4">Plan &amp; Limits</th>
-                    <th className="py-3 px-4">Validity / Expiry</th>
-                    <th className="py-3 px-4">Status</th>
-                    <th className="py-3 px-4 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800">
-                  {filteredUsers.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="py-10 text-center text-neutral-400">
-                        No accounts found in this category.
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredUsers.map((u) => {
-                      const isExpired = u.subscription?.expiresAt
-                        ? new Date(u.subscription.expiresAt).getTime() < Date.now()
-                        : false;
+          {/* VIEW 2: FLAT TABLE VIEW OR SUB-ADMIN VIEW */}
+          {(!isSuperMaster || viewMode === 'flat') && (
+            <div className="space-y-4">
+              {/* Filter Pills */}
+              {isSuperMaster && (
+                <div className="flex items-center space-x-2 text-xs">
+                  <span className="text-neutral-400 text-[11px]">Filter Category:</span>
+                  <button
+                    onClick={() => setUserFilter('all')}
+                    className={`px-3 py-1 rounded-lg font-medium transition-all ${
+                      userFilter === 'all'
+                        ? 'bg-purple-600 text-white shadow-xs'
+                        : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400'
+                    }`}
+                  >
+                    All ({users.length})
+                  </button>
+                  <button
+                    onClick={() => setUserFilter('admins')}
+                    className={`px-3 py-1 rounded-lg font-medium transition-all ${
+                      userFilter === 'admins'
+                        ? 'bg-purple-600 text-white shadow-xs'
+                        : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400'
+                    }`}
+                  >
+                    Admins Only ({users.filter((u) => u.role === 'admin' || u.role === 'master_admin').length})
+                  </button>
+                  <button
+                    onClick={() => setUserFilter('clients')}
+                    className={`px-3 py-1 rounded-lg font-medium transition-all ${
+                      userFilter === 'clients'
+                        ? 'bg-purple-600 text-white shadow-xs'
+                        : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400'
+                    }`}
+                  >
+                    Client Users ({users.filter((u) => u.role === 'owner' || u.role === 'agent').length})
+                  </button>
+                </div>
+              )}
 
-                      return (
-                        <tr key={u.uid} className="hover:bg-neutral-50/50 dark:hover:bg-neutral-800/50 transition-colors">
-                          <td className="py-3.5 px-4">
-                            <div>
-                              <div className="flex items-center space-x-1.5">
-                                <p className="font-semibold text-neutral-900 dark:text-white">{u.displayName}</p>
+              {/* User Flat Table */}
+              {(() => {
+                const filteredUsers: UserProfile[] = users.filter((u: UserProfile) => {
+                  if (!isSuperMaster) {
+                    if (u.uid === currentUser?.uid) return true;
+                    return (
+                      u.managedByAdminId === currentUser?.uid ||
+                      (userProfile?.phone && u.managedByAdminId === userProfile.phone) ||
+                      (currentUser?.email && u.managedByAdminId === currentUser.email) ||
+                      u.organizationId === userProfile?.organizationId
+                    );
+                  }
+                  if (userFilter === 'admins') {
+                    if (u.role !== 'admin' && u.role !== 'master_admin' && (u.role as string) !== 'sub_admin') return false;
+                  } else if (userFilter === 'clients') {
+                    if (u.role === 'admin' || u.role === 'master_admin' || (u.role as string) === 'sub_admin') return false;
+                  }
+                  if (!searchQuery.trim()) return true;
+                  const q = searchQuery.toLowerCase().trim();
+                  return (
+                    (u.displayName || '').toLowerCase().includes(q) ||
+                    (u.phone || '').toLowerCase().includes(q) ||
+                    (u.email || '').toLowerCase().includes(q) ||
+                    (u.organizationId || '').toLowerCase().includes(q)
+                  );
+                });
+
+                return (
+                  <div className="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 overflow-hidden shadow-xs">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-800/40 text-neutral-500 dark:text-neutral-400 uppercase text-[10px] tracking-wider font-semibold">
+                            <th className="py-3 px-4">Account &amp; Hierarchy</th>
+                            <th className="py-3 px-4">Login Credentials</th>
+                            <th className="py-3 px-4">Assigned Admin</th>
+                            <th className="py-3 px-4">Plan &amp; Limits</th>
+                            <th className="py-3 px-4">Validity / Expiry</th>
+                            <th className="py-3 px-4">Status</th>
+                            <th className="py-3 px-4 text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800">
+                          {filteredUsers.length === 0 ? (
+                            <tr>
+                              <td colSpan={7} className="py-10 text-center text-neutral-400">
+                                No accounts found in this category.
+                              </td>
+                            </tr>
+                          ) : (
+                            filteredUsers.map((u: UserProfile) => {
+                          const isExpired = u.subscription?.expiresAt
+                            ? new Date(u.subscription.expiresAt).getTime() < Date.now()
+                            : false;
+                          const assignedAdmin = users.find(
+                            (a) => a.uid === u.managedByAdminId || a.phone === u.managedByAdminId
+                          );
+
+                          return (
+                            <tr key={u.uid} className="hover:bg-neutral-50/50 dark:hover:bg-neutral-800/50 transition-colors">
+                              <td className="py-3.5 px-4">
+                                <div>
+                                  <div className="flex items-center space-x-1.5">
+                                    <p className="font-semibold text-neutral-900 dark:text-white">{u.displayName}</p>
+                                    {u.role === 'master_admin' ? (
+                                      <span className="text-[9px] bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 font-bold px-1.5 py-0.2 rounded border border-amber-200">
+                                        MASTER
+                                      </span>
+                                    ) : u.role === 'admin' ? (
+                                      <span className="text-[9px] bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300 font-bold px-1.5 py-0.2 rounded border border-purple-200">
+                                        SUB-ADMIN
+                                      </span>
+                                    ) : (
+                                      <span className="text-[9px] bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 font-semibold px-1.5 py-0.2 rounded">
+                                        CLIENT
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-[11px] text-neutral-500 font-mono">
+                                    Org: {u.organizationId}
+                                  </p>
+                                </div>
+                              </td>
+
+                              <td className="py-3.5 px-4 font-mono text-[11px]">
+                                <div className="space-y-0.5">
+                                  <p className="text-neutral-800 dark:text-neutral-200">
+                                    ID: <span className="font-semibold text-emerald-600">{u.phone || u.email}</span>
+                                  </p>
+                                  <p className="text-neutral-500 text-[10px]">
+                                    Pass: <span>{u.loginPassword || '••••••••'}</span>
+                                  </p>
+                                </div>
+                              </td>
+
+                              <td className="py-3.5 px-4">
                                 {u.role === 'master_admin' ? (
-                                  <span className="text-[9px] bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 font-bold px-1.5 py-0.2 rounded border border-amber-200">
-                                    MASTER
-                                  </span>
+                                  <span className="text-amber-600 font-medium text-[11px]">Root Platform</span>
                                 ) : u.role === 'admin' ? (
-                                  <span className="text-[9px] bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300 font-bold px-1.5 py-0.2 rounded border border-purple-200">
-                                    SUB-ADMIN
+                                  <span className="text-purple-600 font-semibold text-[11px]">Sub-Admin Portal</span>
+                                ) : assignedAdmin ? (
+                                  <span className="text-neutral-800 dark:text-neutral-200 font-medium text-[11px]">
+                                    {assignedAdmin.displayName}
                                   </span>
                                 ) : (
-                                  <span className="text-[9px] bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 font-semibold px-1.5 py-0.2 rounded">
-                                    CLIENT
-                                  </span>
+                                  <span className="text-neutral-400 text-[11px]">Super Master Direct</span>
                                 )}
-                              </div>
-                              <p className="text-[11px] text-neutral-500 font-mono">
-                                Org: {u.organizationId}
-                              </p>
-                            </div>
-                          </td>
+                              </td>
 
-                          <td className="py-3.5 px-4 font-mono text-[11px]">
-                            <div className="space-y-0.5">
-                              <p className="text-neutral-800 dark:text-neutral-200">
-                                ID: <span className="font-semibold text-emerald-600">{u.phone || u.email}</span>
-                              </p>
-                              <p className="text-neutral-500 text-[10px]">
-                                Pass: <span>{u.loginPassword || '••••••••'}</span>
-                              </p>
-                            </div>
-                          </td>
+                              <td className="py-3.5 px-4">
+                                <div className="space-y-0.5 text-[11px]">
+                                  <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300">
+                                    {u.subscription?.planName || 'Standard'}
+                                  </span>
+                                  <p className="text-neutral-600 dark:text-neutral-400 text-[10px]">
+                                    Numbers: <strong>{u.subscription?.maxWhatsAppNumbers ?? 1}</strong> &bull; Broadcasts: <strong>{(u.subscription?.maxMonthlyBroadcasts ?? 1000).toLocaleString()}</strong>
+                                  </p>
+                                </div>
+                              </td>
 
-                          <td className="py-3.5 px-4">
-                            <div className="space-y-0.5 text-[11px]">
-                              <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300">
-                                {u.subscription?.planName || 'Standard'}
-                              </span>
-                              <p className="text-neutral-600 dark:text-neutral-400 text-[10px]">
-                                Max Numbers: <strong>{u.subscription?.maxWhatsAppNumbers ?? 1}</strong>
-                              </p>
-                              <p className="text-neutral-600 dark:text-neutral-400 text-[10px]">
-                                Max Broadcasts: <strong>{u.subscription?.maxMonthlyBroadcasts ?? 1000}</strong>
-                              </p>
-                            </div>
-                          </td>
+                              <td className="py-3.5 px-4">
+                                {u.subscription?.expiresAt ? (
+                                  <div>
+                                    <p
+                                      className={`font-medium text-[11px] ${
+                                        isExpired ? 'text-rose-600 dark:text-rose-400 font-bold' : 'text-neutral-700 dark:text-neutral-300'
+                                      }`}
+                                    >
+                                      {new Date(u.subscription.expiresAt).toLocaleDateString()}
+                                    </p>
+                                    <p className="text-[10px] text-neutral-400">
+                                      {isExpired
+                                        ? 'Expired'
+                                        : `${Math.ceil(
+                                            (new Date(u.subscription.expiresAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24)
+                                          )} days left`}
+                                    </p>
+                                  </div>
+                                ) : (
+                                  <span className="text-neutral-400 text-[11px]">No Expiry</span>
+                                )}
+                              </td>
 
-                          <td className="py-3.5 px-4">
-                            {u.subscription?.expiresAt ? (
-                              <div>
-                                <p
-                                  className={`font-medium text-[11px] ${
-                                    isExpired ? 'text-rose-600 dark:text-rose-400 font-bold' : 'text-neutral-700 dark:text-neutral-300'
+                              <td className="py-3.5 px-4">
+                                <span
+                                  className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                                    isExpired || u.subscription?.status === 'expired'
+                                      ? 'bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-400'
+                                      : u.subscription?.status === 'suspended'
+                                      ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400'
+                                      : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400'
                                   }`}
                                 >
-                                  {new Date(u.subscription.expiresAt).toLocaleDateString()}
-                                </p>
-                                <p className="text-[10px] text-neutral-400">
-                                  {isExpired
-                                    ? 'Expired'
-                                    : `${Math.ceil(
-                                        (new Date(u.subscription.expiresAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24)
-                                      )} days left`}
-                                </p>
-                              </div>
-                            ) : (
-                              <span className="text-neutral-400 text-[11px]">No Expiry</span>
-                            )}
-                          </td>
+                                  {isExpired ? 'EXPIRED' : (u.subscription?.status || 'ACTIVE').toUpperCase()}
+                                </span>
+                              </td>
 
-                          <td className="py-3.5 px-4">
-                            <span
-                              className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                                isExpired || u.subscription?.status === 'expired'
-                                  ? 'bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-400'
-                                  : u.subscription?.status === 'suspended'
-                                  ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400'
-                                  : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400'
-                              }`}
-                            >
-                              {isExpired ? 'EXPIRED' : (u.subscription?.status || 'ACTIVE').toUpperCase()}
-                            </span>
-                          </td>
+                              <td className="py-3.5 px-4 text-right">
+                                <div className="flex items-center justify-end space-x-1.5">
+                                  <button
+                                    onClick={() => openEditModal(u)}
+                                    title="Edit limits & Renew validity"
+                                    className="p-1.5 text-neutral-500 hover:text-purple-600 dark:hover:text-purple-400 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
+                                  >
+                                    <Edit className="w-3.5 h-3.5" />
+                                  </button>
 
-                          <td className="py-3.5 px-4 text-right">
-                            <div className="flex items-center justify-end space-x-1.5">
-                              <button
-                                onClick={() => openEditModal(u)}
-                                title="Edit limits & Renew validity"
-                                className="p-1.5 text-neutral-500 hover:text-purple-600 dark:hover:text-purple-400 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
-                              >
-                                <Edit className="w-3.5 h-3.5" />
-                              </button>
-
-                              {u.uid !== currentUser?.uid && (
-                                <button
-                                  onClick={() => handleDeleteUser(u)}
-                                  title="Delete account and isolated database"
-                                  className="p-1.5 text-neutral-400 hover:text-rose-600 dark:hover:text-rose-400 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
+                                  {u.uid !== currentUser?.uid && (
+                                    <button
+                                      onClick={() => handleDeleteUser(u)}
+                                      title="Delete account and isolated database"
+                                      className="p-1.5 text-neutral-400 hover:text-rose-600 dark:hover:text-rose-400 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+          )}
         </div>
       )}
 
@@ -1292,6 +2192,26 @@ export const AdminPage: React.FC = () => {
                 </select>
               </div>
 
+              {isSuperMaster && editingUser.role !== 'master_admin' && (
+                <div>
+                  <label className="block font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
+                    Managing Admin (Assigned Under)
+                  </label>
+                  <select
+                    value={editAssignedAdminId}
+                    onChange={(e) => setEditAssignedAdminId(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs font-medium"
+                  >
+                    <option value="">-- Platform Direct (Default Primary Admin) --</option>
+                    {allSubAdmins.map((adm) => (
+                      <option key={adm.uid} value={adm.uid}>
+                        {adm.displayName} ({adm.phone || adm.email}) - Org: {adm.organizationId}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               <div className="pt-3 border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-end space-x-2">
                 <button
                   type="button"
@@ -1307,6 +2227,70 @@ export const AdminPage: React.FC = () => {
                   className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-medium disabled:opacity-50 cursor-pointer"
                 >
                   {savingEdit ? 'Saving...' : 'Save & Renew'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* REASSIGN TO ADMIN MODAL */}
+      {reassigningUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl w-full max-w-md p-6 space-y-4 shadow-xl">
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-200 dark:border-neutral-800">
+              <div className="flex items-center space-x-2">
+                <FolderTree className="w-5 h-5 text-purple-600" />
+                <h3 className="font-bold text-sm text-neutral-900 dark:text-white">
+                  Move User Under Another Admin
+                </h3>
+              </div>
+              <button
+                onClick={() => setReassigningUser(null)}
+                className="text-neutral-400 hover:text-neutral-600 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3.5 text-xs">
+              <p className="text-neutral-600 dark:text-neutral-400">
+                Move user account <strong className="text-neutral-900 dark:text-white">{reassigningUser.displayName}</strong> ({reassigningUser.phone || reassigningUser.email}) under a different Sub-Admin.
+              </p>
+
+              <div>
+                <label className="block font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
+                  Select New Managing Admin
+                </label>
+                <select
+                  value={reassignTargetAdminId}
+                  onChange={(e) => setReassignTargetAdminId(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs font-medium"
+                >
+                  <option value="">-- Choose Admin --</option>
+                  {allSubAdmins.map((adm) => (
+                    <option key={adm.uid} value={adm.uid}>
+                      {adm.displayName} ({adm.phone || adm.email}) - Org: {adm.organizationId}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="pt-3 border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-end space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setReassigningUser(null)}
+                  className="px-4 py-2 rounded-xl border border-neutral-200 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleReassignUser}
+                  disabled={savingReassign || !reassignTargetAdminId}
+                  className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-semibold disabled:opacity-50 cursor-pointer"
+                >
+                  {savingReassign ? 'Moving...' : 'Confirm Move to Admin'}
                 </button>
               </div>
             </div>
