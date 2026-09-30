@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   X,
   Smartphone,
@@ -22,7 +22,6 @@ import {
   EyeOff,
   Activity,
   ShieldCheck,
-  Lock,
 } from 'lucide-react';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
 import { useAuth } from '../context/AuthContext.tsx';
@@ -39,12 +38,9 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
   onClose,
   onSuccess,
 }) => {
-  const { accounts, metaStatus, connectViaEmbeddedSignup, connectManualAccount, testMetaCredentials } = useWhatsAppAccounts();
-  const { userProfile, organization } = useAuth();
+  const { metaStatus, connectViaEmbeddedSignup, connectManualAccount, testMetaCredentials } = useWhatsAppAccounts();
+  const { userProfile } = useAuth();
   const toast = useToast();
-
-  const maxAllowedNumbers = userProfile?.subscription?.maxWhatsAppNumbers ?? 1;
-  const isLimitReached = accounts.length >= maxAllowedNumbers;
 
   // Tab: 'direct' (Phone number / ID) or 'embedded' (Facebook SDK)
   const [activeTab, setActiveTab] = useState<'direct' | 'embedded'>('direct');
@@ -81,18 +77,6 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
 
   const webhookUrl = metaStatus?.webhookUrl || `${window.location.origin}/api/meta/webhook`;
   const verifyToken = metaStatus?.webhookVerifyToken || 'cloudwaba_verify_token_secure';
-
-  // Automatically pre-fill WABA ID and Token from Admin's saved Meta App configuration
-  useEffect(() => {
-    if (organization?.metaAppConfig) {
-      if (organization.metaAppConfig.wabaId) {
-        setWabaId((prev) => prev || organization.metaAppConfig!.wabaId || '');
-      }
-      if (organization.metaAppConfig.systemUserToken) {
-        setCustomToken((prev) => prev || organization.metaAppConfig!.systemUserToken || '');
-      }
-    }
-  }, [organization?.metaAppConfig, isOpen]);
 
   if (!isOpen) return null;
 
@@ -154,33 +138,15 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
     }
   };
 
-  const resolvedAppId =
-    organization?.metaAppConfig?.appId?.trim() ||
-    metaStatus?.appId?.trim() ||
-    '';
-
-  const resolvedConfigId =
-    organization?.metaAppConfig?.configId?.trim() ||
-    metaStatus?.configId?.trim() ||
-    '';
-
-  const isEmbeddedConfigured = Boolean(resolvedAppId && resolvedConfigId);
-
   const handleEmbeddedSignup = async () => {
     setError(null);
     setSuccess(null);
 
-    if (isLimitReached) {
-      const limitMsg = `Your account plan allows a maximum of ${maxAllowedNumbers} connected WhatsApp number(s). Please contact your Administrator to upgrade your limit.`;
-      setError(limitMsg);
-      toast.showWarning('Number Limit Reached', limitMsg);
-      return;
-    }
-
-    if (!isEmbeddedConfigured) {
-      const msg = 'Admin Panel me Configuration ID ya Meta App ID blank hai! Embedded Signup chalane ke liye pehle Admin Portal me jakar Facebook Login Configuration ID aur App ID save karein.';
+    const hasAppId = Boolean(metaStatus?.appIdSet || metaStatus?.appId || import.meta.env.VITE_META_APP_ID || '28291855670435316');
+    if (!hasAppId) {
+      const msg = 'Meta App ID is not yet configured in server environment. Please use the "Real Meta API Credentials" tab to connect your WhatsApp account directly.';
       setError(msg);
-      toast.showWarning('Configuration ID Missing', msg);
+      toast.showWarning('Meta App ID Missing', msg);
       return;
     }
 
@@ -205,14 +171,6 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
 
   const handleDirectConnect = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    if (isLimitReached) {
-      const limitMsg = `Your account plan allows a maximum of ${maxAllowedNumbers} connected WhatsApp number(s). Please contact your Administrator to upgrade your limit.`;
-      setError(limitMsg);
-      toast.showWarning('Number Limit Reached', limitMsg);
-      return;
-    }
-
     const cleanPhoneId = phoneNumberId.trim() || displayPhone.replace(/[^0-9]/g, '');
     if (!cleanPhoneId) {
       const msg = 'Please enter a valid Phone Number ID or WhatsApp Mobile Number.';
@@ -533,64 +491,27 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
                 </ul>
               </div>
 
-              {/* User Subscription Quota Badge */}
-              <div className="p-3 rounded-2xl bg-neutral-100 dark:bg-neutral-800/60 border border-neutral-200 dark:border-neutral-700 flex items-center justify-between text-xs">
-                <span className="text-neutral-600 dark:text-neutral-400 font-medium">
-                  Your WhatsApp Number Quota:
-                </span>
-                <span className={`font-bold font-mono px-2 py-0.5 rounded ${
-                  isLimitReached
-                    ? 'bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300'
-                    : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
-                }`}>
-                  {accounts.length} / {maxAllowedNumbers} Numbers Connected
-                </span>
-              </div>
-
-              {isLimitReached && (
-                <div className="p-3 rounded-2xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/40 text-xs text-rose-700 dark:text-rose-300">
-                  <p className="font-semibold">Account Quota Limit Reached</p>
-                  <p className="text-[11px] mt-0.5">
-                    Your assigned plan allows a maximum of {maxAllowedNumbers} number(s). Contact your Administrator to upgrade your limit.
-                  </p>
-                </div>
-              )}
-
-              {isEmbeddedConfigured ? (
+              {Boolean(metaStatus?.appIdSet || metaStatus?.appId) ? (
                 <div className="p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/40 flex items-start space-x-2.5 text-xs text-emerald-800 dark:text-emerald-300">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
+                  <div className="w-2 h-2 rounded-full bg-emerald-500 mt-1.5 shrink-0" />
                   <div>
-                    <p className="font-semibold">Meta App &amp; Configuration Active</p>
-                    <p className="mt-0.5 text-[11px] font-mono leading-relaxed">
-                      App ID: <span className="font-bold">{resolvedAppId}</span> &bull; Config ID: <span className="font-bold">{resolvedConfigId}</span>
+                    <p className="font-semibold">Meta App & Config Connected</p>
+                    <p className="mt-0.5 text-[11px] leading-relaxed">
+                      App ID: <code>{metaStatus?.appId || '28291855670435316'}</code> • Config ID: <code>{metaStatus?.configId || '1030431656687202'}</code>
                     </p>
                     <p className="mt-1 text-[11px] text-emerald-700 dark:text-emerald-400">
-                      Neeche diye gaye blue button par click karke aap official Facebook popup ke zariye WhatsApp number connect kar sakte hain.
+                      Click below to open Meta's Embedded Signup popup for Coexistence Mode onboarding.
                     </p>
                   </div>
                 </div>
               ) : (
-                <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/50 space-y-2 text-xs text-amber-900 dark:text-amber-200">
-                  <div className="flex items-center space-x-2 font-bold text-amber-800 dark:text-amber-300">
-                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-                    <span>Configuration ID Blank in Admin Panel (Embedded Signup Disabled)</span>
-                  </div>
-                  <p className="text-[11px] leading-relaxed text-amber-800/90 dark:text-amber-300/90">
-                    Admin Portal me <strong>Facebook Login Configuration ID</strong> aur <strong>Meta App ID</strong> abhi khali (blank) hain. Isliye Embedded Signup ka Facebook popup direct open nahi hoga.
-                  </p>
-                  <div className="pt-1 flex flex-col sm:flex-row gap-2 text-[11px]">
-                    <div className="flex-1 p-2.5 rounded-xl bg-amber-100/70 dark:bg-amber-900/30 border border-amber-200/80 dark:border-amber-800/60">
-                      <p className="font-semibold text-amber-900 dark:text-amber-200">Option 1: Admin Panel Setup</p>
-                      <p className="text-[10px] text-amber-800 dark:text-amber-300 mt-0.5">
-                        Admin Portal &gt; Meta App Setup me jakar apni Meta App Configuration ID aur App ID daal kar Save karein.
-                      </p>
-                    </div>
-                    <div className="flex-1 p-2.5 rounded-xl bg-amber-100/70 dark:bg-amber-900/30 border border-amber-200/80 dark:border-amber-800/60">
-                      <p className="font-semibold text-amber-900 dark:text-amber-200">Option 2: Direct API Connect</p>
-                      <p className="text-[10px] text-amber-800 dark:text-amber-300 mt-0.5">
-                        Upar <strong>&quot;Real Meta API Credentials&quot;</strong> tab select karke Phone Number ID aur Token se turant connect karein.
-                      </p>
-                    </div>
+                <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/40 flex items-start space-x-2.5 text-xs text-amber-800 dark:text-amber-300">
+                  <HelpCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-semibold">Setup Notice</p>
+                    <p className="mt-0.5 text-[11px] leading-relaxed">
+                      Use the <strong>Real Meta API Credentials</strong> tab to connect with your Phone Number ID and Token directly.
+                    </p>
                   </div>
                 </div>
               )}
@@ -598,22 +519,13 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
               <button
                 type="button"
                 onClick={handleEmbeddedSignup}
-                disabled={loading || !isEmbeddedConfigured || isLimitReached}
-                className={`w-full py-3.5 px-4 rounded-xl text-white font-medium flex items-center justify-center space-x-2 transition-all shadow-sm text-sm ${
-                  !isEmbeddedConfigured || isLimitReached
-                    ? 'bg-neutral-300 dark:bg-neutral-700 text-neutral-500 dark:text-neutral-400 cursor-not-allowed'
-                    : 'bg-[#1877F2] hover:bg-[#166fe5] hover:shadow-md cursor-pointer disabled:opacity-60'
-                }`}
+                disabled={loading}
+                className="w-full py-3.5 px-4 rounded-xl bg-[#1877F2] hover:bg-[#166fe5] text-white font-medium flex items-center justify-center space-x-2 transition-all shadow-sm hover:shadow-md disabled:opacity-60 cursor-pointer text-sm"
               >
                 {loading ? (
                   <>
                     <Loader2 className="w-5 h-5 animate-spin" />
                     <span>Connecting with Meta...</span>
-                  </>
-                ) : !isEmbeddedConfigured ? (
-                  <>
-                    <Lock className="w-4 h-4 text-neutral-400 shrink-0" />
-                    <span>Configuration ID Required (Setup in Admin Panel)</span>
                   </>
                 ) : (
                   <>

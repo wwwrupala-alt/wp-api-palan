@@ -157,14 +157,6 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
-    // Prioritize Admin's configured Meta App ID, otherwise server/tenant config
-    const activeAppId =
-      organization?.metaAppConfig?.appId ||
-      metaStatus?.appId ||
-      '';
-
-    if (!activeAppId) return;
-
     if (!document.getElementById('facebook-jssdk')) {
       const script = document.createElement('script');
       script.id = 'facebook-jssdk';
@@ -174,42 +166,33 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
       document.body.appendChild(script);
 
       window.fbAsyncInit = function () {
-        if (window.FB && activeAppId) {
+        if (window.FB && (metaStatus?.appId || (import.meta.env.VITE_META_APP_ID as string))) {
           window.FB.init({
-            appId: activeAppId,
+            appId: metaStatus?.appId || (import.meta.env.VITE_META_APP_ID as string) || '28291855670435316',
             cookie: true,
             xfbml: true,
             version: metaStatus?.graphVersion || 'v22.0',
           });
         }
       };
-    } else if (window.FB && activeAppId) {
+    } else if (window.FB && (metaStatus?.appId || (import.meta.env.VITE_META_APP_ID as string))) {
       window.FB.init({
-        appId: activeAppId,
+        appId: metaStatus?.appId || (import.meta.env.VITE_META_APP_ID as string) || '28291855670435316',
         cookie: true,
         xfbml: true,
         version: metaStatus?.graphVersion || 'v22.0',
       });
     }
-  }, [metaStatus, organization?.metaAppConfig?.appId]);
+  }, [metaStatus]);
 
   // Connect WhatsApp via Meta Embedded Signup
   const connectViaEmbeddedSignup = async (): Promise<void> => {
     if (!organization?.id) throw new Error('Organization not found. Please re-login.');
 
-    const resolvedAppId =
-      organization?.metaAppConfig?.appId ||
-      metaStatus?.appId ||
-      '';
-
-    const resolvedConfigId =
-      organization?.metaAppConfig?.configId ||
-      metaStatus?.configId ||
-      '';
-
-    if (!resolvedAppId || !resolvedConfigId) {
+    const resolvedAppId = metaStatus?.appId || (import.meta.env.VITE_META_APP_ID as string) || '28291855670435316';
+    if (!resolvedAppId) {
       throw new Error(
-        'Meta App ID or Configuration ID is not configured for your Admin account yet! Please go to "Admin Portal & Users" > "Admin Meta App & Embedded Signup Setup" tab, fill your Meta App details, and click Save first.'
+        'Meta App ID is not yet configured in server environment. Please use the "Connect by Phone Number" tab to connect your WhatsApp account directly.'
       );
     }
 
@@ -234,8 +217,10 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
           return;
         }
 
+        const configId = metaStatus?.configId || (import.meta.env.VITE_META_CONFIG_ID as string) || '1030431656687202';
+
         const loginOptions: Record<string, unknown> = {
-          config_id: resolvedConfigId,
+          config_id: configId,
           response_type: 'code',
           override_default_response_type: true,
           extras: {
@@ -248,16 +233,13 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
         window.FB.login((response) => {
           clearTimeout(timer);
           if (response?.authResponse && response.authResponse.code) {
-            // Exchange code via backend proxy with custom credentials if provided
+            // Exchange code via backend proxy
             fetch('/api/meta/embedded-signup-exchange', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 code: response.authResponse.code,
                 organizationId: organization.id,
-                customAppId: resolvedAppId,
-                customAppSecret: organization?.metaAppConfig?.appSecret,
-                customConfigId: resolvedConfigId,
               }),
             })
               .then(async (res) => {

@@ -1,45 +1,14 @@
-export type UserRole = 'master_admin' | 'owner' | 'admin' | 'agent';
-
-export interface UserSubscription {
-  planName: 'trial' | 'basic' | 'pro' | 'enterprise';
-  maxWhatsAppNumbers: number;
-  maxMonthlyBroadcasts: number;
-  maxContacts: number;
-  expiresAt: string; // ISO date string
-  status: 'active' | 'expired' | 'suspended';
-  coexistenceAllowed: boolean;
-  notes?: string;
-}
+export type UserRole = 'owner' | 'admin' | 'agent';
 
 export interface UserProfile {
   uid: string;
   email: string;
   displayName: string;
-  phone?: string;
   photoURL?: string;
   role: UserRole;
   organizationId: string;
-  loginPassword?: string; // Stored securely for Admin credential management
-  subscription?: UserSubscription;
-  managedByAdminId?: string; // Hierarchical tracking for future Master Admin
   createdAt: string;
   updatedAt: string;
-}
-
-export interface AdminMetaConfig {
-  appId: string;
-  appSecret: string;
-  configId: string;
-  systemUserToken?: string;
-  wabaId?: string;
-  // Platform provides these read-only parameters for Meta Developer Console:
-  validOAuthRedirectUris: string[];
-  webhookCallbackUrl: string;
-  webhookVerifyToken: string;
-  graphVersion: string;
-  privacyPolicyUrl: string;
-  termsOfServiceUrl: string;
-  updatedAt?: string;
 }
 
 export interface Organization {
@@ -47,8 +16,6 @@ export interface Organization {
   name: string;
   ownerId: string;
   status: 'active' | 'suspended';
-  subscription?: UserSubscription;
-  metaAppConfig?: AdminMetaConfig;
   createdAt: string;
   updatedAt: string;
 }
