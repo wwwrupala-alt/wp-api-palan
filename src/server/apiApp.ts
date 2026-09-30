@@ -14,6 +14,7 @@ import {
   handleWebhookVerification,
   handleWebhookPost,
   handleGetWebhookLogs,
+  handleSaveAdminMetaConfig,
 } from './metaService.ts';
 
 export const apiApp = express();
@@ -24,6 +25,7 @@ apiApp.use(express.urlencoded({ extended: true }));
 
 // Meta Cloud API Routes
 apiApp.get('/api/meta/status', handleGetMetaStatus);
+apiApp.post('/api/meta/admin-config', handleSaveAdminMetaConfig);
 apiApp.post('/api/meta/embedded-signup-exchange', handleEmbeddedSignupExchange);
 apiApp.post('/api/meta/verify-account', handleVerifyAccount);
 apiApp.post('/api/meta/sync-account', handleSyncMetaAccount);

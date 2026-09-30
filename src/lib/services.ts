@@ -21,6 +21,7 @@ import type {
   Message,
   Conversation,
   Automation,
+  UserProfile,
 } from '../types/index.ts';
 
 /**
@@ -802,15 +803,18 @@ export async function saveOrganizationMetaConfig(
   orgId: string,
   metaConfig: {
     appId: string;
-    appSecret: string;
+    appSecret?: string;
     configId: string;
     systemUserToken?: string;
     wabaId?: string;
   }
 ) {
-  const orgRef = doc(db, 'organizations', orgId);
   const fullMetaConfig = {
-    ...metaConfig,
+    appId: metaConfig.appId || '',
+    appSecret: metaConfig.appSecret || '',
+    configId: metaConfig.configId || '',
+    systemUserToken: metaConfig.systemUserToken || '',
+    wabaId: metaConfig.wabaId || '',
     validOAuthRedirectUris: [
       'https://wp-api-palan.vercel.app/',
       'https://wp-api-palan.vercel.app/api/meta/oauth/callback',
@@ -823,14 +827,43 @@ export async function saveOrganizationMetaConfig(
     updatedAt: new Date().toISOString(),
   };
 
-  await setDoc(
-    orgRef,
-    {
-      metaAppConfig: removeUndefined(fullMetaConfig),
-      updatedAt: new Date().toISOString(),
-    },
-    { merge: true }
-  );
+  // 1. Sync with server backend proxy store
+  try {
+    await fetch('/api/meta/admin-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        appId: metaConfig.appId,
+        appSecret: metaConfig.appSecret,
+        configId: metaConfig.configId,
+        systemUserToken: metaConfig.systemUserToken,
+        wabaId: metaConfig.wabaId,
+      }),
+    });
+  } catch (apiErr) {
+    console.warn('Notice: Server API meta-config sync error:', apiErr);
+  }
+
+  // 2. Persist in Firestore
+  if (orgId) {
+    try {
+      const orgRef = doc(db, 'organizations', orgId);
+      await setDoc(
+        orgRef,
+        {
+          metaAppConfig: removeUndefined(fullMetaConfig),
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+    } catch (fsErr: any) {
+      console.warn('Firestore metaAppConfig save notice:', fsErr);
+      // If Firestore is running in offline resilience, store in localStorage as well
+      try {
+        localStorage.setItem(`cw_meta_config_${orgId}`, JSON.stringify(fullMetaConfig));
+      } catch (e) {}
+    }
+  }
 
   return fullMetaConfig;
 }

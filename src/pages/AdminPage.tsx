@@ -46,7 +46,7 @@ import {
 import type { WebhookLog, UserProfile, UserSubscription } from '../types/index.ts';
 
 export const AdminPage: React.FC = () => {
-  const { userProfile, organization, currentUser } = useAuth();
+  const { userProfile, organization, currentUser, refreshProfile } = useAuth();
   const { accounts, metaStatus, refreshMetaStatus } = useWhatsAppAccounts();
   const toast = useToast();
 
@@ -109,6 +109,17 @@ export const AdminPage: React.FC = () => {
   );
   const [savingMetaConfig, setSavingMetaConfig] = useState(false);
 
+  // Sync inputs whenever organization metadata updates
+  useEffect(() => {
+    if (organization?.metaAppConfig) {
+      if (organization.metaAppConfig.appId) setMetaAppIdInput(organization.metaAppConfig.appId);
+      if (organization.metaAppConfig.appSecret) setMetaAppSecretInput(organization.metaAppConfig.appSecret);
+      if (organization.metaAppConfig.configId) setMetaConfigIdInput(organization.metaAppConfig.configId);
+      if (organization.metaAppConfig.systemUserToken) setMetaSystemTokenInput(organization.metaAppConfig.systemUserToken);
+      if (organization.metaAppConfig.wabaId) setMetaWabaIdInput(organization.metaAppConfig.wabaId);
+    }
+  }, [organization?.metaAppConfig]);
+
   // Webhook Logs
   const [webhookLogs, setWebhookLogs] = useState<WebhookLog[]>([]);
   const [loadingLogs, setLoadingLogs] = useState(true);
@@ -166,21 +177,44 @@ export const AdminPage: React.FC = () => {
   // Handle Save Custom Meta App Details
   const handleSaveMetaAppConfig = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!organization?.id) return;
+
+    const cleanAppId = metaAppIdInput.trim();
+    const cleanConfigId = metaConfigIdInput.trim();
+    const cleanSecret = metaAppSecretInput.trim();
+    const cleanToken = metaSystemTokenInput.trim();
+    const cleanWaba = metaWabaIdInput.trim();
+
+    if (!cleanConfigId && !cleanAppId) {
+      toast.showWarning('Details Missing', 'Kripya Configuration ID aur Meta App ID enter karein.');
+      return;
+    }
+
+    const targetOrgId =
+      organization?.id ||
+      userProfile?.organizationId ||
+      (isSuperMaster ? 'org_super_master' : `org_${currentUser?.uid || 'admin'}`);
+
     setSavingMetaConfig(true);
 
     try {
-      await saveOrganizationMetaConfig(organization.id, {
-        appId: metaAppIdInput.trim(),
-        appSecret: metaAppSecretInput.trim(),
-        configId: metaConfigIdInput.trim(),
-        systemUserToken: metaSystemTokenInput.trim() || undefined,
-        wabaId: metaWabaIdInput.trim() || undefined,
+      await saveOrganizationMetaConfig(targetOrgId, {
+        appId: cleanAppId,
+        appSecret: cleanSecret || undefined,
+        configId: cleanConfigId,
+        systemUserToken: cleanToken || undefined,
+        wabaId: cleanWaba || undefined,
       });
 
+      if (refreshProfile) {
+        await refreshProfile().catch(() => {});
+      }
+      if (refreshMetaStatus) {
+        await refreshMetaStatus().catch(() => {});
+      }
+
       toast.showSuccess(
-        'Meta App Configuration Saved',
-        'Your custom Meta App credentials and Embedded Signup settings have been saved.'
+        'Meta App Configuration Saved!',
+        `Configuration ID (${cleanConfigId || 'Configured'}) aur Meta App ID (${cleanAppId || 'Configured'}) successfully save ho chuke hain.`
       );
     } catch (err: any) {
       toast.showError('Save Failed', err?.message || 'Failed to save Meta App configuration.');
@@ -633,8 +667,36 @@ export const AdminPage: React.FC = () => {
                   <Lock className="w-4 h-4" />
                   <span>1. Fill Your Meta App Details (Meta Developer Console Se Le Kar Daalein)</span>
                 </span>
-                <span className="text-[11px] text-neutral-500">Blank fields to enter your own App</span>
+                <span className="text-[11px] text-neutral-500">Embedded Signup ke liye Configuration ID &amp; App ID zaroori hain</span>
               </div>
+
+              {/* Status Banner */}
+              {metaConfigIdInput.trim() && metaAppIdInput.trim() ? (
+                <div className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 flex items-start space-x-2.5 text-xs text-emerald-800 dark:text-emerald-300">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
+                  <div>
+                    <p className="font-semibold">
+                      Embedded Signup Setup Ready! (Dono Details Filled)
+                    </p>
+                    <p className="text-[11px] text-emerald-700 dark:text-emerald-400 mt-0.5">
+                      Config ID: <span className="font-mono font-bold">{metaConfigIdInput.trim()}</span> | App ID: <span className="font-mono font-bold">{metaAppIdInput.trim()}</span>
+                      {metaAppSecretInput.trim() ? ' | App Secret: (Saved)' : ' | App Secret: (Optional - direct connect token bhi chalega)'}
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 flex items-start space-x-2.5 text-xs text-amber-800 dark:text-amber-300">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+                  <div>
+                    <p className="font-semibold">
+                      Embedded Signup ke liye dono details (Configuration ID + Meta App ID) fill karke Save karein.
+                    </p>
+                    <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-0.5">
+                      Agar aapke paas App Secret nahi hai, tab bhi aap Configuration ID aur Meta App ID daal kar Save kar sakte hain!
+                    </p>
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
                 {/* 1. Configuration ID */}
@@ -645,7 +707,7 @@ export const AdminPage: React.FC = () => {
                   <input
                     type="text"
                     required
-                    placeholder="e.g. 1030431656687202"
+                    placeholder="Enter Facebook Login Configuration ID"
                     value={metaConfigIdInput}
                     onChange={(e) => setMetaConfigIdInput(e.target.value)}
                     className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 text-xs font-mono text-neutral-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
@@ -663,7 +725,7 @@ export const AdminPage: React.FC = () => {
                   <input
                     type="text"
                     required
-                    placeholder="e.g. 28291855670435316"
+                    placeholder="Enter Meta App ID from Developer Dashboard"
                     value={metaAppIdInput}
                     onChange={(e) => setMetaAppIdInput(e.target.value)}
                     className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 text-xs font-mono text-neutral-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
@@ -676,18 +738,17 @@ export const AdminPage: React.FC = () => {
                 {/* 3. App Secret */}
                 <div className="space-y-1">
                   <label className="font-semibold text-neutral-800 dark:text-neutral-200 flex items-center justify-between">
-                    <span>Meta App Secret <span className="text-red-500">*</span></span>
+                    <span>Meta App Secret <span className="text-neutral-400 font-normal">(Optional / Server Token Exchange ke liye)</span></span>
                   </label>
                   <input
                     type="password"
-                    required
-                    placeholder="••••••••••••••••••••••••••••••••"
+                    placeholder="•••••••••••••••••••••••••••••••• (Leave blank if not ready)"
                     value={metaAppSecretInput}
                     onChange={(e) => setMetaAppSecretInput(e.target.value)}
                     className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 text-xs font-mono text-neutral-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
                   />
                   <p className="text-[10px] text-neutral-500">
-                    App Settings &gt; Basic &gt; App Secret (Server-side token exchange ke liye).
+                    App Settings &gt; Basic &gt; App Secret (Popup authorization ke baad auto token exchange ke liye zaroori hota hai).
                   </p>
                 </div>
 
