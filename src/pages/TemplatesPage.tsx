@@ -15,6 +15,7 @@ import {
   Eye,
   Loader2,
   Trash2,
+  Copy,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -39,8 +40,9 @@ export const TemplatesPage: React.FC = () => {
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const [selectedTab, setSelectedTab] = useState<string>('ALL');
 
-  // Create Template Modal
+  // Create & Clone Template Modal
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [templateToClone, setTemplateToClone] = useState<Template | null>(null);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(null);
@@ -57,6 +59,12 @@ export const TemplatesPage: React.FC = () => {
     );
     return () => unsub();
   }, [organization?.id]);
+
+  const handleCloneTemplate = (template: Template) => {
+    setTemplateToClone(template);
+    setCreateError(null);
+    setIsCreateOpen(true);
+  };
 
   const handleSyncFromMeta = async () => {
     if (!organization?.id || !activeAccount) {
@@ -221,7 +229,11 @@ export const TemplatesPage: React.FC = () => {
             <span>Sync from Meta</span>
           </button>
           <button
-            onClick={() => setIsCreateOpen(true)}
+            onClick={() => {
+              setTemplateToClone(null);
+              setCreateError(null);
+              setIsCreateOpen(true);
+            }}
             disabled={!activeAccount}
             className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-medium shadow-xs transition-colors flex items-center space-x-1.5 cursor-pointer"
           >
@@ -278,7 +290,11 @@ export const TemplatesPage: React.FC = () => {
               Sync from Meta
             </button>
             <button
-              onClick={() => setIsCreateOpen(true)}
+              onClick={() => {
+                setTemplateToClone(null);
+                setCreateError(null);
+                setIsCreateOpen(true);
+              }}
               disabled={!activeAccount}
               className="px-4 py-2 rounded-xl border border-neutral-200 dark:border-neutral-700 disabled:opacity-50 text-neutral-700 dark:text-neutral-300 text-xs font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800"
             >
@@ -353,21 +369,32 @@ export const TemplatesPage: React.FC = () => {
                     </span>
                   </div>
 
-                  <button
-                    onClick={() => handleDeleteTemplate(t)}
-                    disabled={deletingTemplateId === t.id}
-                    title="Delete template from Meta"
-                    className="p-1.5 rounded-lg text-neutral-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors flex items-center space-x-1 cursor-pointer disabled:opacity-50"
-                  >
-                    {deletingTemplateId === t.id ? (
-                      <Loader2 className="w-4 h-4 animate-spin text-rose-500" />
-                    ) : (
-                      <>
-                        <Trash2 className="w-4 h-4" />
-                        <span className="text-[10.5px] font-medium text-neutral-500 hover:text-rose-600">Delete</span>
-                      </>
-                    )}
-                  </button>
+                  <div className="flex items-center space-x-1.5">
+                    <button
+                      onClick={() => handleCloneTemplate(t)}
+                      title={`Clone "${t.name}"`}
+                      className="px-2.5 py-1.5 rounded-lg text-teal-700 dark:text-teal-400 bg-teal-50 dark:bg-teal-950/40 hover:bg-teal-100 dark:hover:bg-teal-900/60 border border-teal-200/60 dark:border-teal-800/40 transition-colors flex items-center space-x-1 cursor-pointer text-[11px] font-medium"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>Clone</span>
+                    </button>
+
+                    <button
+                      onClick={() => handleDeleteTemplate(t)}
+                      disabled={deletingTemplateId === t.id}
+                      title="Delete template from Meta"
+                      className="p-1.5 px-2 rounded-lg text-neutral-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors flex items-center space-x-1 cursor-pointer disabled:opacity-50"
+                    >
+                      {deletingTemplateId === t.id ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-rose-500" />
+                      ) : (
+                        <>
+                          <Trash2 className="w-4 h-4" />
+                          <span className="text-[10.5px] font-medium text-neutral-500 hover:text-rose-600">Delete</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
               </div>
             );
@@ -375,13 +402,18 @@ export const TemplatesPage: React.FC = () => {
         </div>
       )}
 
-      {/* Advanced Create Template Modal with Live Smartphone Preview */}
+      {/* Advanced Create / Clone Template Modal with Live Smartphone Preview */}
       <TemplateBuilderModal
         isOpen={isCreateOpen}
-        onClose={() => setIsCreateOpen(false)}
+        onClose={() => {
+          setIsCreateOpen(false);
+          setTemplateToClone(null);
+          setCreateError(null);
+        }}
         onSubmit={handleCreateSubmit}
         creating={creating}
         createError={createError}
+        initialTemplate={templateToClone}
       />
     </div>
   );

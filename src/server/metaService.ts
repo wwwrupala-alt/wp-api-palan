@@ -33,13 +33,55 @@ export function addWebhookLog(log: Omit<WebhookEventRecord, 'id' | 'timestamp'>)
   }
 }
 
+// Server-side active admin meta configuration store
+let serverAdminMetaConfig: {
+  appId?: string;
+  appSecret?: string;
+  configId?: string;
+  systemToken?: string;
+  wabaId?: string;
+} = {};
+
+export function updateServerAdminMetaConfig(config: typeof serverAdminMetaConfig) {
+  serverAdminMetaConfig = { ...serverAdminMetaConfig, ...config };
+}
+
+export function getServerAdminMetaConfig() {
+  return serverAdminMetaConfig;
+}
+
 // Meta configuration helper
-export function getMetaConfig() {
-  const appId = process.env.META_APP_ID || process.env.VITE_META_APP_ID || '28291855670435316';
-  const appSecret = process.env.META_APP_SECRET || '980d9e5cc7ef34822e00a35ca5939a79';
-  const configId = process.env.META_CONFIG_ID || process.env.VITE_META_CONFIG_ID || '1030431656687202';
+export function getMetaConfig(customMetaConfig?: {
+  appId?: string;
+  appSecret?: string;
+  configId?: string;
+  systemToken?: string;
+}) {
+  const merged = {
+    ...serverAdminMetaConfig,
+    ...(customMetaConfig || {}),
+  };
+
+  // If admin provided custom Meta App credentials in their tenant, use those!
+  const appId =
+    merged.appId ||
+    process.env.META_APP_ID ||
+    process.env.VITE_META_APP_ID ||
+    '';
+
+  const appSecret =
+    merged.appSecret ||
+    process.env.META_APP_SECRET ||
+    '';
+
+  const configId =
+    merged.configId ||
+    process.env.META_CONFIG_ID ||
+    process.env.VITE_META_CONFIG_ID ||
+    '';
+
   const verifyToken = process.env.META_WEBHOOK_VERIFY_TOKEN || 'cloudwaba_verify_token_secure';
-  const systemToken = process.env.META_SYSTEM_USER_ACCESS_TOKEN || '';
+  const systemToken = merged.systemToken || process.env.META_SYSTEM_USER_ACCESS_TOKEN || '';
   const graphVersion = process.env.META_GRAPH_VERSION || 'v22.0';
   const appUrl = process.env.APP_URL || 'https://wp-api-palan.vercel.app';
 
@@ -51,7 +93,7 @@ export function getMetaConfig() {
     systemToken,
     graphVersion,
     appUrl,
-    isConfigured: Boolean(appId && (appSecret || systemToken)),
+    isConfigured: Boolean(appId && (configId || appSecret || systemToken)),
   };
 }
 
@@ -72,16 +114,63 @@ export function handleGetMetaStatus(req: Request, res: Response) {
   });
 }
 
+// Handler: Save or Update Meta Configuration via API
+export function handleSaveAdminMetaConfig(req: Request, res: Response) {
+  try {
+    const { appId, appSecret, configId, systemUserToken, wabaId } = req.body;
+    updateServerAdminMetaConfig({
+      appId: appId ? String(appId).trim() : undefined,
+      appSecret: appSecret ? String(appSecret).trim() : undefined,
+      configId: configId ? String(configId).trim() : undefined,
+      systemToken: systemUserToken ? String(systemUserToken).trim() : undefined,
+      wabaId: wabaId ? String(wabaId).trim() : undefined,
+    });
+
+    const activeConfig = getMetaConfig();
+    return res.json({
+      success: true,
+      message: 'Server Meta configuration updated successfully.',
+      config: {
+        appId: activeConfig.appId,
+        configId: activeConfig.configId,
+        isConfigured: activeConfig.isConfigured,
+      },
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to update server Meta config' });
+  }
+}
+
 // Handler: Meta Embedded Signup Code Exchange
 export async function handleEmbeddedSignupExchange(req: Request, res: Response) {
   try {
-    const { code, wabaId: passedWabaId, phoneNumberId: passedPhoneNumberId, organizationId } = req.body;
-    const config = getMetaConfig();
+    const {
+      code,
+      wabaId: passedWabaId,
+      phoneNumberId: passedPhoneNumberId,
+      organizationId,
+      customAppId,
+      customAppSecret,
+      customConfigId,
+    } = req.body;
 
-    if (!config.appId || !config.appSecret) {
+    const config = getMetaConfig({
+      appId: customAppId,
+      appSecret: customAppSecret,
+      configId: customConfigId,
+    });
+
+    if (!config.appId) {
       return res.status(400).json({
-        error: 'META_APP_ID and META_APP_SECRET are not configured on the server. Please check .env.example and set your Meta Developer App credentials.',
+        error: 'Meta App ID is not configured. Please enter your Meta App ID in the Admin Panel.',
         code: 'META_CREDENTIALS_MISSING',
+      });
+    }
+
+    if (!config.appSecret) {
+      return res.status(400).json({
+        error: 'Meta App Secret is required on server to exchange Embedded Signup token with Meta. Please enter your Meta App Secret in the Admin Panel.',
+        code: 'META_SECRET_MISSING',
       });
     }
 

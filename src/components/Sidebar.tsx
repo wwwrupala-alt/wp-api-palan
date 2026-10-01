@@ -8,6 +8,7 @@ import {
   Send,
   Bot,
   ShieldCheck,
+  Crown,
   LogOut,
   Sun,
   Moon,
@@ -35,6 +36,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const { activeAccount } = useWhatsAppAccounts();
   const { theme, toggleTheme } = useTheme();
 
+  const isMasterAdmin =
+    userProfile?.role === 'master_admin' ||
+    userProfile?.email?.includes('master') ||
+    userProfile?.phone === '9974428034';
+
+  const isAdmin = isMasterAdmin || userProfile?.role === 'admin' || userProfile?.role === 'owner';
+
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'inbox', label: 'Inbox', icon: MessageSquare },
@@ -43,7 +51,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'templates', label: 'Templates', icon: FileText },
     { id: 'campaigns', label: 'Campaigns', icon: Send },
     { id: 'automations', label: 'Automations', icon: Bot },
-    { id: 'admin', label: 'Admin & Logs', icon: ShieldCheck },
+    ...(isAdmin
+      ? [
+          {
+            id: 'admin',
+            label: isMasterAdmin ? 'Master Control Panel' : 'Admin Portal & Users',
+            icon: isMasterAdmin ? Crown : ShieldCheck,
+            badge: isMasterAdmin ? 'MASTER' : 'ADMIN',
+          },
+        ]
+      : []),
   ];
 
   const handleNavClick = (tabId: string) => {
@@ -116,14 +133,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <button
                 key={item.id}
                 onClick={() => handleNavClick(item.id)}
-                className={`w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all ${
                   isActive
                     ? 'bg-emerald-600 text-white shadow-xs'
                     : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-100 dark:hover:bg-neutral-800/60'
                 }`}
               >
-                <Icon className={`w-4 h-4 ${isActive ? 'text-white' : 'text-neutral-400 dark:text-neutral-500'}`} />
-                <span>{item.label}</span>
+                <div className="flex items-center space-x-3">
+                  <Icon className={`w-4 h-4 ${isActive ? 'text-white' : 'text-neutral-400 dark:text-neutral-500'}`} />
+                  <span>{item.label}</span>
+                </div>
+                {(item as any).badge && (
+                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider ${
+                    isActive
+                      ? 'bg-white/20 text-white'
+                      : 'bg-purple-100 dark:bg-purple-950/80 text-purple-700 dark:text-purple-300'
+                  }`}>
+                    {(item as any).badge}
+                  </span>
+                )}
               </button>
             );
           })}

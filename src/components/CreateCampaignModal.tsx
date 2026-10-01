@@ -367,7 +367,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
                   <span className="text-[11px] text-neutral-500 flex items-center space-x-1">
                     <span>Sending from:</span>
                     <strong className="text-neutral-800 dark:text-neutral-200 font-mono">
-                      {activeAccount.phoneNumber || activeAccount.displayPhoneNumber}
+                      {activeAccount.displayPhoneNumber}
                     </strong>
                   </span>
                 )}
@@ -689,11 +689,11 @@ Rahul: 919974428034
                 {/* WhatsApp Chat Header */}
                 <div className="bg-[#008069] dark:bg-[#1f2c34] text-white px-3 py-2 pt-4 flex items-center space-x-2 shadow-xs z-10 shrink-0">
                   <div className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center text-[11px] font-bold text-white shrink-0">
-                    {activeAccount?.businessProfileName?.[0] || 'W'}
+                    {activeAccount?.verifiedName?.[0] || 'W'}
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-[11px] font-bold truncate leading-tight">
-                      {activeAccount?.businessProfileName || 'CloudWABA Official'}
+                      {activeAccount?.verifiedName || 'CloudWABA Official'}
                     </p>
                     <p className="text-[9px] text-emerald-100 truncate opacity-90 leading-tight">
                       Official WhatsApp Business

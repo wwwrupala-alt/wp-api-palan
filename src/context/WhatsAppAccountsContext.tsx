@@ -39,7 +39,7 @@ interface WhatsAppAccountsContextType {
   loading: boolean;
   metaStatus: MetaConfigStatus | null;
   setActiveAccount: (account: WhatsAppAccount | null) => void;
-  connectViaEmbeddedSignup: () => Promise<void>;
+  connectViaEmbeddedSignup: (options?: { isCoexistence?: boolean; featureType?: string }) => Promise<void>;
   connectManualAccount: (params: {
     phoneNumberId: string;
     wabaId?: string;
@@ -80,7 +80,11 @@ declare global {
           response_type?: string;
           override_default_response_type?: boolean;
           scope?: string;
-          extras?: { setup?: { external_id?: string } };
+          extras?: {
+            featureType?: string;
+            setup?: { external_id?: string };
+            [key: string]: unknown;
+          };
         }
       ) => void;
     };
@@ -185,8 +189,8 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
     }
   }, [metaStatus]);
 
-  // Connect WhatsApp via Meta Embedded Signup
-  const connectViaEmbeddedSignup = async (): Promise<void> => {
+  // Connect WhatsApp via Meta Embedded Signup (Supports Coexistence Mode & Standard Cloud API)
+  const connectViaEmbeddedSignup = async (options?: { isCoexistence?: boolean; featureType?: string }): Promise<void> => {
     if (!organization?.id) throw new Error('Organization not found. Please re-login.');
 
     const resolvedAppId = metaStatus?.appId || (import.meta.env.VITE_META_APP_ID as string) || '28291855670435316';
@@ -219,15 +223,25 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
 
         const configId = metaStatus?.configId || (import.meta.env.VITE_META_CONFIG_ID as string) || '1030431656687202';
 
+        // Coexistence vs Standard: featureType determines whether Meta opens the WhatsApp Business App mobile onboarding branch
+        const isCoexistence = options?.isCoexistence !== false;
+        const featureType = options?.featureType || (isCoexistence ? 'whatsapp_business_app_onboarding' : undefined);
+
+        const extrasPayload: Record<string, unknown> = {
+          setup: {
+            external_id: organization.id,
+          },
+        };
+
+        if (featureType) {
+          extrasPayload.featureType = featureType;
+        }
+
         const loginOptions: Record<string, unknown> = {
           config_id: configId,
           response_type: 'code',
           override_default_response_type: true,
-          extras: {
-            setup: {
-              external_id: organization.id,
-            },
-          },
+          extras: extrasPayload,
         };
 
         window.FB.login((response) => {

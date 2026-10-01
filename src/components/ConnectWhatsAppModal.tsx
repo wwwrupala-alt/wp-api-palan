@@ -49,6 +49,7 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [showToken, setShowToken] = useState(false);
+  const [embeddedMode, setEmbeddedMode] = useState<'coexistence' | 'standard'>('coexistence');
 
   // Direct connect fields - Real Meta details
   const [phoneNumberId, setPhoneNumberId] = useState('');
@@ -153,7 +154,10 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
     setLoading(true);
 
     try {
-      await connectViaEmbeddedSignup();
+      await connectViaEmbeddedSignup({
+        isCoexistence: embeddedMode === 'coexistence',
+        featureType: embeddedMode === 'coexistence' ? 'whatsapp_business_app_onboarding' : undefined,
+      });
       setSuccess('WhatsApp Account successfully connected via Meta Embedded Signup!');
       toast.showSuccess('WhatsApp Connected', 'Account successfully connected via Meta Embedded Signup!');
       setTimeout(() => {
@@ -480,28 +484,84 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
               <div className="bg-neutral-50 dark:bg-neutral-800/40 rounded-2xl p-4 border border-neutral-200 dark:border-neutral-800 space-y-3">
                 <h4 className="text-xs font-semibold text-neutral-900 dark:text-white flex items-center space-x-2">
                   <Shield className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                  <span>Meta Embedded Signup (Facebook Login)</span>
+                  <span>Meta Embedded Signup (Facebook Login v22.0)</span>
                 </h4>
                 <p className="text-xs text-neutral-600 dark:text-neutral-300 leading-relaxed">
                   Log in directly through Meta/Facebook to select your Meta Business Portfolio, create or choose a WhatsApp Business Account (WABA), and verify your business phone number automatically.
                 </p>
-                <ul className="text-[11px] text-neutral-500 dark:text-neutral-400 space-y-1.5 list-disc pl-4">
-                  <li>Tokens are securely processed server-side and never exposed to the client.</li>
-                  <li>Webhook endpoints are registered automatically upon completion.</li>
-                </ul>
+
+                {/* Onboarding Mode Selection: Coexistence vs Standard */}
+                <div className="pt-2">
+                  <label className="block text-[11px] font-semibold text-neutral-700 dark:text-neutral-300 mb-2">
+                    Select Onboarding Flow:
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setEmbeddedMode('coexistence')}
+                      className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                        embeddedMode === 'coexistence'
+                          ? 'border-emerald-500 bg-emerald-50/70 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 ring-2 ring-emerald-500/20'
+                          : 'border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 dark:hover:border-neutral-600 text-neutral-700 dark:text-neutral-300'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-semibold text-xs flex items-center gap-1.5">
+                          📱 Coexistence Mode
+                        </span>
+                        {embeddedMode === 'coexistence' && (
+                          <span className="text-[10px] bg-emerald-600 text-white px-1.5 py-0.5 rounded-full font-bold">
+                            Active
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] opacity-80 leading-normal">
+                        Keeps WhatsApp Business App working on mobile. Uses QR code scan &amp; <code className="bg-neutral-200 dark:bg-neutral-800 px-1 py-0.5 rounded text-[10px]">featureType: "whatsapp_business_app_onboarding"</code>.
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setEmbeddedMode('standard')}
+                      className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                        embeddedMode === 'standard'
+                          ? 'border-blue-500 bg-blue-50/70 dark:bg-blue-950/40 text-blue-900 dark:text-blue-200 ring-2 ring-blue-500/20'
+                          : 'border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 dark:hover:border-neutral-600 text-neutral-700 dark:text-neutral-300'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-semibold text-xs flex items-center gap-1.5">
+                          ☁️ Standard Cloud API
+                        </span>
+                        {embeddedMode === 'standard' && (
+                          <span className="text-[10px] bg-blue-600 text-white px-1.5 py-0.5 rounded-full font-bold">
+                            Active
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] opacity-80 leading-normal">
+                        Pure Cloud API for new virtual numbers or numbers not hosted on mobile app.
+                      </p>
+                    </button>
+                  </div>
+                </div>
               </div>
 
               {Boolean(metaStatus?.appIdSet || metaStatus?.appId) ? (
-                <div className="p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/40 flex items-start space-x-2.5 text-xs text-emerald-800 dark:text-emerald-300">
-                  <div className="w-2 h-2 rounded-full bg-emerald-500 mt-1.5 shrink-0" />
-                  <div>
-                    <p className="font-semibold">Meta App & Config Connected</p>
-                    <p className="mt-0.5 text-[11px] leading-relaxed">
-                      App ID: <code>{metaStatus?.appId || '28291855670435316'}</code> • Config ID: <code>{metaStatus?.configId || '1030431656687202'}</code>
-                    </p>
-                    <p className="mt-1 text-[11px] text-emerald-700 dark:text-emerald-400">
-                      Click below to open Meta's Embedded Signup popup for Coexistence Mode onboarding.
-                    </p>
+                <div className="p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/40 space-y-1.5 text-xs text-emerald-800 dark:text-emerald-300">
+                  <div className="flex items-center space-x-2 font-semibold">
+                    <div className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                    <span>Meta Embedded Signup Ready ({embeddedMode === 'coexistence' ? 'Coexistence Mode' : 'Standard'})</span>
+                  </div>
+                  <div className="text-[11px] space-y-1 font-mono text-neutral-700 dark:text-neutral-300 bg-white/70 dark:bg-neutral-900/60 p-2.5 rounded-xl border border-emerald-200/60 dark:border-emerald-900/40">
+                    <div>App ID: <strong>{metaStatus?.appId || '28291855670435316'}</strong></div>
+                    <div>Config ID: <strong>{metaStatus?.configId || '1030431656687202'}</strong></div>
+                    <div>
+                      featureType:{' '}
+                      <strong className="text-emerald-700 dark:text-emerald-400">
+                        {embeddedMode === 'coexistence' ? '"whatsapp_business_app_onboarding"' : 'none'}
+                      </strong>
+                    </div>
                   </div>
                 </div>
               ) : (
@@ -530,7 +590,11 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
                 ) : (
                   <>
                     <Facebook className="w-5 h-5 fill-current" />
-                    <span>Connect WhatsApp with Facebook</span>
+                    <span>
+                      {embeddedMode === 'coexistence'
+                        ? 'Launch WhatsApp Mobile Coexistence Onboarding'
+                        : 'Connect WhatsApp with Facebook'}
+                    </span>
                   </>
                 )}
               </button>

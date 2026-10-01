@@ -15,8 +15,9 @@ import {
   Loader2,
   Plus,
   Trash2,
+  Copy,
 } from 'lucide-react';
-import type { TemplateComponent } from '../types/index.ts';
+import type { Template, TemplateComponent } from '../types/index.ts';
 
 export interface InteractiveButtonItem {
   type: 'QUICK_REPLY' | 'URL';
@@ -35,6 +36,7 @@ interface TemplateBuilderModalProps {
   }) => Promise<void>;
   creating: boolean;
   createError: string | null;
+  initialTemplate?: Template | null;
 }
 
 export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
@@ -43,6 +45,7 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
   onSubmit,
   creating,
   createError,
+  initialTemplate,
 }) => {
   const [tplName, setTplName] = useState('order_update_notification');
   const [tplCategory, setTplCategory] = useState<'UTILITY' | 'MARKETING' | 'AUTHENTICATION'>('UTILITY');
@@ -73,6 +76,113 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
   const [buttons, setButtons] = useState<InteractiveButtonItem[]>([
     { type: 'URL', text: 'Track Order', url: 'https://example.com/track' },
   ]);
+
+  // Synchronize state when modal opens or initialTemplate changes (Clone Mode support)
+  useEffect(() => {
+    if (!isOpen) return;
+
+    if (initialTemplate) {
+      // 1. Name: Meta requires lowercase letters, numbers, and underscores only
+      const baseClean = initialTemplate.name.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+      // If already ends with _copy or _copy_1, append next suffix or random 3 digits to avoid collision
+      const clonedName = `${baseClean}_copy`.slice(0, 512);
+      setTplName(clonedName);
+      setTplCategory(initialTemplate.category || 'UTILITY');
+      setTplLang(initialTemplate.language || 'en_US');
+
+      // 2. Header
+      const headerComp = initialTemplate.components?.find((c) => c.type === 'HEADER');
+      if (headerComp) {
+        if (headerComp.format === 'TEXT') {
+          setHeaderType('TEXT');
+          setHeaderText(headerComp.text || '');
+        } else if (headerComp.format === 'IMAGE') {
+          setHeaderType('IMAGE');
+          setHeaderText('');
+          setHeaderMediaSampleUrl(
+            headerComp.example?.header_handle?.[0] ||
+              'https://images.unsplash.com/photo-1579203438237-49dcf6133f6a?w=800&auto=format&fit=crop&q=80'
+          );
+        } else if (headerComp.format === 'VIDEO') {
+          setHeaderType('VIDEO');
+          setHeaderText('');
+          setHeaderMediaSampleUrl(
+            headerComp.example?.header_handle?.[0] || 'https://www.w3schools.com/html/mov_bbb.mp4'
+          );
+        } else if (headerComp.format === 'DOCUMENT') {
+          setHeaderType('DOCUMENT');
+          setHeaderText('');
+          setHeaderMediaSampleUrl(
+            headerComp.example?.header_handle?.[0] ||
+              'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf'
+          );
+        } else {
+          setHeaderType('NONE');
+          setHeaderText('');
+        }
+      } else {
+        setHeaderType('NONE');
+        setHeaderText('');
+      }
+
+      // 3. Body
+      const bodyComp = initialTemplate.components?.find((c) => c.type === 'BODY');
+      const bText = bodyComp?.text || '';
+      setBodyText(bText);
+
+      // Extract existing variables from example if available
+      const sampleList: string[] =
+        bodyComp?.example?.body_text?.[0] ||
+        (bodyComp?.example as any)?.body_text_flat ||
+        [];
+      const matches = bText.match(/\{\{(\d+)\}\}/g) || [];
+      const detectedIndices = Array.from(new Set(matches.map((m) => m.replace(/[\{\}]/g, ''))));
+      const vars: Record<string, string> = {};
+      detectedIndices.forEach((idx, i) => {
+        vars[idx] =
+          sampleList[i] ||
+          (idx === '1' ? 'Rahul Sharma' : idx === '2' ? 'ORD-9842' : `Sample ${idx}`);
+      });
+      setBodyVariables(vars);
+
+      // 4. Footer
+      const footerComp = initialTemplate.components?.find((c) => c.type === 'FOOTER');
+      setFooterText(footerComp?.text || '');
+
+      // 5. Buttons
+      const buttonsComp = initialTemplate.components?.find((c) => c.type === 'BUTTONS');
+      if (buttonsComp?.buttons && buttonsComp.buttons.length > 0) {
+        setButtons(
+          buttonsComp.buttons.map((b) => ({
+            type: b.type === 'URL' ? 'URL' : 'QUICK_REPLY',
+            text: b.text,
+            url: b.url || 'https://example.com',
+          }))
+        );
+      } else {
+        setButtons([]);
+      }
+    } else {
+      // Default / Fresh Template Mode
+      setTplName('order_update_notification');
+      setTplCategory('UTILITY');
+      setTplLang('en_US');
+      setHeaderType('NONE');
+      setHeaderText('');
+      setHeaderMediaSampleUrl(
+        'https://images.unsplash.com/photo-1579203438237-49dcf6133f6a?w=800&auto=format&fit=crop&q=80'
+      );
+      setBodyText(
+        'Hello {{1}}, your order #{{2}} is confirmed and ready for dispatch. Thank you for shopping with us!'
+      );
+      setBodyVariables({
+        '1': 'Rahul Sharma',
+        '2': 'ORD-9842',
+      });
+      setFooterText('');
+      setButtons([{ type: 'URL', text: 'Track Order', url: 'https://example.com/track' }]);
+    }
+  }, [isOpen, initialTemplate]);
 
   // Detect {{1}}, {{2}} variables in bodyText
   useEffect(() => {
@@ -242,15 +352,24 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
         {/* Header Bar */}
         <div className="px-6 py-4 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between shrink-0 bg-neutral-50/50 dark:bg-neutral-900/50">
           <div className="flex items-center space-x-2.5">
-            <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-              <Sparkles className="w-5 h-5" />
+            <div className={`p-2 rounded-xl ${initialTemplate ? 'bg-teal-500/10 text-teal-600 dark:text-teal-400' : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'}`}>
+              {initialTemplate ? <Copy className="w-5 h-5" /> : <Sparkles className="w-5 h-5" />}
             </div>
             <div>
-              <h3 className="font-bold text-neutral-900 dark:text-white text-base">
-                Advanced Meta WhatsApp Template Builder
-              </h3>
+              <div className="flex items-center space-x-2">
+                <h3 className="font-bold text-neutral-900 dark:text-white text-base">
+                  {initialTemplate ? 'Clone WhatsApp Template' : 'Advanced Meta WhatsApp Template Builder'}
+                </h3>
+                {initialTemplate && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide bg-teal-100 dark:bg-teal-950 text-teal-700 dark:text-teal-300 border border-teal-200 dark:border-teal-800">
+                    Clone Mode
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-neutral-500">
-                Design interactive templates with Media, Dynamic Variables &amp; Up to 3 Buttons
+                {initialTemplate
+                  ? `Pre-loaded structure from "${initialTemplate.name}". Tweak name or content, then submit for Meta approval.`
+                  : 'Design interactive templates with Media, Dynamic Variables & Up to 3 Buttons'}
               </p>
             </div>
           </div>
@@ -266,6 +385,18 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* Left Form: 7 cols */}
           <form id="template-builder-form" onSubmit={handleFormSubmit} className="lg:col-span-7 space-y-5 text-xs">
+            {initialTemplate && (
+              <div className="p-3.5 rounded-2xl bg-teal-50/80 dark:bg-teal-950/30 border border-teal-200 dark:border-teal-800/60 text-teal-800 dark:text-teal-300 flex items-start space-x-2.5 animate-fadeIn">
+                <Copy className="w-4 h-4 shrink-0 text-teal-600 dark:text-teal-400 mt-0.5" />
+                <div className="space-y-0.5 text-xs">
+                  <p className="font-semibold">Cloning Source: {initialTemplate.name}</p>
+                  <p className="text-[11px] text-teal-700 dark:text-teal-400 leading-relaxed">
+                    Template name has been suffixed with <code className="font-mono bg-teal-100 dark:bg-teal-900/60 px-1 py-0.5 rounded text-[10.5px]">_copy</code> to satisfy Meta&apos;s unique name requirement. You can rename or customize any component below.
+                  </p>
+                </div>
+              </div>
+            )}
+
             {createError && (
               <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300 flex items-start space-x-2">
                 <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
@@ -751,12 +882,21 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
               type="submit"
               form="template-builder-form"
               disabled={creating}
-              className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs flex items-center space-x-1.5 shadow-sm transition-all disabled:opacity-50 cursor-pointer"
+              className={`px-5 py-2 rounded-xl text-white font-medium text-xs flex items-center space-x-1.5 shadow-sm transition-all disabled:opacity-50 cursor-pointer ${
+                initialTemplate
+                  ? 'bg-teal-600 hover:bg-teal-700'
+                  : 'bg-emerald-600 hover:bg-emerald-700'
+              }`}
             >
               {creating ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
                   <span>Submitting to Meta...</span>
+                </>
+              ) : initialTemplate ? (
+                <>
+                  <Copy className="w-4 h-4" />
+                  <span>Submit Cloned Template to Meta</span>
                 </>
               ) : (
                 <>
