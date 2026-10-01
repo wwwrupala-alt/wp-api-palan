@@ -207,18 +207,58 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
     }
 
     return new Promise<void>((resolve, reject) => {
-      // 15s timeout safeguard so loading never gets permanently stuck
+      let isResolved = false;
+
+      // Generous 10-minute timeout so user can comfortably scan QR code or complete verification
       const timer = setTimeout(() => {
-        reject(
-          new Error(
-            'Meta login window took too long to respond. Please check your browser pop-up blocker or use the "Connect by Phone Number" tab.'
-          )
-        );
-      }, 15000);
+        if (!isResolved) {
+          isResolved = true;
+          window.removeEventListener('message', messageHandler);
+          reject(
+            new Error(
+              'Meta login window session timed out. Please check your browser pop-up blocker or use the "Connect by Phone Number" tab.'
+            )
+          );
+        }
+      }, 600000); // 10 minutes
+
+      let capturedWabaId: string | undefined;
+      let capturedPhoneId: string | undefined;
+
+      const messageHandler = (event: MessageEvent) => {
+        if (
+          event.origin !== 'https://www.facebook.com' &&
+          event.origin !== 'https://web.facebook.com' &&
+          !event.origin.endsWith('.facebook.com')
+        ) {
+          return;
+        }
+
+        try {
+          const payload = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+          if (payload?.type === 'WA_EMBEDDED_SIGNUP') {
+            console.log('[Meta Embedded Signup Event]', payload);
+            if (payload.data?.waba_id) {
+              capturedWabaId = payload.data.waba_id;
+            }
+            if (payload.data?.phone_number_id) {
+              capturedPhoneId = payload.data.phone_number_id;
+            }
+            if (payload.event === 'CANCEL') {
+              console.log('[Meta Embedded Signup] User cancelled signup.');
+            }
+          }
+        } catch {
+          // ignore non-JSON messages
+        }
+      };
+
+      window.addEventListener('message', messageHandler);
 
       try {
         if (!window.FB) {
           clearTimeout(timer);
+          window.removeEventListener('message', messageHandler);
           reject(
             new Error(
               'Meta Facebook SDK could not be loaded in this frame. Please switch to the "Connect by Phone Number" tab to connect directly.'
@@ -247,6 +287,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
         const featureType = options?.featureType || (isCoexistence ? 'whatsapp_business_app_onboarding' : undefined);
 
         const extrasPayload: Record<string, unknown> = {
+          sessionInfoVersion: '3',
           setup: {
             external_id: organization.id,
           },
@@ -260,11 +301,16 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
           config_id: configId,
           response_type: 'code',
           override_default_response_type: true,
+          scope: 'whatsapp_business_management,whatsapp_business_messaging',
           extras: extrasPayload,
         };
 
         window.FB.login((response) => {
           clearTimeout(timer);
+          window.removeEventListener('message', messageHandler);
+
+          if (isResolved) return;
+
           if (response?.authResponse && response.authResponse.code) {
             // Exchange code via backend proxy
             fetch('/api/meta/embedded-signup-exchange', {
@@ -273,6 +319,8 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
               body: JSON.stringify({
                 code: response.authResponse.code,
                 organizationId: organization.id,
+                wabaId: capturedWabaId,
+                phoneNumberId: capturedPhoneId,
               }),
             })
               .then(async (res) => {

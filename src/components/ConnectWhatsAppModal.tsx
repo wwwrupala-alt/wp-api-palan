@@ -557,6 +557,9 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
                     <div>App ID: <strong>{metaStatus?.appId || '28291855670435316'}</strong></div>
                     <div>Config ID: <strong>{metaStatus?.configId || '1030431656687202'}</strong></div>
                     <div>
+                      sessionInfoVersion: <strong className="text-emerald-700 dark:text-emerald-400">"3"</strong> • scope: <strong>"whatsapp_business_management..."</strong>
+                    </div>
+                    <div>
                       featureType:{' '}
                       <strong className="text-emerald-700 dark:text-emerald-400">
                         {embeddedMode === 'coexistence' ? '"whatsapp_business_app_onboarding"' : 'none'}
