@@ -157,9 +157,31 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
     return () => unsubscribe();
   }, [organization?.id, currentUser]);
 
+  // Helper to safely initialize Facebook SDK with valid App ID and version
+  const initFacebookSDK = () => {
+    if (typeof window === 'undefined' || !window.FB) return;
+    const resolvedAppId = metaStatus?.appId || (import.meta.env.VITE_META_APP_ID as string) || '28291855670435316';
+    const resolvedVersion = metaStatus?.graphVersion || 'v22.0';
+    try {
+      window.FB.init({
+        appId: resolvedAppId,
+        cookie: true,
+        xfbml: true,
+        version: resolvedVersion,
+      });
+      console.log(`[Meta SDK] Initialized with App ID: ${resolvedAppId}, Version: ${resolvedVersion}`);
+    } catch (err) {
+      console.warn('[Meta SDK] FB.init error:', err);
+    }
+  };
+
   // Initialize Facebook SDK for Meta Embedded Signup
   useEffect(() => {
     if (typeof window === 'undefined') return;
+
+    window.fbAsyncInit = function () {
+      initFacebookSDK();
+    };
 
     if (!document.getElementById('facebook-jssdk')) {
       const script = document.createElement('script');
@@ -168,24 +190,8 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
       script.async = true;
       script.defer = true;
       document.body.appendChild(script);
-
-      window.fbAsyncInit = function () {
-        if (window.FB && (metaStatus?.appId || (import.meta.env.VITE_META_APP_ID as string))) {
-          window.FB.init({
-            appId: metaStatus?.appId || (import.meta.env.VITE_META_APP_ID as string) || '28291855670435316',
-            cookie: true,
-            xfbml: true,
-            version: metaStatus?.graphVersion || 'v22.0',
-          });
-        }
-      };
-    } else if (window.FB && (metaStatus?.appId || (import.meta.env.VITE_META_APP_ID as string))) {
-      window.FB.init({
-        appId: metaStatus?.appId || (import.meta.env.VITE_META_APP_ID as string) || '28291855670435316',
-        cookie: true,
-        xfbml: true,
-        version: metaStatus?.graphVersion || 'v22.0',
-      });
+    } else {
+      initFacebookSDK();
     }
   }, [metaStatus]);
 
@@ -219,6 +225,19 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
             )
           );
           return;
+        }
+
+        // Guaranteed safeguard: always invoke FB.init with valid version before FB.login
+        const resolvedVersion = metaStatus?.graphVersion || 'v22.0';
+        try {
+          window.FB.init({
+            appId: resolvedAppId,
+            cookie: true,
+            xfbml: true,
+            version: resolvedVersion,
+          });
+        } catch (initErr) {
+          console.warn('[Meta SDK] Pre-login init notice:', initErr);
         }
 
         const configId = metaStatus?.configId || (import.meta.env.VITE_META_CONFIG_ID as string) || '1030431656687202';
