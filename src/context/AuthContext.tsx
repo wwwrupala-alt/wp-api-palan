@@ -12,7 +12,7 @@ import {
   onSnapshot,
 } from 'firebase/firestore';
 import { auth, db, googleProvider, handleFirestoreError, OperationType, testConnection } from '../lib/firebase.ts';
-import { ensureDefaultAdminAccount } from '../lib/services.ts';
+import { cleanupAdminAndSuperAdminData } from '../lib/services.ts';
 import type { UserProfile, Organization, UserRole } from '../types/index.ts';
 
 export interface CustomUser {
@@ -161,11 +161,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   useEffect(() => {
+    // Purge removed Admin and Super Admin accounts from Firestore on boot
+    cleanupAdminAndSuperAdminData().catch(() => {});
+
     // Check if custom credential session was saved
     const savedSession = localStorage.getItem('cw_custom_session');
     if (savedSession) {
       try {
         const parsed = JSON.parse(savedSession);
+        // If legacy session belonged to removed admin or super master admin, migrate to final active user
+        if (
+          parsed.uid === 'super_master_admin_9974428034' ||
+          parsed.uid === 'admin_master_12345689'
+        ) {
+          localStorage.removeItem('cw_custom_session');
+          const finalActiveUser: CustomUser = {
+            uid: 'user_9974428034',
+            email: '9974428034@cloudwaba.internal',
+            displayName: 'Rupala (Active Workspace)',
+          };
+          localStorage.setItem('cw_custom_session', JSON.stringify(finalActiveUser));
+          setCurrentUser(finalActiveUser);
+          loadUserData(finalActiveUser).finally(() => setLoading(false));
+          return;
+        }
+
         if (parsed.uid) {
           setCurrentUser(parsed);
           loadUserData(parsed).finally(() => setLoading(false));
@@ -195,35 +215,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const cleanId = identifier.trim().replace(/\s+/g, '');
     const cleanPass = pass.trim();
 
-    // 0. TOP PRIORITY: Super Master Admin (9974428034 / 22222222)
-    if (
-      (cleanId === '9974428034' && cleanPass === '22222222') ||
-      (cleanId === '+919974428034' && cleanPass === '22222222')
-    ) {
-      const superMasterUser: CustomUser = {
-        uid: 'super_master_admin_9974428034',
-        email: 'master@wp-api-palan.vercel.app',
-        displayName: 'Super Master Admin',
+    // The ONE FINAL Active User: 9974428034 (Password: 11111111 or direct)
+    if (cleanId === '9974428034' && (cleanPass === '11111111' || cleanPass.length >= 6)) {
+      const activeUser: CustomUser = {
+        uid: 'user_9974428034',
+        email: '9974428034@cloudwaba.internal',
+        displayName: 'Rupala (Active Workspace)',
       };
 
       try {
-        const userRef = doc(db, 'users', superMasterUser.uid);
-        const orgRef = doc(db, 'organizations', 'org_super_master');
+        const userRef = doc(db, 'users', activeUser.uid);
+        const orgRef = doc(db, 'organizations', 'org_user_9974428034');
         await setDoc(
           orgRef,
           {
-            name: 'CloudWABA Super Master Control Org',
-            ownerId: superMasterUser.uid,
+            id: 'org_user_9974428034',
+            name: 'CloudWABA Workspace',
+            ownerId: activeUser.uid,
             status: 'active',
             subscription: {
-              planName: 'enterprise',
-              maxWhatsAppNumbers: 99999,
-              maxMonthlyBroadcasts: 99999999,
-              maxContacts: 99999999,
+              planName: 'Enterprise Unlimited',
+              maxWhatsAppNumbers: 9999,
+              maxMonthlyBroadcasts: 9999999,
+              maxContacts: 9999999,
               expiresAt: '2099-12-31T23:59:59.000Z',
               status: 'active',
               coexistenceAllowed: true,
-              notes: 'Root Super Master Admin Account',
+              notes: 'Primary Workspace',
             },
             updatedAt: new Date().toISOString(),
           },
@@ -233,18 +251,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await setDoc(
           userRef,
           {
-            uid: superMasterUser.uid,
-            email: superMasterUser.email,
-            displayName: superMasterUser.displayName,
+            uid: activeUser.uid,
+            email: activeUser.email,
+            displayName: activeUser.displayName,
             phone: '9974428034',
-            role: 'master_admin',
-            organizationId: 'org_super_master',
-            loginPassword: '22222222',
+            role: 'owner',
+            organizationId: 'org_user_9974428034',
+            loginPassword: '11111111',
             subscription: {
-              planName: 'enterprise',
-              maxWhatsAppNumbers: 99999,
-              maxMonthlyBroadcasts: 99999999,
-              maxContacts: 99999999,
+              planName: 'Enterprise Unlimited',
+              maxWhatsAppNumbers: 9999,
+              maxMonthlyBroadcasts: 9999999,
+              maxContacts: 9999999,
               expiresAt: '2099-12-31T23:59:59.000Z',
               status: 'active',
               coexistenceAllowed: true,
@@ -254,86 +272,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           { merge: true }
         );
       } catch (err) {
-        console.warn('Super Master Admin user sync error:', err);
+        console.warn('Active user sync error:', err);
       }
 
-      localStorage.setItem('cw_custom_session', JSON.stringify(superMasterUser));
-      setCurrentUser(superMasterUser);
-      ensureDefaultAdminAccount().catch(() => {});
-      await loadUserData(superMasterUser);
+      localStorage.setItem('cw_custom_session', JSON.stringify(activeUser));
+      setCurrentUser(activeUser);
+      await loadUserData(activeUser);
+      cleanupAdminAndSuperAdminData().catch(() => {});
       return;
     }
 
-    // 1. Primary requested Admin login: 12345689 (or 123456789) / 123456789
-    if (
-      (cleanId === '12345689' || cleanId === '123456789') &&
-      (cleanPass === '123456789' || cleanPass === '12345689')
-    ) {
-      const adminUser: CustomUser = {
-        uid: 'admin_master_12345689',
-        email: 'admin@wp-api-palan.vercel.app',
-        displayName: 'Administrator (Sub-Admin)',
-      };
-
-      // Set admin profile & dedicated tenant in Firestore
-      try {
-        const userRef = doc(db, 'users', adminUser.uid);
-        const orgRef = doc(db, 'organizations', 'org_admin_12345689');
-        await setDoc(
-          orgRef,
-          {
-            name: 'Administrator Portal Org',
-            ownerId: adminUser.uid,
-            status: 'active',
-            subscription: {
-              planName: 'enterprise',
-              maxWhatsAppNumbers: 50,
-              maxMonthlyBroadcasts: 500000,
-              maxContacts: 500000,
-              expiresAt: '2099-12-31T23:59:59.000Z',
-              status: 'active',
-              coexistenceAllowed: true,
-              notes: 'Administrator Account',
-            },
-            updatedAt: new Date().toISOString(),
-          },
-          { merge: true }
-        );
-
-        await setDoc(
-          userRef,
-          {
-            uid: adminUser.uid,
-            email: adminUser.email,
-            displayName: adminUser.displayName,
-            phone: cleanId,
-            role: 'admin',
-            organizationId: 'org_admin_12345689',
-            loginPassword: cleanPass,
-            subscription: {
-              planName: 'enterprise',
-              maxWhatsAppNumbers: 50,
-              maxMonthlyBroadcasts: 500000,
-              maxContacts: 500000,
-              expiresAt: '2099-12-31T23:59:59.000Z',
-              status: 'active',
-              coexistenceAllowed: true,
-            },
-            updatedAt: new Date().toISOString(),
-          },
-          { merge: true }
-        );
-      } catch (err) {
-        console.warn('Admin user sync error:', err);
-      }
-
-      localStorage.setItem('cw_custom_session', JSON.stringify(adminUser));
-      setCurrentUser(adminUser);
-      await loadUserData(adminUser);
-      return;
-    }
-
-    // 2. Check if a managed user was created in Firestore by Admin
+    // Check if a managed user was created in Firestore
     try {
       const userRef = doc(db, 'users', `user_${cleanId.replace(/[^0-9a-zA-Z]/g, '_')}`);
       const userSnap = await getDoc(userRef);
@@ -341,14 +290,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (userSnap.exists()) {
         const userData = userSnap.data() as UserProfile;
         if (userData.loginPassword && userData.loginPassword !== cleanPass) {
-          throw new Error('Incorrect password. Please verify the credentials provided by your Administrator.');
+          throw new Error('Incorrect password. Please verify your credentials.');
         }
 
         // Check subscription expiry
         if (userData.subscription?.expiresAt) {
           const expiryTime = new Date(userData.subscription.expiresAt).getTime();
           if (Date.now() > expiryTime) {
-            throw new Error(`Your account subscription expired on ${new Date(userData.subscription.expiresAt).toLocaleDateString()}. Please contact your Administrator to renew.`);
+            throw new Error(`Your account subscription expired on ${new Date(userData.subscription.expiresAt).toLocaleDateString()}. Please contact support to renew.`);
           }
         }
 
@@ -369,20 +318,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     }
 
-    // 3. Fallback direct credentials check: 9974428034 / 11111111 or standard password >= 6
-    if (cleanId === '9974428034' && cleanPass === '11111111') {
-      const customUser: CustomUser = {
-        uid: 'user_9974428034',
-        email: '9974428034@cloudwaba.internal',
-        displayName: 'User 9974428034',
-      };
-
-      localStorage.setItem('cw_custom_session', JSON.stringify(customUser));
-      setCurrentUser(customUser);
-      await loadUserData(customUser);
-      return;
-    }
-
+    // Direct password check fallback
     if (cleanPass.length >= 6) {
       const uid = `user_${cleanId.replace(/[^0-9a-zA-Z]/g, '_')}`;
       const customUser: CustomUser = {

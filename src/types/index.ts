@@ -1,45 +1,41 @@
-export type UserRole = 'master_admin' | 'owner' | 'admin' | 'agent';
+export type UserRole = 'master_admin' | 'owner' | 'admin' | 'agent' | 'sub_admin';
 
 export interface UserSubscription {
-  planName: 'trial' | 'basic' | 'pro' | 'enterprise';
-  maxWhatsAppNumbers: number;
-  maxMonthlyBroadcasts: number;
-  maxContacts: number;
-  expiresAt: string; // ISO date string
-  status: 'active' | 'expired' | 'suspended';
-  coexistenceAllowed: boolean;
+  planName?: string;
+  maxWhatsAppNumbers?: number;
+  maxMonthlyBroadcasts?: number;
+  maxContacts?: number;
+  maxTeamMembers?: number;
+  customBranding?: boolean;
+  expiresAt?: string;
+  status?: 'active' | 'expired' | 'suspended' | string;
+  coexistenceAllowed?: boolean;
   notes?: string;
+}
+
+export interface OrganizationMetaConfig {
+  appId?: string;
+  appSecret?: string;
+  configId?: string;
+  verifyToken?: string;
+  systemToken?: string;
+  systemUserToken?: string;
+  wabaId?: string;
 }
 
 export interface UserProfile {
   uid: string;
   email: string;
   displayName: string;
-  phone?: string;
   photoURL?: string;
   role: UserRole;
-  organizationId: string;
-  loginPassword?: string; // Stored securely for Admin credential management
+  phone?: string;
+  loginPassword?: string;
+  managedByAdminId?: string;
   subscription?: UserSubscription;
-  managedByAdminId?: string; // Hierarchical tracking for future Master Admin
+  organizationId: string;
   createdAt: string;
   updatedAt: string;
-}
-
-export interface AdminMetaConfig {
-  appId: string;
-  appSecret: string;
-  configId: string;
-  systemUserToken?: string;
-  wabaId?: string;
-  // Platform provides these read-only parameters for Meta Developer Console:
-  validOAuthRedirectUris: string[];
-  webhookCallbackUrl: string;
-  webhookVerifyToken: string;
-  graphVersion: string;
-  privacyPolicyUrl: string;
-  termsOfServiceUrl: string;
-  updatedAt?: string;
 }
 
 export interface Organization {
@@ -47,8 +43,8 @@ export interface Organization {
   name: string;
   ownerId: string;
   status: 'active' | 'suspended';
+  metaAppConfig?: OrganizationMetaConfig;
   subscription?: UserSubscription;
-  metaAppConfig?: AdminMetaConfig;
   createdAt: string;
   updatedAt: string;
 }
@@ -97,24 +93,84 @@ export interface ContactGroup {
   createdAt: string;
 }
 
+export type MessageStatus = 'queued' | 'sent' | 'delivered' | 'read' | 'failed';
+
+export interface CampaignStats {
+  total: number;
+  queued: number;
+  sent: number;
+  delivered: number;
+  read: number;
+  failed: number;
+  replied: number;
+  deliveryRate: number; // percentage (delivered / sent * 100)
+  readRate: number;     // percentage (read / delivered * 100)
+  failureRate: number;  // percentage (failed / total * 100)
+  replyRate: number;    // percentage (replied / delivered * 100)
+  linkClicks?: number;
+  buttonClicks?: number;
+}
+
+export interface MessageTimelineEvent {
+  status: MessageStatus | 'replied';
+  timestamp: string;
+  description: string;
+  details?: string;
+}
+
+export interface CampaignRecipient {
+  id: string;
+  campaignId: string;
+  campaignName?: string;
+  organizationId: string;
+  customerName: string;
+  phoneNumber: string;
+  phone?: string;
+  whatsappMessageId?: string; // wamid
+  messageType?: 'template' | 'text' | 'image' | 'video' | 'document' | 'interactive';
+  templateName?: string;
+  currentStatus: MessageStatus;
+  status?: string;
+  receivedDate?: string;
+  acknowledgement?: string;
+  cost?: string | number;
+  errorDetails?: string;
+  sentAt?: string;
+  deliveredAt?: string;
+  readAt?: string;
+  failedAt?: string;
+  repliedAt?: string;
+  hasReplied?: boolean;
+  failureCode?: string;
+  failureReason?: string;
+  timeline: MessageTimelineEvent[];
+  rawWebhookData?: any;
+  variableValues?: Record<string, string>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type CampaignRecipientRecord = CampaignRecipient;
+
 export interface Campaign {
   id: string;
   name: string;
   whatsAppAccountId: string;
   templateId: string;
   templateName?: string;
+  templateCategory?: string;
+  template?: Template;
+  headerMediaUrl?: string;
+  variableValues?: Record<string, string>;
+  recipients?: CampaignRecipient[];
   recipientCount: number;
   groupId?: string;
   status: 'draft' | 'scheduled' | 'sending' | 'completed' | 'paused' | 'cancelled' | 'failed';
   scheduledAt?: string;
+  startedAt?: string;
   createdAt: string;
   completedAt?: string;
-  stats?: {
-    sent: number;
-    delivered: number;
-    read: number;
-    failed: number;
-  };
+  stats?: CampaignStats;
 }
 
 export interface Message {
@@ -128,7 +184,10 @@ export interface Message {
   messageStatus: 'pending' | 'sent' | 'delivered' | 'read' | 'failed';
   metaMessageId?: string;
   body?: string;
+  headerText?: string;
   mediaUrl?: string;
+  mediaFileName?: string;
+  buttons?: BotButton[];
   errorInfo?: string;
   timestamp: string;
 }
@@ -174,6 +233,79 @@ export interface Conversation {
   unreadCount: number;
   assignedUser?: string;
   status: 'open' | 'resolved' | 'pending';
+}
+
+export interface BotButton {
+  id: string;
+  title: string; // up to 20 chars (Meta limit)
+  action: 'next_step' | 'url' | 'call' | 'assign_agent';
+  targetStepId?: string;
+  url?: string;
+  phoneNumber?: string;
+}
+
+export interface BotListRow {
+  id: string;
+  title: string; // up to 24 chars
+  description?: string; // up to 72 chars
+  targetStepId?: string;
+}
+
+export interface BotListSection {
+  title: string;
+  rows: BotListRow[];
+}
+
+export interface BotStep {
+  id: string;
+  title: string;
+  type: 'interactive_button' | 'interactive_list' | 'media' | 'text' | 'agent_transfer';
+  headerType?: 'none' | 'text' | 'image' | 'video' | 'document';
+  headerText?: string;
+  headerMediaUrl?: string;
+  body: string;
+  footer?: string;
+  // Interactive buttons (up to 3 Meta buttons)
+  buttons?: BotButton[];
+  // Interactive list menu
+  listButtonText?: string; // e.g. "Select Option"
+  listSections?: BotListSection[];
+  // Media attachments
+  mediaType?: 'image' | 'document' | 'video' | 'audio';
+  mediaUrl?: string;
+  mediaCaption?: string;
+  mediaFileName?: string;
+  // Fallback / Auto-delay
+  autoNextStepId?: string;
+}
+
+export type TriggerCondition =
+  | 'contains'
+  | 'exact'
+  | 'whole_word'
+  | 'begins_with'
+  | 'ends_with'
+  | 'anything_else';
+
+export type TriggerScope = 'all' | 'individuals_only';
+
+export interface BotFlow {
+  id: string;
+  name: string;
+  description?: string;
+  phoneNumberId?: string; // Specific connected WhatsApp number or undefined / 'all'
+  displayPhoneNumber?: string;
+  triggerType: 'keyword' | 'welcome' | 'fallback';
+  triggerCondition?: TriggerCondition;
+  triggerScope?: TriggerScope;
+  keywords: string[]; // e.g. ['HI', 'HELLO', 'MENU', 'START']
+  initialStepId: string;
+  steps: BotStep[];
+  enabled: boolean;
+  totalTriggeredCount?: number;
+  lastTriggeredAt?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Automation {

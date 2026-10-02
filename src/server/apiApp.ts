@@ -15,7 +15,13 @@ import {
   handleWebhookPost,
   handleGetWebhookLogs,
   handleSaveAdminMetaConfig,
+  handleGetCampaignAnalytics,
+  handleGetCampaignMessages,
+  handleGetMessageDetails,
+  handleSyncCampaignDelivery,
+  handleSimulateCampaignRead,
 } from './metaService.ts';
+import { getWebhookAuditEvents } from './campaignAnalyticsService.ts';
 
 export const apiApp = express();
 
@@ -36,8 +42,20 @@ apiApp.post('/api/meta/templates', handleCreateTemplate);
 apiApp.delete('/api/meta/templates', handleDeleteTemplate);
 apiApp.post('/api/meta/send-message', handleSendMessage);
 apiApp.post('/api/meta/campaigns/send', handleSendCampaign);
+apiApp.post('/api/meta/campaigns/sync-delivery', handleSyncCampaignDelivery);
+apiApp.post('/api/meta/campaigns/simulate-read', handleSimulateCampaignRead);
 
-// Webhook endpoints
+// WhatsApp Campaign Real-Time Tracking & Analytics Endpoints (Item 12)
+apiApp.get('/api/campaigns/:campaignId/analytics', handleGetCampaignAnalytics);
+apiApp.get('/api/campaigns/:campaignId/messages', handleGetCampaignMessages);
+apiApp.get('/api/messages/:messageId', handleGetMessageDetails);
+apiApp.get('/api/analytics/webhook-audit', (req, res) => {
+  res.json({ events: getWebhookAuditEvents() });
+});
+
+// Official WhatsApp Webhook endpoints (/api/webhooks/whatsapp & /api/meta/webhook)
+apiApp.get('/api/webhooks/whatsapp', handleWebhookVerification);
+apiApp.post('/api/webhooks/whatsapp', handleWebhookPost);
 apiApp.get('/api/meta/webhook', handleWebhookVerification);
 apiApp.post('/api/meta/webhook', handleWebhookPost);
 apiApp.get('/api/meta/webhook/logs', handleGetWebhookLogs);

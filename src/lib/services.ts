@@ -1,7 +1,6 @@
 import {
   collection,
   doc,
-  getDoc,
   setDoc,
   updateDoc,
   deleteDoc,
@@ -21,8 +20,13 @@ import type {
   Message,
   Conversation,
   Automation,
+  BotFlow,
+  BotStep,
+  BotButton,
   UserProfile,
   Organization,
+  UserRole,
+  CampaignRecipient,
 } from '../types/index.ts';
 
 /**
@@ -54,15 +58,18 @@ async function parseJsonResponse<T = any>(res: Response, fallbackError: string):
  * Removes undefined fields from objects recursively.
  * Cloud Firestore throws: "Unsupported field value: undefined" if any property is undefined.
  */
-export function removeUndefined<T extends Record<string, any>>(obj: T): Partial<T> {
+export function removeUndefined<T extends any>(val: T): T {
+  if (val === undefined) return undefined as any;
+  if (val === null || typeof val !== 'object') return val;
+  if (Array.isArray(val)) {
+    return val
+      .filter((item) => item !== undefined)
+      .map((item) => removeUndefined(item)) as any;
+  }
   const clean: any = {};
-  for (const [key, value] of Object.entries(obj)) {
+  for (const [key, value] of Object.entries(val)) {
     if (value !== undefined) {
-      if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-        clean[key] = removeUndefined(value);
-      } else {
-        clean[key] = value;
-      }
+      clean[key] = removeUndefined(value);
     }
   }
   return clean;
@@ -173,6 +180,15 @@ export async function addGroup(orgId: string, name: string, description?: string
     });
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
+  }
+}
+
+export async function deleteGroup(orgId: string, groupId: string) {
+  const path = `organizations/${orgId}/contactGroups/${groupId}`;
+  try {
+    await deleteDoc(doc(db, 'organizations', orgId, 'contactGroups', groupId));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, path);
   }
 }
 
@@ -373,10 +389,17 @@ export async function createCampaign(
     status: campaignData.scheduledAt ? 'scheduled' : 'draft',
     createdAt: new Date().toISOString(),
     stats: {
+      total: campaignData.recipientCount || 0,
+      queued: campaignData.recipientCount || 0,
       sent: 0,
       delivered: 0,
       read: 0,
       failed: 0,
+      replied: 0,
+      deliveryRate: 0,
+      readRate: 0,
+      failureRate: 0,
+      replyRate: 0,
     },
   };
 
@@ -397,11 +420,13 @@ export async function launchCampaign(
   template: { name: string; language: string; components?: any[] },
   recipients: Array<{ phone: string; name?: string; variableValues?: Record<string, string> }>,
   customToken?: string,
-  variableValues?: Record<string, string>
+  variableValues?: Record<string, string>,
+  campaignName?: string
 ) {
-  // Update status to sending
+  // Update status to sending with started timestamp
   const campRef = doc(db, 'organizations', orgId, 'campaigns', campaignId);
-  await updateDoc(campRef, { status: 'sending' });
+  const now = new Date().toISOString();
+  await updateDoc(campRef, { status: 'sending', startedAt: now }).catch(() => {});
 
   try {
     const res = await fetch('/api/meta/campaigns/send', {
@@ -416,22 +441,114 @@ export async function launchCampaign(
         recipients,
         variableValues,
         customToken,
+        campaignId,
+        campaignName,
+        organizationId: orgId,
       }),
     });
 
     const data = await parseJsonResponse(res, 'Failed to dispatch campaign.');
 
+    // Save individual recipients to Firestore subcollection if returned
+    if (Array.isArray(data.recipients)) {
+      for (const r of data.recipients) {
+        const rRef = doc(db, 'organizations', orgId, 'campaigns', campaignId, 'recipients', r.id);
+        await setDoc(rRef, removeUndefined(r), { merge: true }).catch(() => {});
+        if (r.whatsappMessageId) {
+          const wRef = doc(db, 'wamid_index', r.whatsappMessageId);
+          await setDoc(
+            wRef,
+            {
+              wamid: r.whatsappMessageId,
+              campaignId,
+              organizationId: orgId,
+              recipientId: r.id,
+              phoneNumber: r.phoneNumber || '',
+              status: r.currentStatus || 'sent',
+            },
+            { merge: true }
+          ).catch(() => {});
+        }
+      }
+    }
+
     await updateDoc(campRef, {
       status: 'completed',
       completedAt: new Date().toISOString(),
       stats: data.stats,
-    });
+      recipients: data.recipients || [],
+    }).catch(() => {});
 
     return data.stats;
   } catch (err) {
-    await updateDoc(campRef, { status: 'failed' });
+    await updateDoc(campRef, { status: 'failed' }).catch(() => {});
     throw err;
   }
+}
+
+/**
+ * Real-time subscription to recipient records of a specific campaign
+ */
+export function subscribeCampaignRecipients(
+  orgId: string,
+  campaignId: string,
+  onData: (recipients: CampaignRecipient[]) => void,
+  onError?: (err: unknown) => void
+): () => void {
+  const path = `organizations/${orgId}/campaigns/${campaignId}/recipients`;
+  return onSnapshot(
+    collection(db, path),
+    (snapshot) => {
+      const list: CampaignRecipient[] = [];
+      snapshot.forEach((d) => {
+        list.push({ id: d.id, ...(d.data() as any) });
+      });
+      onData(list);
+    },
+    (err) => {
+      console.warn(`[Firestore] Recipient subscribe notice for ${campaignId}:`, err);
+      onError?.(err);
+    }
+  );
+}
+
+/**
+ * Fetches campaign analytics data from the backend API
+ */
+export async function fetchCampaignAnalyticsApi(campaignId: string) {
+  const res = await fetch(`/api/campaigns/${encodeURIComponent(campaignId)}/analytics`);
+  return parseJsonResponse(res, 'Failed to fetch campaign analytics.');
+}
+
+/**
+ * Fetches recipient messages for a campaign with optional search, status filtering, and pagination
+ */
+export async function fetchCampaignMessagesApi(
+  campaignId: string,
+  params?: {
+    search?: string;
+    status?: string;
+    page?: number;
+    limit?: number;
+  }
+): Promise<{ recipients: CampaignRecipient[]; total: number; page: number; totalPages: number }> {
+  const query = new URLSearchParams();
+  if (params?.search) query.set('search', params.search);
+  if (params?.status) query.set('status', params.status);
+  if (params?.page) query.set('page', String(params.page));
+  if (params?.limit) query.set('limit', String(params.limit));
+
+  const url = `/api/campaigns/${encodeURIComponent(campaignId)}/messages?${query.toString()}`;
+  const res = await fetch(url);
+  return parseJsonResponse(res, 'Failed to fetch campaign messages.');
+}
+
+/**
+ * Fetches message tracking details by ID
+ */
+export async function fetchMessageDetailsApi(messageId: string): Promise<CampaignRecipient> {
+  const res = await fetch(`/api/messages/${encodeURIComponent(messageId)}`);
+  return parseJsonResponse(res, 'Failed to fetch message details.');
 }
 
 // -------------------------------------------------------------
@@ -501,6 +618,8 @@ export async function sendOutboundMessage(
     body: string;
     type?: 'text' | 'image' | 'document' | 'template';
     mediaUrl?: string;
+    filename?: string;
+    interactive?: any;
     template?: any;
     conversationId?: string;
     contactId?: string;
@@ -520,6 +639,8 @@ export async function sendOutboundMessage(
       body: params.body,
       type: params.type || 'text',
       mediaUrl: params.mediaUrl,
+      filename: params.filename,
+      interactive: params.interactive,
       template: params.template,
       variableValues: (params as any).variableValues,
       customToken: params.customToken,
@@ -636,229 +757,542 @@ export async function deleteAutomation(orgId: string, autoId: string) {
 }
 
 // -------------------------------------------------------------
-// ADMIN MULTI-TENANT USER & SUBSCRIPTION MANAGEMENT
+// ADVANCED CHATBOT FLOWS (Multi-Account, Buttons, Media, Menus)
 // -------------------------------------------------------------
 
-export function subscribeManagedUsers(
-  onData: (users: UserProfile[]) => void,
+export function subscribeBotFlows(
+  orgId: string,
+  onData: (flows: any[]) => void,
   onError: (err: unknown) => void
 ) {
-  // Query all users without orderBy to avoid dropping documents without createdAt
-  const q = collection(db, 'users');
+  const path = `organizations/${orgId}/botFlows`;
   return onSnapshot(
-    q,
+    collection(db, path),
     (snapshot) => {
-      const list: UserProfile[] = [];
+      const list: any[] = [];
       snapshot.forEach((d) => {
-        list.push({ uid: d.id, ...(d.data() as Omit<UserProfile, 'uid'>) });
-      });
-      // Sort in-memory by newest first
-      list.sort((a, b) => {
-        const timeA = new Date(a.createdAt || a.updatedAt || 0).getTime();
-        const timeB = new Date(b.createdAt || b.updatedAt || 0).getTime();
-        return timeB - timeA;
+        list.push({ id: d.id, ...d.data() });
       });
       onData(list);
     },
     (err) => {
+      handleFirestoreError(err, OperationType.GET, path);
       onError(err);
     }
   );
 }
 
-// Ensure the Primary Administrator account (12345689 / 123456789) is seeded in Firestore
-export async function ensureDefaultAdminAccount(): Promise<void> {
-  const adminUid = 'admin_master_12345689';
-  const orgId = 'org_admin_12345689';
+export async function saveBotFlow(orgId: string, flow: any) {
+  const flowId = flow.id || `flow_${Date.now()}`;
+  const path = `organizations/${orgId}/botFlows/${flowId}`;
+  const now = new Date().toISOString();
 
-  try {
-    const userRef = doc(db, 'users', adminUid);
-    const userSnap = await getDoc(userRef);
-
-    if (!userSnap.exists()) {
-      const now = new Date().toISOString();
-      const orgRef = doc(db, 'organizations', orgId);
-      await setDoc(
-        orgRef,
-        {
-          name: 'Administrator Portal Org',
-          ownerId: adminUid,
-          status: 'active',
-          subscription: {
-            planName: 'enterprise',
-            maxWhatsAppNumbers: 50,
-            maxMonthlyBroadcasts: 500000,
-            maxContacts: 500000,
-            expiresAt: '2099-12-31T23:59:59.000Z',
-            status: 'active',
-            coexistenceAllowed: true,
-            notes: 'Primary Sub-Administrator Account',
-          },
-          createdAt: now,
-          updatedAt: now,
-        },
-        { merge: true }
-      );
-
-      await setDoc(
-        userRef,
-        {
-          uid: adminUid,
-          email: 'admin@wp-api-palan.vercel.app',
-          displayName: 'Administrator (Sub-Admin)',
-          phone: '12345689',
-          role: 'admin',
-          organizationId: orgId,
-          loginPassword: '123456789',
-          subscription: {
-            planName: 'enterprise',
-            maxWhatsAppNumbers: 50,
-            maxMonthlyBroadcasts: 500000,
-            maxContacts: 500000,
-            expiresAt: '2099-12-31T23:59:59.000Z',
-            status: 'active',
-            coexistenceAllowed: true,
-          },
-          createdAt: now,
-          updatedAt: now,
-        },
-        { merge: true }
-      );
-    }
-  } catch (err) {
-    console.warn('ensureDefaultAdminAccount notice:', err);
-  }
-}
-
-// Reassign user to a specific Admin
-export async function reassignUserToAdmin(userId: string, newAdminId: string): Promise<void> {
-  const userRef = doc(db, 'users', userId);
-  await setDoc(
-    userRef,
-    {
-      managedByAdminId: newAdminId,
-      updatedAt: new Date().toISOString(),
-    },
-    { merge: true }
-  );
-}
-
-// Global Platform Meta App configuration listener
-export function subscribeGlobalMetaConfig(
-  onData: (config: any) => void
-) {
-  const globalRef = doc(db, 'system_settings', 'meta_config');
-  return onSnapshot(
-    globalRef,
-    (snapshot) => {
-      if (snapshot.exists()) {
-        onData(snapshot.data());
-      } else {
-        // Fallback to localStorage cache
-        try {
-          const cached = localStorage.getItem('cw_global_meta_config');
-          if (cached) onData(JSON.parse(cached));
-        } catch (e) {}
-      }
-    },
-    () => {
-      try {
-        const cached = localStorage.getItem('cw_global_meta_config');
-        if (cached) onData(JSON.parse(cached));
-      } catch (e) {}
-    }
-  );
-}
-
-export function subscribeOrganizations(
-  onData: (orgs: Organization[]) => void,
-  onError: (err: unknown) => void
-) {
-  const q = collection(db, 'organizations');
-  return onSnapshot(
-    q,
-    (snapshot) => {
-      const list: Organization[] = [];
-      snapshot.forEach((d) => {
-        list.push({ id: d.id, ...(d.data() as Omit<Organization, 'id'>) });
-      });
-      onData(list);
-    },
-    (err) => {
-      onError(err);
-    }
-  );
-}
-
-export async function createManagedUser(
-  adminUid: string,
-  data: {
-    displayName: string;
-    phoneOrEmail: string;
-    password: string;
-    role: 'owner' | 'admin' | 'agent';
-    maxWhatsAppNumbers: number;
-    maxMonthlyBroadcasts: number;
-    maxContacts: number;
-    validityDays: number;
-    planName: 'trial' | 'basic' | 'pro' | 'enterprise';
-    coexistenceAllowed: boolean;
-    managedByAdminId?: string;
-  }
-) {
-  const cleanId = data.phoneOrEmail.trim().replace(/\s+/g, '');
-  const uid = `user_${cleanId.replace(/[^0-9a-zA-Z]/g, '_')}`;
-  const orgId = `org_${cleanId.replace(/[^0-9a-zA-Z]/g, '_')}`;
-  const now = new Date();
-  const expiresAt = new Date(now.getTime() + data.validityDays * 24 * 60 * 60 * 1000).toISOString();
-
-  // 1. Create separate Organization tenant for this user
-  const orgRef = doc(db, 'organizations', orgId);
-  await setDoc(orgRef, {
-    name: `${data.displayName}'s Organization`,
-    ownerId: uid,
-    status: 'active',
-    subscription: {
-      planName: data.planName,
-      maxWhatsAppNumbers: data.maxWhatsAppNumbers,
-      maxMonthlyBroadcasts: data.maxMonthlyBroadcasts,
-      maxContacts: data.maxContacts,
-      expiresAt,
-      status: 'active',
-      coexistenceAllowed: data.coexistenceAllowed,
-    },
-    createdAt: now.toISOString(),
-    updatedAt: now.toISOString(),
+  const record = removeUndefined({
+    ...flow,
+    id: flowId,
+    updatedAt: now,
+    createdAt: flow.createdAt || now,
+    totalTriggeredCount: flow.totalTriggeredCount || 0,
   });
 
-  // 2. Create User document with credential login & subscription limits
-  const userRef = doc(db, 'users', uid);
-  const userProfile: UserProfile = {
-    uid,
-    email: cleanId.includes('@') ? cleanId : `${cleanId}@cloudwaba.internal`,
-    phone: cleanId.replace(/[^0-9+]/g, ''),
-    displayName: data.displayName,
-    role: data.role,
-    organizationId: orgId,
-    loginPassword: data.password.trim(),
-    managedByAdminId: data.managedByAdminId || adminUid,
-    subscription: {
-      planName: data.planName,
-      maxWhatsAppNumbers: data.maxWhatsAppNumbers,
-      maxMonthlyBroadcasts: data.maxMonthlyBroadcasts,
-      maxContacts: data.maxContacts,
-      expiresAt,
-      status: 'active',
-      coexistenceAllowed: data.coexistenceAllowed,
-    },
-    createdAt: now.toISOString(),
-    updatedAt: now.toISOString(),
-  };
-
-  await setDoc(userRef, userProfile);
-  return { uid, orgId, userProfile };
+  try {
+    await setDoc(doc(db, 'organizations', orgId, 'botFlows', flowId), record);
+    return flowId;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, path);
+  }
 }
 
+export async function toggleBotFlow(orgId: string, flowId: string, enabled: boolean) {
+  const path = `organizations/${orgId}/botFlows/${flowId}`;
+  try {
+    await updateDoc(doc(db, 'organizations', orgId, 'botFlows', flowId), {
+      enabled,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
+export async function deleteBotFlow(orgId: string, flowId: string) {
+  const path = `organizations/${orgId}/botFlows/${flowId}`;
+  try {
+    await deleteDoc(doc(db, 'organizations', orgId, 'botFlows', flowId));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, path);
+  }
+}
+
+// -------------------------------------------------------------
+// CHATBOT ENGINE & LIVE INCOMING SIMULATION FOR TEST NUMBERS
+// -------------------------------------------------------------
+
+export async function simulateIncomingCustomerMessageAndRunBot(
+  orgId: string,
+  params: {
+    senderPhone: string;
+    senderName?: string;
+    messageText: string;
+    phoneNumberId?: string;
+    accountId?: string;
+    customToken?: string;
+  }
+) {
+  const cleanPhone = params.senderPhone.trim().replace(/\s+/g, '');
+  const senderName = params.senderName?.trim() || cleanPhone;
+  const now = new Date().toISOString();
+  const convId = `conv_${cleanPhone.replace(/[^0-9]/g, '')}`;
+
+  // 1. Save or update the Contact in address book if not exists
+  const contactRef = doc(db, 'organizations', orgId, 'contacts', `cnt_${cleanPhone.replace(/[^0-9]/g, '')}`);
+  await setDoc(
+    contactRef,
+    removeUndefined({
+      id: `cnt_${cleanPhone.replace(/[^0-9]/g, '')}`,
+      name: senderName,
+      phone: cleanPhone,
+      optInStatus: 'opted_in',
+      updatedAt: now,
+      createdAt: now,
+    }),
+    { merge: true }
+  );
+
+  // 2. Persist inbound message in Firestore (Appears instantly in Inbox!)
+  const inMsgId = `msg_in_${Date.now()}`;
+  const inMsgRef = doc(db, 'organizations', orgId, 'messages', inMsgId);
+  await setDoc(
+    inMsgRef,
+    removeUndefined({
+      id: inMsgId,
+      whatsAppAccountId: params.accountId || 'test_account',
+      contactId: cleanPhone,
+      conversationId: convId,
+      direction: 'inbound',
+      messageType: 'text',
+      messageStatus: 'delivered',
+      body: params.messageText,
+      timestamp: now,
+    })
+  );
+
+  // 3. Update Conversation Thread in Firestore
+  const convRef = doc(db, 'organizations', orgId, 'conversations', convId);
+  await setDoc(
+    convRef,
+    removeUndefined({
+      id: convId,
+      contactId: cleanPhone,
+      contactPhone: cleanPhone,
+      contactName: senderName,
+      whatsAppAccountId: params.accountId || 'test_account',
+      lastMessage: params.messageText,
+      lastMessageAt: now,
+      unreadCount: 1,
+      status: 'open',
+    }),
+    { merge: true }
+  );
+
+  // 4. CHATBOT ENGINE: Evaluate active bot flows for this phone number / text
+  const botFlowsPath = `organizations/${orgId}/botFlows`;
+  const flowsSnap = await getDocs(collection(db, botFlowsPath));
+  const activeFlows: BotFlow[] = [];
+  flowsSnap.forEach((d) => {
+    const f = { id: d.id, ...d.data() } as BotFlow;
+    if (f.enabled) {
+      activeFlows.push(f);
+    }
+  });
+
+  const upperText = params.messageText.trim().toUpperCase();
+
+  // Find matching bot flow
+  let matchedFlow: BotFlow | null = null;
+  for (const flow of activeFlows) {
+    if (flow.phoneNumberId && params.phoneNumberId && flow.phoneNumberId !== params.phoneNumberId) {
+      continue;
+    }
+
+    const condition = flow.triggerCondition || 'exact';
+    const flowKeywords = (flow.keywords || []).map((k) => k.trim().toUpperCase());
+
+    if (condition === 'anything_else') {
+      matchedFlow = flow;
+      break;
+    }
+
+    const isMatch = flowKeywords.some((kw) => {
+      if (!kw) return false;
+      if (condition === 'exact') return upperText === kw;
+      if (condition === 'contains') return upperText.includes(kw);
+      if (condition === 'begins_with') return upperText.startsWith(kw);
+      if (condition === 'ends_with') return upperText.endsWith(kw);
+      if (condition === 'whole_word') {
+        const regex = new RegExp(`\\b${kw}\\b`, 'i');
+        return regex.test(params.messageText);
+      }
+      return upperText.includes(kw);
+    });
+
+    if (isMatch) {
+      matchedFlow = flow;
+      break;
+    }
+  }
+
+  // 5. If matched, execute bot's response step!
+  if (matchedFlow) {
+    // Increment trigger counter
+    const flowRef = doc(db, 'organizations', orgId, 'botFlows', matchedFlow.id);
+    await updateDoc(flowRef, {
+      totalTriggeredCount: (matchedFlow.totalTriggeredCount || 0) + 1,
+      lastTriggeredAt: new Date().toISOString(),
+    }).catch(() => {});
+
+    // Find first step
+    const firstStep =
+      matchedFlow.steps.find((s) => s.id === matchedFlow.initialStepId) ||
+      matchedFlow.steps[0];
+
+    if (firstStep) {
+      const botNow = new Date(Date.now() + 400).toISOString();
+      const botMsgId = `msg_bot_${Date.now()}`;
+      const botMsgRef = doc(db, 'organizations', orgId, 'messages', botMsgId);
+
+      const botPayload = removeUndefined({
+        id: botMsgId,
+        whatsAppAccountId: params.accountId || 'test_account',
+        contactId: cleanPhone,
+        conversationId: convId,
+        direction: 'outbound',
+        messageType:
+          firstStep.type === 'interactive_button'
+            ? 'interactive'
+            : firstStep.type === 'media'
+            ? firstStep.mediaType || 'document'
+            : 'text',
+        messageStatus: 'sent',
+        headerText: firstStep.headerText,
+        body: firstStep.body || 'How can we help you?',
+        mediaUrl: firstStep.mediaUrl,
+        mediaFileName: firstStep.mediaFileName,
+        buttons: firstStep.buttons,
+        timestamp: botNow,
+      });
+
+      await setDoc(botMsgRef, botPayload);
+
+      // Update conversation with bot reply
+      await updateDoc(convRef, {
+        lastMessage: firstStep.body || 'Chatbot Response',
+        lastMessageAt: botNow,
+      }).catch(() => {});
+
+      // Optionally dispatch via Meta API if real token exists
+      if (params.phoneNumberId && params.customToken) {
+        try {
+          await fetch('/api/meta/send-message', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-meta-token': params.customToken,
+            },
+            body: JSON.stringify({
+              phoneNumberId: params.phoneNumberId,
+              recipientPhone: cleanPhone,
+              body: firstStep.body,
+              type: firstStep.type === 'interactive_button' ? 'text' : firstStep.type,
+              mediaUrl: firstStep.mediaUrl,
+              customToken: params.customToken,
+            }),
+          });
+        } catch {
+          // ignore network issue in simulation
+        }
+      }
+
+      return {
+        matched: true,
+        flowName: matchedFlow.name,
+        botStep: firstStep,
+      };
+    }
+  }
+
+  return { matched: false };
+}
+
+export async function handleInboxButtonClick(
+  orgId: string,
+  params: {
+    conversationId: string;
+    contactPhone: string;
+    contactName: string;
+    button: BotButton;
+    accountId?: string;
+  }
+) {
+  // 1. Add user click message
+  const now = new Date().toISOString();
+  const clickMsgId = `msg_click_${Date.now()}`;
+  await setDoc(
+    doc(db, 'organizations', orgId, 'messages', clickMsgId),
+    removeUndefined({
+      id: clickMsgId,
+      whatsAppAccountId: params.accountId || 'test_account',
+      contactId: params.contactPhone,
+      conversationId: params.conversationId,
+      direction: 'inbound',
+      messageType: 'text',
+      messageStatus: 'delivered',
+      body: params.button.title,
+      timestamp: now,
+    })
+  );
+
+  // 2. If action is next_step and targetStepId is provided, find that step across botFlows
+  if (params.button.action === 'next_step' && params.button.targetStepId) {
+    const flowsSnap = await getDocs(collection(db, `organizations/${orgId}/botFlows`));
+    let nextStep: BotStep | null = null;
+    flowsSnap.forEach((d) => {
+      const f = d.data() as BotFlow;
+      const found = f.steps?.find((s) => s.id === params.button.targetStepId);
+      if (found) nextStep = found;
+    });
+
+    if (nextStep) {
+      const botNow = new Date(Date.now() + 400).toISOString();
+      const botMsgId = `msg_bot_${Date.now()}`;
+      await setDoc(
+        doc(db, 'organizations', orgId, 'messages', botMsgId),
+        removeUndefined({
+          id: botMsgId,
+          whatsAppAccountId: params.accountId || 'test_account',
+          contactId: params.contactPhone,
+          conversationId: params.conversationId,
+          direction: 'outbound',
+          messageType:
+            (nextStep as any).type === 'interactive_button'
+              ? 'interactive'
+              : (nextStep as any).type === 'media'
+              ? (nextStep as any).mediaType || 'document'
+              : 'text',
+          messageStatus: 'sent',
+          headerText: (nextStep as any).headerText,
+          body: (nextStep as any).body,
+          mediaUrl: (nextStep as any).mediaUrl,
+          mediaFileName: (nextStep as any).mediaFileName,
+          buttons: (nextStep as any).buttons,
+          timestamp: botNow,
+        })
+      );
+
+      await updateDoc(doc(db, 'organizations', orgId, 'conversations', params.conversationId), {
+        lastMessage: (nextStep as any).body || 'Chatbot Response',
+        lastMessageAt: botNow,
+      }).catch(() => {});
+    }
+  } else if (params.button.action === 'assign_agent') {
+    const botNow = new Date(Date.now() + 400).toISOString();
+    const botMsgId = `msg_bot_${Date.now()}`;
+    await setDoc(
+      doc(db, 'organizations', orgId, 'messages', botMsgId),
+      removeUndefined({
+        id: botMsgId,
+        whatsAppAccountId: params.accountId || 'test_account',
+        contactId: params.contactPhone,
+        conversationId: params.conversationId,
+        direction: 'outbound',
+        messageType: 'text',
+        messageStatus: 'sent',
+        body: '👨‍💼 Support team has been assigned to your chat. An agent will connect with you shortly.',
+        timestamp: botNow,
+      })
+    );
+  }
+}
+
+/**
+ * Completely purges Super Admin and Administrator data from Firestore
+ */
+export async function cleanupAdminAndSuperAdminData(): Promise<void> {
+  try {
+    const toDeleteUsers = ['super_master_admin_9974428034', 'admin_master_12345689'];
+    const toDeleteOrgs = ['org_super_master', 'org_admin_12345689'];
+
+    for (const uid of toDeleteUsers) {
+      try {
+        await deleteDoc(doc(db, 'users', uid));
+      } catch (e) {}
+    }
+
+    for (const orgId of toDeleteOrgs) {
+      try {
+        await deleteDoc(doc(db, 'organizations', orgId));
+      } catch (e) {}
+    }
+
+    // Clean up any residual users with phone 12345689 or email wp-api-palan
+    try {
+      const q = query(collection(db, 'users'), where('phone', '==', '12345689'));
+      const snap = await getDocs(q);
+      for (const d of snap.docs) {
+        await deleteDoc(d.ref);
+      }
+    } catch (e) {}
+  } catch (err) {
+    console.warn('cleanupAdminAndSuperAdminData notice:', err);
+  }
+}
+
+/**
+ * Legacy stub - now triggers cleanup instead of provisioning admin
+ */
+export async function ensureDefaultAdminAccount(): Promise<void> {
+  await cleanupAdminAndSuperAdminData();
+}
+
+/**
+ * Real-time subscription to managed users
+ */
+export function subscribeManagedUsers(
+  onNext: (users: UserProfile[]) => void,
+  onError?: (err: any) => void
+): () => void {
+  const usersRef = collection(db, 'users');
+  return onSnapshot(
+    usersRef,
+    (snap) => {
+      const list: UserProfile[] = [];
+      snap.forEach((d) => {
+        list.push({ uid: d.id, ...(d.data() as any) });
+      });
+      onNext(list);
+    },
+    (err) => {
+      handleFirestoreError(err, OperationType.LIST, 'users');
+      onError?.(err);
+    }
+  );
+}
+
+/**
+ * Real-time subscription to organizations
+ */
+export function subscribeOrganizations(
+  onNext: (orgs: Organization[]) => void,
+  onError?: (err: any) => void
+): () => void {
+  const orgsRef = collection(db, 'organizations');
+  return onSnapshot(
+    orgsRef,
+    (snap) => {
+      const list: Organization[] = [];
+      snap.forEach((d) => {
+        list.push({ id: d.id, ...(d.data() as any) });
+      });
+      onNext(list);
+    },
+    (err) => {
+      handleFirestoreError(err, OperationType.LIST, 'organizations');
+      onError?.(err);
+    }
+  );
+}
+
+/**
+ * Real-time subscription to global Meta configuration
+ */
+export function subscribeGlobalMetaConfig(
+  onNext: (config: any) => void
+): () => void {
+  const cfgRef = doc(db, 'system_config', 'meta_global');
+  return onSnapshot(
+    cfgRef,
+    (snap) => {
+      if (snap.exists()) {
+        onNext(snap.data());
+      } else {
+        onNext(null);
+      }
+    },
+    (err) => {
+      console.warn('subscribeGlobalMetaConfig notice:', err);
+    }
+  );
+}
+
+/**
+ * Creates a managed user and provisions their organization
+ */
+export async function createManagedUser(
+  creatorId: string,
+  params: {
+    displayName: string;
+    phoneOrEmail: string;
+    password?: string;
+    role?: UserRole;
+    maxWhatsAppNumbers?: number;
+    maxMonthlyBroadcasts?: number;
+    maxContacts?: number;
+    validityDays?: number;
+    planName?: string;
+    coexistenceAllowed?: boolean;
+    managedByAdminId?: string;
+  }
+): Promise<string> {
+  const cleanId = params.phoneOrEmail.replace(/[^0-9a-zA-Z]/g, '_');
+  const userId = `user_${cleanId}_${Date.now().toString(36)}`;
+  const orgId = `org_${cleanId}_${Date.now().toString(36)}`;
+  const now = new Date().toISOString();
+
+  const validityDays = params.validityDays || 30;
+  const expiresAt = new Date(Date.now() + validityDays * 24 * 60 * 60 * 1000).toISOString();
+
+  const isEmail = params.phoneOrEmail.includes('@');
+  const userDoc: UserProfile = {
+    uid: userId,
+    email: isEmail ? params.phoneOrEmail : `${cleanId}@wp-api-palan.vercel.app`,
+    displayName: params.displayName,
+    phone: isEmail ? undefined : params.phoneOrEmail,
+    role: params.role || 'owner',
+    organizationId: orgId,
+    loginPassword: params.password || '12345678',
+    managedByAdminId: params.managedByAdminId,
+    subscription: {
+      planName: params.planName || 'standard',
+      maxWhatsAppNumbers: params.maxWhatsAppNumbers || 1,
+      maxMonthlyBroadcasts: params.maxMonthlyBroadcasts || 1000,
+      maxContacts: params.maxContacts || 1000,
+      expiresAt: expiresAt,
+      status: 'active',
+      coexistenceAllowed: params.coexistenceAllowed ?? true,
+    },
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  const orgDoc: Organization = {
+    id: orgId,
+    name: `${params.displayName}'s Organization`,
+    ownerId: userId,
+    status: 'active',
+    subscription: userDoc.subscription,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  await setDoc(doc(db, 'users', userId), removeUndefined(userDoc));
+  await setDoc(doc(db, 'organizations', orgId), removeUndefined(orgDoc));
+
+  return userId;
+}
+
+/**
+ * Updates managed user subscription limits, credentials, or admin assignment
+ */
 export async function updateManagedUserSubscription(
   uid: string,
   orgId: string,
@@ -866,169 +1300,133 @@ export async function updateManagedUserSubscription(
     loginPassword?: string;
     maxWhatsAppNumbers?: number;
     maxMonthlyBroadcasts?: number;
-    maxContacts?: number;
     expiresAt?: string;
-    status?: 'active' | 'expired' | 'suspended';
-    planName?: 'trial' | 'basic' | 'pro' | 'enterprise';
-    coexistenceAllowed?: boolean;
-    notes?: string;
+    status?: string;
     managedByAdminId?: string;
   }
-) {
-  const userRef = doc(db, 'users', uid);
-  const userSnap = await getDoc(userRef);
+): Promise<void> {
+  const now = new Date().toISOString();
+  const userUpdates: any = {
+    updatedAt: now,
+  };
 
-  if (!userSnap.exists()) {
-    throw new Error('User not found in system.');
+  if (updates.loginPassword !== undefined) {
+    userUpdates.loginPassword = updates.loginPassword;
+  }
+  if (updates.managedByAdminId !== undefined) {
+    userUpdates.managedByAdminId = updates.managedByAdminId;
   }
 
-  const existing = userSnap.data() as UserProfile;
-  const currentSub = existing.subscription || {
-    planName: 'basic',
-    maxWhatsAppNumbers: 1,
-    maxMonthlyBroadcasts: 1000,
-    maxContacts: 500,
-    expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-    status: 'active',
-    coexistenceAllowed: true,
-  };
+  if (
+    updates.maxWhatsAppNumbers !== undefined ||
+    updates.maxMonthlyBroadcasts !== undefined ||
+    updates.expiresAt !== undefined ||
+    updates.status !== undefined
+  ) {
+    if (updates.maxWhatsAppNumbers !== undefined) {
+      userUpdates['subscription.maxWhatsAppNumbers'] = updates.maxWhatsAppNumbers;
+    }
+    if (updates.maxMonthlyBroadcasts !== undefined) {
+      userUpdates['subscription.maxMonthlyBroadcasts'] = updates.maxMonthlyBroadcasts;
+    }
+    if (updates.expiresAt !== undefined) {
+      userUpdates['subscription.expiresAt'] = updates.expiresAt;
+    }
+    if (updates.status !== undefined) {
+      userUpdates['subscription.status'] = updates.status;
+    }
+  }
 
-  const updatedSubscription = {
-    ...currentSub,
-    ...(updates.planName ? { planName: updates.planName } : {}),
-    ...(updates.maxWhatsAppNumbers !== undefined ? { maxWhatsAppNumbers: updates.maxWhatsAppNumbers } : {}),
-    ...(updates.maxMonthlyBroadcasts !== undefined ? { maxMonthlyBroadcasts: updates.maxMonthlyBroadcasts } : {}),
-    ...(updates.maxContacts !== undefined ? { maxContacts: updates.maxContacts } : {}),
-    ...(updates.expiresAt ? { expiresAt: updates.expiresAt } : {}),
-    ...(updates.status ? { status: updates.status } : {}),
-    ...(updates.coexistenceAllowed !== undefined ? { coexistenceAllowed: updates.coexistenceAllowed } : {}),
-    ...(updates.notes !== undefined ? { notes: updates.notes } : {}),
-  };
+  await updateDoc(doc(db, 'users', uid), removeUndefined(userUpdates));
 
-  // Update user doc
-  await updateDoc(userRef, {
-    ...(updates.loginPassword ? { loginPassword: updates.loginPassword } : {}),
-    ...(updates.managedByAdminId !== undefined ? { managedByAdminId: updates.managedByAdminId } : {}),
-    subscription: updatedSubscription,
-    updatedAt: new Date().toISOString(),
-  });
-
-  // Sync with organization doc
   if (orgId) {
-    const orgRef = doc(db, 'organizations', orgId);
-    await updateDoc(orgRef, {
-      subscription: updatedSubscription,
-      ...(updates.status ? { status: updates.status === 'suspended' ? 'suspended' : 'active' } : {}),
-      updatedAt: new Date().toISOString(),
-    });
+    const orgUpdates: any = { updatedAt: now };
+    if (updates.status !== undefined) {
+      orgUpdates.status = updates.status;
+    }
+    await updateDoc(doc(db, 'organizations', orgId), removeUndefined(orgUpdates)).catch(() => {});
   }
 }
 
-export async function deleteManagedUser(uid: string, orgId: string) {
-  const userRef = doc(db, 'users', uid);
-  await deleteDoc(userRef);
-
-  if (orgId && orgId !== 'org_admin_master') {
-    const orgRef = doc(db, 'organizations', orgId);
-    await deleteDoc(orgRef);
+/**
+ * Deletes managed user and optionally their organization
+ */
+export async function deleteManagedUser(uid: string, orgId?: string): Promise<void> {
+  await deleteDoc(doc(db, 'users', uid));
+  if (orgId) {
+    await deleteDoc(doc(db, 'organizations', orgId)).catch(() => {});
   }
 }
 
+/**
+ * Saves Meta configuration for an organization and optionally syncs globally
+ */
 export async function saveOrganizationMetaConfig(
   orgId: string,
-  metaConfig: {
-    appId: string;
+  config: {
+    appId?: string;
     appSecret?: string;
-    configId: string;
+    configId?: string;
     systemUserToken?: string;
     wabaId?: string;
   },
-  applyGlobally: boolean = true
-) {
-  const fullMetaConfig = {
-    appId: metaConfig.appId || '',
-    appSecret: metaConfig.appSecret || '',
-    configId: metaConfig.configId || '',
-    systemUserToken: metaConfig.systemUserToken || '',
-    wabaId: metaConfig.wabaId || '',
-    validOAuthRedirectUris: [
-      'https://wp-api-palan.vercel.app/',
-      'https://wp-api-palan.vercel.app/api/meta/oauth/callback',
-    ],
-    webhookCallbackUrl: 'https://wp-api-palan.vercel.app/api/meta/webhook',
-    webhookVerifyToken: 'cloudwaba_verify_token_secure',
-    graphVersion: 'v22.0',
-    privacyPolicyUrl: 'https://wp-api-palan.vercel.app/privacy-policy',
-    termsOfServiceUrl: 'https://wp-api-palan.vercel.app/terms-of-service',
-    updatedAt: new Date().toISOString(),
-  };
+  syncGlobally?: boolean
+): Promise<void> {
+  const cleanConfig = removeUndefined({
+    appId: config.appId,
+    appSecret: config.appSecret,
+    configId: config.configId,
+    systemToken: config.systemUserToken,
+    systemUserToken: config.systemUserToken,
+    wabaId: config.wabaId,
+  });
 
-  // 1. Sync with server backend proxy store
-  try {
-    await fetch('/api/meta/admin-config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        appId: metaConfig.appId,
-        appSecret: metaConfig.appSecret,
-        configId: metaConfig.configId,
-        systemUserToken: metaConfig.systemUserToken,
-        wabaId: metaConfig.wabaId,
-      }),
-    });
-  } catch (apiErr) {
-    console.warn('Notice: Server API meta-config sync error:', apiErr);
+  if (orgId) {
+    await setDoc(
+      doc(db, 'organizations', orgId),
+      {
+        metaAppConfig: cleanConfig,
+        updatedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    );
   }
 
-  // 2. Always persist Global Platform Meta Config so all Admin panels stay synchronized!
-  try {
-    localStorage.setItem('cw_global_meta_config', JSON.stringify(fullMetaConfig));
-    if (orgId) {
-      localStorage.setItem(`cw_meta_config_${orgId}`, JSON.stringify(fullMetaConfig));
-    }
-  } catch (e) {}
+  if (syncGlobally) {
+    await setDoc(
+      doc(db, 'system_config', 'meta_global'),
+      {
+        ...cleanConfig,
+        updatedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    );
 
-  if (applyGlobally) {
+    // Also update server-side Meta config endpoint
     try {
-      const globalRef = doc(db, 'system_settings', 'meta_config');
-      await setDoc(globalRef, removeUndefined(fullMetaConfig), { merge: true });
-    } catch (gErr) {
-      console.warn('Global meta config doc notice:', gErr);
-    }
-
-    // Sync to root master and primary admin orgs
-    const keyOrgs = ['org_super_master', 'org_admin_12345689'];
-    for (const kOrg of keyOrgs) {
-      try {
-        const kRef = doc(db, 'organizations', kOrg);
-        await setDoc(
-          kRef,
-          {
-            metaAppConfig: removeUndefined(fullMetaConfig),
-            updatedAt: new Date().toISOString(),
-          },
-          { merge: true }
-        );
-      } catch (kErr) {}
+      await fetch('/api/meta/admin-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          appId: config.appId,
+          appSecret: config.appSecret,
+          configId: config.configId,
+          systemToken: config.systemUserToken,
+        }),
+      });
+    } catch {
+      // server sync best-effort
     }
   }
-
-  // 3. Persist in specific tenant Organization
-  if (orgId && orgId !== 'org_super_master' && orgId !== 'org_admin_12345689') {
-    try {
-      const orgRef = doc(db, 'organizations', orgId);
-      await setDoc(
-        orgRef,
-        {
-          metaAppConfig: removeUndefined(fullMetaConfig),
-          updatedAt: new Date().toISOString(),
-        },
-        { merge: true }
-      );
-    } catch (fsErr: any) {
-      console.warn('Firestore metaAppConfig save notice:', fsErr);
-    }
-  }
-
-  return fullMetaConfig;
 }
+
+/**
+ * Reassigns client user to a different sub-admin
+ */
+export async function reassignUserToAdmin(userId: string, targetAdminId: string): Promise<void> {
+  await updateDoc(doc(db, 'users', userId), {
+    managedByAdminId: targetAdminId,
+    updatedAt: new Date().toISOString(),
+  });
+}
+

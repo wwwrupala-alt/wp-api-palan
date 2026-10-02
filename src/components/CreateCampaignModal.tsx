@@ -18,6 +18,7 @@ import {
   PhoneCall,
   ExternalLink,
   ChevronRight,
+  ChevronLeft,
   ShieldCheck,
   RefreshCw,
 } from 'lucide-react';
@@ -72,6 +73,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
   // Submission state
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [mobileActiveTab, setMobileActiveTab] = useState<'setup' | 'preview'>('setup');
 
   // Parse template components
   const approvedTemplates = templates.filter((t) => t.status === 'APPROVED');
@@ -295,7 +297,8 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
           },
         })),
         activeAccount.customToken,
-        campaignVariables
+        campaignVariables,
+        campaignPayload.name
       );
 
       toast.showSuccess(
@@ -315,24 +318,27 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/70 backdrop-blur-xs animate-fadeIn">
-      <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-3xl w-full max-w-6xl shadow-2xl overflow-hidden flex flex-col h-[94vh] max-h-[880px]">
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-xs animate-fadeIn">
+      <div className="bg-white dark:bg-neutral-900 border-t sm:border border-neutral-200 dark:border-neutral-800 rounded-t-3xl sm:rounded-3xl w-full max-w-6xl shadow-2xl overflow-hidden flex flex-col h-[95vh] sm:h-[94vh] sm:max-h-[880px]">
+        {/* Mobile Pull Bar Affordance */}
+        <div className="sm:hidden w-12 h-1 bg-neutral-300 dark:bg-neutral-700 rounded-full mx-auto my-2 shrink-0" />
+
         {/* Header */}
-        <div className="px-6 py-3.5 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between bg-neutral-50/60 dark:bg-neutral-800/40 shrink-0">
-          <div className="flex items-center space-x-3">
-            <div className="w-9 h-9 rounded-2xl bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shadow-xs">
+        <div className="px-4 sm:px-6 py-3 sm:py-3.5 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between bg-neutral-50/70 dark:bg-neutral-800/40 shrink-0">
+          <div className="flex items-center space-x-2.5 sm:space-x-3">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-2xl bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shadow-xs shrink-0">
               <Send className="w-4 h-4" />
             </div>
             <div>
               <div className="flex items-center space-x-2">
-                <h3 className="font-bold text-neutral-900 dark:text-white text-base">
+                <h3 className="font-bold text-neutral-900 dark:text-white text-sm sm:text-base">
                   Create Broadcast Campaign
                 </h3>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
+                <span className="hidden sm:inline-flex px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
                   Live Preview & Direct Paste
                 </span>
               </div>
-              <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+              <p className="text-[10px] sm:text-[11px] text-neutral-500 dark:text-neutral-400 truncate max-w-[240px] sm:max-w-none">
                 Official Meta Cloud API • Live Message & Button Preview • Number Paste & Groups
               </p>
             </div>
@@ -340,23 +346,62 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
 
           <button
             onClick={onClose}
-            className="p-1.5 rounded-xl text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
+        {/* Mobile Segmented Control Switcher (Setup vs Preview) */}
+        <div className="lg:hidden px-3 sm:px-4 py-2 bg-neutral-50 dark:bg-neutral-800/60 border-b border-neutral-200 dark:border-neutral-800 shrink-0">
+          <div className="grid grid-cols-2 p-1 bg-neutral-200/80 dark:bg-neutral-900 rounded-2xl gap-1">
+            <button
+              type="button"
+              onClick={() => setMobileActiveTab('setup')}
+              className={`min-h-[44px] flex items-center justify-center space-x-2 text-xs font-bold rounded-xl transition-all cursor-pointer ${
+                mobileActiveTab === 'setup'
+                  ? 'bg-white dark:bg-neutral-800 text-emerald-600 dark:text-emerald-400 shadow-xs'
+                  : 'text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200'
+              }`}
+            >
+              <FileText className="w-4 h-4" />
+              <span>1. Setup & Audience</span>
+              {totalTargetRecipients.length > 0 && (
+                <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 font-mono">
+                  {totalTargetRecipients.length}
+                </span>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setMobileActiveTab('preview')}
+              className={`min-h-[44px] flex items-center justify-center space-x-2 text-xs font-bold rounded-xl transition-all cursor-pointer ${
+                mobileActiveTab === 'preview'
+                  ? 'bg-white dark:bg-neutral-800 text-emerald-600 dark:text-emerald-400 shadow-xs'
+                  : 'text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200'
+              }`}
+            >
+              <Smartphone className="w-4 h-4" />
+              <span>2. WhatsApp Preview</span>
+              {selectedTemplate && (
+                <span className="w-2 h-2 rounded-full bg-emerald-500" />
+              )}
+            </button>
+          </div>
+        </div>
+
         {errorMsg && (
-          <div className="mx-6 mt-3 p-3 rounded-2xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/40 text-xs text-red-700 dark:text-red-300 flex items-center space-x-2 shrink-0">
+          <div className="mx-4 sm:mx-6 mt-3 p-3 rounded-2xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/40 text-xs text-red-700 dark:text-red-300 flex items-center space-x-2 shrink-0">
             <AlertTriangle className="w-4 h-4 shrink-0" />
             <span>{errorMsg}</span>
           </div>
         )}
 
-        {/* Modal Body - 2 Columns: Config on Left, Top-Aligned Live WhatsApp Preview on Right */}
-        <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 divide-y lg:divide-y-0 lg:divide-x divide-neutral-200 dark:divide-neutral-800 min-h-0 overflow-hidden">
-          {/* Left Column: Form & Settings (7 cols - scrollable) */}
-          <div className="lg:col-span-7 p-5 space-y-4 overflow-y-auto">
+        {/* Modal Body - Responsive: Mobile Tabs / Desktop 2 Columns Side-by-Side */}
+        <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 divide-y lg:divide-y-0 lg:divide-x divide-neutral-200 dark:border-neutral-800 min-h-0 overflow-hidden">
+          {/* Left Column: Form & Settings (7 cols on desktop, full-width on mobile setup tab) */}
+          <div className={`${mobileActiveTab === 'setup' ? 'block' : 'hidden'} lg:block lg:col-span-7 p-4 sm:p-5 space-y-4 overflow-y-auto`}>
             {/* Step 1: Campaign Name & WhatsApp Number */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
@@ -365,7 +410,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
                 </label>
                 {activeAccount && (
                   <span className="text-[11px] text-neutral-500 flex items-center space-x-1">
-                    <span>Sending from:</span>
+                    <span>From:</span>
                     <strong className="text-neutral-800 dark:text-neutral-200 font-mono">
                       {activeAccount.displayPhoneNumber}
                     </strong>
@@ -378,7 +423,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
                 placeholder="e.g. Diwali Mega Sale Offer / Urgent Payment Reminder"
                 value={campName}
                 onChange={(e) => setCampName(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs text-neutral-900 dark:text-white placeholder-neutral-400 focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                className="w-full min-h-[44px] px-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-sm sm:text-xs text-neutral-900 dark:text-white placeholder-neutral-400 focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
               />
             </div>
 
@@ -494,46 +539,46 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
 
             {/* Step 3: Audience Selection (Groups / Manual Paste / Both) */}
             <div className="space-y-3 pt-2">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
                 <label className="text-xs font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400 flex items-center space-x-1.5">
                   <Users className="w-3.5 h-3.5 text-emerald-500" />
                   <span>3. Audience & Recipients Target</span>
                   <span className="text-red-500">*</span>
                 </label>
 
-                <div className="flex items-center space-x-1 bg-neutral-100 dark:bg-neutral-800 p-0.5 rounded-xl text-xs">
+                <div className="grid grid-cols-3 gap-1 bg-neutral-100 dark:bg-neutral-800 p-1 rounded-2xl text-xs w-full sm:w-auto">
                   <button
                     type="button"
                     onClick={() => setAudienceMode('group')}
-                    className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
+                    className={`min-h-[42px] sm:min-h-[36px] px-3 py-1.5 rounded-xl font-bold text-center transition-all cursor-pointer ${
                       audienceMode === 'group'
                         ? 'bg-white dark:bg-neutral-700 text-emerald-600 dark:text-emerald-400 shadow-xs'
                         : 'text-neutral-500 hover:text-neutral-700'
                     }`}
                   >
-                    Contact Groups
+                    Groups
                   </button>
                   <button
                     type="button"
                     onClick={() => setAudienceMode('manual')}
-                    className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
+                    className={`min-h-[42px] sm:min-h-[36px] px-3 py-1.5 rounded-xl font-bold text-center transition-all cursor-pointer ${
                       audienceMode === 'manual'
                         ? 'bg-white dark:bg-neutral-700 text-emerald-600 dark:text-emerald-400 shadow-xs'
                         : 'text-neutral-500 hover:text-neutral-700'
                     }`}
                   >
-                    Paste Numbers
+                    Paste
                   </button>
                   <button
                     type="button"
                     onClick={() => setAudienceMode('both')}
-                    className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
+                    className={`min-h-[42px] sm:min-h-[36px] px-3 py-1.5 rounded-xl font-bold text-center transition-all cursor-pointer ${
                       audienceMode === 'both'
                         ? 'bg-white dark:bg-neutral-700 text-emerald-600 dark:text-emerald-400 shadow-xs'
                         : 'text-neutral-500 hover:text-neutral-700'
                     }`}
                   >
-                    Both Combined
+                    Both
                   </button>
                 </div>
               </div>
@@ -547,7 +592,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
                   <select
                     value={selectedGroupId}
                     onChange={(e) => setSelectedGroupId(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs text-neutral-900 dark:text-white"
+                    className="w-full min-h-[44px] px-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-sm sm:text-xs text-neutral-900 dark:text-white cursor-pointer focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
                   >
                     <option value="all">
                       All Opted-in Contacts ({contacts.filter((c) => c.optInStatus === 'opted_in').length})
@@ -593,7 +638,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
 +91 9876543210
 Rahul: 919974428034
 +1 415 555 2671, Aniket: 9974428034"
-                    className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 text-xs font-mono text-neutral-900 dark:text-white placeholder-neutral-400 focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                    className="w-full min-h-[110px] p-3 rounded-xl border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 text-sm sm:text-xs font-mono text-neutral-900 dark:text-white placeholder-neutral-400 focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
                   />
 
                   <div className="flex items-center justify-between text-[11px]">
@@ -627,19 +672,19 @@ Rahul: 919974428034
                 <span>Test Broadcast (Send to Yourself First)</span>
               </span>
 
-              <div className="flex space-x-2">
+              <div className="flex flex-col sm:flex-row gap-2">
                 <input
                   type="text"
                   placeholder="+91 9974428034"
                   value={testPhone}
                   onChange={(e) => setTestPhone(e.target.value)}
-                  className="flex-1 px-3 py-1.5 rounded-xl border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 text-xs text-neutral-900 dark:text-white font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                  className="flex-1 min-h-[44px] px-3.5 py-2 rounded-xl border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 text-sm sm:text-xs text-neutral-900 dark:text-white font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
                 />
                 <button
                   type="button"
                   onClick={handleSendTestMessage}
                   disabled={testSending || !selectedTemplate || !testPhone.trim()}
-                  className="px-3.5 py-1.5 rounded-xl bg-neutral-900 hover:bg-neutral-800 dark:bg-neutral-700 dark:hover:bg-neutral-600 text-white font-medium text-xs flex items-center space-x-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
+                  className="min-h-[44px] px-4 py-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 dark:bg-neutral-700 dark:hover:bg-neutral-600 text-white font-bold text-xs flex items-center justify-center space-x-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
                 >
                   {testSending ? (
                     <>
@@ -663,8 +708,21 @@ Rahul: 919974428034
             </div>
           </div>
 
-          {/* Right Column: Live WhatsApp Mobile Preview (5 cols) - FIXED TOP ALIGNED, NO CROP */}
-          <div className="lg:col-span-5 p-4 bg-neutral-100/70 dark:bg-neutral-950/50 flex flex-col items-center justify-start overflow-hidden space-y-3">
+          {/* Right Column: Live WhatsApp Mobile Preview (5 cols) - Shown side-by-side on desktop, or when active tab is preview on mobile */}
+          <div className={`${mobileActiveTab === 'preview' ? 'flex' : 'hidden'} lg:flex lg:col-span-5 p-4 bg-neutral-100/70 dark:bg-neutral-950/50 flex-col items-center justify-start overflow-y-auto space-y-3`}>
+            {/* Mobile Header in Preview tab */}
+            <div className="lg:hidden w-full flex items-center justify-between pb-1 shrink-0">
+              <button
+                type="button"
+                onClick={() => setMobileActiveTab('setup')}
+                className="inline-flex items-center space-x-1 px-3 py-1.5 rounded-xl bg-white dark:bg-neutral-800 text-xs font-bold text-neutral-700 dark:text-neutral-200 border border-neutral-200 dark:border-neutral-700 shadow-2xs cursor-pointer"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+                <span>← Back to Setup</span>
+              </button>
+              <span className="text-[11px] font-semibold text-neutral-500">Live Bubble View</span>
+            </div>
+
             <div className="w-full flex items-center justify-between text-xs shrink-0">
               <span className="font-bold uppercase tracking-wider text-neutral-500 flex items-center space-x-1.5 text-[11px]">
                 <Smartphone className="w-3.5 h-3.5 text-emerald-500" />
@@ -701,7 +759,7 @@ Rahul: 919974428034
                   </div>
                 </div>
 
-                {/* WhatsApp Chat Wallpaper & Message Bubble Area - Scrollable internally if template is huge, top-aligned so header/text/buttons always visible */}
+                {/* WhatsApp Chat Wallpaper & Message Bubble Area */}
                 <div className="flex-1 p-2.5 flex flex-col justify-start overflow-y-auto space-y-2">
                   {selectedTemplate ? (
                     <div className="w-full bg-white dark:bg-[#1f2c34] rounded-2xl rounded-tl-xs p-2.5 shadow-md space-y-1.5 text-xs border border-black/5 dark:border-white/5 animate-fadeIn">
@@ -805,20 +863,35 @@ Rahul: 919974428034
           </div>
         </div>
 
-        {/* Footer Actions */}
-        <div className="px-6 py-4 border-t border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-800/40 flex items-center justify-between">
-          <div className="text-xs text-neutral-500 dark:text-neutral-400 flex items-center space-x-2">
-            <Info className="w-4 h-4 text-emerald-500 shrink-0" />
-            <span>
-              Targeting: <strong>{totalTargetRecipients.length} recipients</strong> via Meta Cloud API.
+        {/* Footer Actions - Responsive: Mobile Sticky Touch-Friendly Bar */}
+        <div className="p-3.5 sm:px-6 sm:py-4 border-t border-neutral-200 dark:border-neutral-800 bg-neutral-50/90 dark:bg-neutral-800/90 backdrop-blur-md flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 shrink-0">
+          <div className="flex items-center justify-between sm:justify-start text-xs text-neutral-600 dark:text-neutral-400">
+            <span className="flex items-center space-x-1.5 font-medium">
+              <Info className="w-4 h-4 text-emerald-500 shrink-0" />
+              <span>Target:</span>
+              <strong className="text-emerald-600 dark:text-emerald-400 font-mono text-sm">
+                {totalTargetRecipients.length} recipients
+              </strong>
             </span>
+
+            {/* Quick Preview jump link on mobile */}
+            {mobileActiveTab === 'setup' && (
+              <button
+                type="button"
+                onClick={() => setMobileActiveTab('preview')}
+                className="lg:hidden text-xs text-emerald-600 dark:text-emerald-400 font-bold underline flex items-center space-x-0.5 cursor-pointer"
+              >
+                <span>Preview</span>
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
 
-          <div className="flex items-center space-x-3">
+          <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 sm:space-x-3">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 rounded-xl border border-neutral-200 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 font-medium text-xs hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
+              className="min-h-[44px] sm:min-h-[38px] px-4 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 font-bold text-xs hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer text-center"
             >
               Cancel
             </button>
@@ -827,17 +900,17 @@ Rahul: 919974428034
               type="button"
               onClick={handleLaunchCampaign}
               disabled={submitting || !selectedTemplate || totalTargetRecipients.length === 0}
-              className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs flex items-center space-x-2 disabled:opacity-50 transition-all shadow-sm hover:shadow cursor-pointer"
+              className="min-h-[44px] sm:min-h-[38px] px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-bold text-xs flex items-center justify-center space-x-2 disabled:opacity-50 transition-all shadow-md shadow-emerald-600/20 cursor-pointer"
             >
               {submitting ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Dispatching Broadcast...</span>
+                  <span>Launching...</span>
                 </>
               ) : (
                 <>
                   <Send className="w-4 h-4" />
-                  <span>Launch Broadcast ({totalTargetRecipients.length})</span>
+                  <span>Launch ({totalTargetRecipients.length})</span>
                 </>
               )}
             </button>

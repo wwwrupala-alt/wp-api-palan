@@ -177,6 +177,48 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["triggerType", "responseType", "enabled", "createdAt", "updatedAt"]
+    },
+    "CampaignRecipient": {
+      "title": "CampaignRecipient",
+      "description": "Individual recipient message tracking record for broadcast campaigns",
+      "type": "object",
+      "properties": {
+        "campaignId": { "type": "string", "maxLength": 128 },
+        "campaignName": { "type": "string", "maxLength": 150 },
+        "organizationId": { "type": "string", "maxLength": 128 },
+        "customerName": { "type": "string", "maxLength": 150 },
+        "phoneNumber": { "type": "string", "maxLength": 50 },
+        "whatsappMessageId": { "type": "string", "maxLength": 150 },
+        "messageType": { "type": "string" },
+        "templateName": { "type": "string", "maxLength": 150 },
+        "currentStatus": { "type": "string", "enum": ["queued", "sent", "delivered", "read", "failed"] },
+        "sentAt": { "type": "string", "format": "date-time" },
+        "deliveredAt": { "type": "string", "format": "date-time" },
+        "readAt": { "type": "string", "format": "date-time" },
+        "failedAt": { "type": "string", "format": "date-time" },
+        "repliedAt": { "type": "string", "format": "date-time" },
+        "hasReplied": { "type": "boolean" },
+        "failureCode": { "type": "string", "maxLength": 50 },
+        "failureReason": { "type": "string", "maxLength": 1000 },
+        "timeline": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["campaignId", "customerName", "phoneNumber", "currentStatus", "createdAt", "updatedAt"]
+    },
+    "WebhookEvent": {
+      "title": "WebhookEvent",
+      "description": "Auditing record for incoming WhatsApp Webhook callbacks",
+      "type": "object",
+      "properties": {
+        "whatsappMessageId": { "type": "string", "maxLength": 150 },
+        "eventType": { "type": "string", "maxLength": 50 },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "payload": { "type": "object" },
+        "processed": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["eventType", "timestamp", "createdAt"]
     }
   },
   "firestore": {
@@ -208,6 +250,10 @@
       "schema": { "$ref": "#/entities/Campaign" },
       "description": "Broadcast campaigns for this organization"
     },
+    "/organizations/{organizationId}/campaigns/{campaignId}/recipients/{recipientId}": {
+      "schema": { "$ref": "#/entities/CampaignRecipient" },
+      "description": "Individual recipient delivery tracking for a campaign"
+    },
     "/organizations/{organizationId}/messages/{messageId}": {
       "schema": { "$ref": "#/entities/Message" },
       "description": "All messages exchanged through organization WhatsApp accounts"
@@ -223,6 +269,10 @@
     "/organizations/{organizationId}/automations/{automationId}": {
       "schema": { "$ref": "#/entities/Automation" },
       "description": "Bot automation workflows and keyword auto-responses"
+    },
+    "/organizations/{organizationId}/webhookEvents/{eventId}": {
+      "schema": { "$ref": "#/entities/WebhookEvent" },
+      "description": "Audit logs of incoming WhatsApp webhook events"
     }
   }
 }

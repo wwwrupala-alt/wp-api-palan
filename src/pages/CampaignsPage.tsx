@@ -12,6 +12,7 @@ import {
   Smartphone,
   Loader2,
   Calendar,
+  BarChart3,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -25,7 +26,11 @@ import {
 import type { Campaign, Template, Contact, ContactGroup } from '../types/index.ts';
 import { CreateCampaignModal } from '../components/CreateCampaignModal.tsx';
 
-export const CampaignsPage: React.FC = () => {
+interface CampaignsPageProps {
+  onViewAnalytics?: (campaignId: string) => void;
+}
+
+export const CampaignsPage: React.FC<CampaignsPageProps> = ({ onViewAnalytics }) => {
   const { organization } = useAuth();
   const { activeAccount } = useWhatsAppAccounts();
   const toast = useToast();
@@ -94,14 +99,26 @@ export const CampaignsPage: React.FC = () => {
           </p>
         </div>
 
-        <button
-          onClick={() => setIsModalOpen(true)}
-          disabled={!activeAccount}
-          className="inline-flex items-center space-x-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-medium text-xs sm:text-sm shadow-xs transition-colors cursor-pointer"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Create Campaign</span>
-        </button>
+        <div className="flex items-center space-x-2">
+          {onViewAnalytics && campaigns.length > 0 && (
+            <button
+              onClick={() => onViewAnalytics(campaigns[0].id)}
+              className="inline-flex items-center space-x-1.5 px-3.5 py-2.5 rounded-xl border border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/60 font-semibold text-xs sm:text-sm transition-colors cursor-pointer"
+            >
+              <BarChart3 className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+              <span>Live Analytics</span>
+            </button>
+          )}
+
+          <button
+            onClick={() => setIsModalOpen(true)}
+            disabled={!activeAccount}
+            className="inline-flex items-center space-x-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-medium text-xs sm:text-sm shadow-xs transition-colors cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Create Campaign</span>
+          </button>
+        </div>
       </div>
 
       {/* Campaigns List */}
@@ -137,6 +154,7 @@ export const CampaignsPage: React.FC = () => {
                   <th className="py-3 px-4">Audience</th>
                   <th className="py-3 px-4">Delivery Stats</th>
                   <th className="py-3 px-4">Date</th>
+                  <th className="py-3 px-4 text-right">Analytics</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800">
@@ -185,6 +203,17 @@ export const CampaignsPage: React.FC = () => {
                     </td>
                     <td className="py-3.5 px-4 text-neutral-500 text-[11px]">
                       {new Date(c.createdAt).toLocaleDateString()}
+                    </td>
+                    <td className="py-3.5 px-4 text-right">
+                      {onViewAnalytics && (
+                        <button
+                          onClick={() => onViewAnalytics(c.id)}
+                          className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border border-purple-200 dark:border-purple-800/80 bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/60 font-semibold text-[11px] transition-colors cursor-pointer"
+                        >
+                          <BarChart3 className="w-3.5 h-3.5" />
+                          <span>Track</span>
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}

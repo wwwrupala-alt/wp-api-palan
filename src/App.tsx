@@ -14,6 +14,7 @@ import { WhatsAppAccountsPage } from './pages/WhatsAppAccountsPage.tsx';
 import { ContactsPage } from './pages/ContactsPage.tsx';
 import { TemplatesPage } from './pages/TemplatesPage.tsx';
 import { CampaignsPage } from './pages/CampaignsPage.tsx';
+import { CampaignAnalyticsPage } from './pages/CampaignAnalyticsPage.tsx';
 import { AutomationsPage } from './pages/AutomationsPage.tsx';
 import { AdminPage } from './pages/AdminPage.tsx';
 import { Loader2 } from 'lucide-react';
@@ -21,6 +22,7 @@ import { Loader2 } from 'lucide-react';
 const AppContent: React.FC = () => {
   const { currentUser, loading } = useAuth();
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
+  const [selectedAnalyticsCampaignId, setSelectedAnalyticsCampaignId] = useState<string>('');
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
 
@@ -70,7 +72,20 @@ const AppContent: React.FC = () => {
           )}
           {currentTab === 'contacts' && <ContactsPage />}
           {currentTab === 'templates' && <TemplatesPage />}
-          {currentTab === 'campaigns' && <CampaignsPage />}
+          {currentTab === 'campaigns' && (
+            <CampaignsPage
+              onViewAnalytics={(campId) => {
+                setSelectedAnalyticsCampaignId(campId);
+                setCurrentTab('analytics');
+              }}
+            />
+          )}
+          {currentTab === 'analytics' && (
+            <CampaignAnalyticsPage
+              initialCampaignId={selectedAnalyticsCampaignId}
+              onNavigateToCampaigns={() => setCurrentTab('campaigns')}
+            />
+          )}
           {currentTab === 'automations' && <AutomationsPage />}
           {currentTab === 'admin' && <AdminPage />}
         </main>

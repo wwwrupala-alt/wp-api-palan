@@ -29,8 +29,9 @@ export const Header: React.FC<HeaderProps> = ({
     contacts: 'Contact Management',
     templates: 'Message Templates',
     campaigns: 'Broadcast Campaigns',
+    analytics: 'Campaign Analytics & Live Tracking',
     automations: 'Bot & Automations',
-    admin: 'Admin & System Settings',
+    admin: 'Settings & Meta Cloud API',
   };
 
   return (

@@ -103,65 +103,24 @@ export const LoginPage: React.FC = () => {
             </div>
           )}
 
-          {/* Quick Access Badges for Master Admin, Admin & User */}
-          <div className="space-y-2">
-            <div
-              onClick={() => {
-                setIdentifier('9974428034');
-                setPassword('22222222');
-                setError(null);
-              }}
-              className="p-3 rounded-xl bg-amber-50/90 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800/80 flex items-center justify-between cursor-pointer hover:bg-amber-100/80 dark:hover:bg-amber-900/50 transition-colors shadow-2xs"
-            >
-              <div className="flex items-center space-x-2 text-xs text-amber-950 dark:text-amber-200">
-                <ShieldCheck className="w-4 h-4 text-amber-600 dark:text-amber-400" />
-                <div>
-                  <p className="font-bold text-[11px] flex items-center space-x-1">
-                    <span>👑 SUPER MASTER ADMIN PORTAL</span>
-                  </p>
-                  <p className="font-mono text-[10px] opacity-90">ID: 9974428034 &bull; Pass: 22222222</p>
-                </div>
+          {/* Quick Active User Confirmation */}
+          <div className="p-3 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200/80 dark:border-emerald-800/60 flex items-center justify-between">
+            <div className="flex items-center space-x-2.5 text-xs text-emerald-900 dark:text-emerald-200">
+              <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-xs">
+                WA
               </div>
-              <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-amber-200 dark:bg-amber-800 text-amber-900 dark:text-amber-100">
-                Use Master
-              </span>
-            </div>
-
-            <div
-              onClick={() => {
-                setIdentifier('12345689');
-                setPassword('123456789');
-                setError(null);
-              }}
-              className="p-2.5 rounded-xl bg-purple-50/80 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800/60 flex items-center justify-between cursor-pointer hover:bg-purple-100/70 dark:hover:bg-purple-900/40 transition-colors"
-            >
-              <div className="flex items-center space-x-2 text-xs text-purple-900 dark:text-purple-300">
-                <ShieldCheck className="w-4 h-4 text-purple-600 dark:text-purple-400" />
-                <div>
-                  <p className="font-semibold text-[11px]">Administrator Portal Login</p>
-                  <p className="font-mono text-[10px] opacity-90">ID: 12345689 &bull; Pass: 123456789</p>
-                </div>
+              <div>
+                <p className="font-bold text-[11px] text-neutral-900 dark:text-white">Active Account: 9974428034</p>
+                <p className="text-[10px] text-emerald-700 dark:text-emerald-400 font-mono">Password: 11111111</p>
               </div>
-              <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded bg-purple-200/60 dark:bg-purple-800/60 text-purple-900 dark:text-purple-200">
-                Use Admin
-              </span>
             </div>
-
-            <div
+            <button
+              type="button"
               onClick={handleFillCredentials}
-              className="p-2 rounded-xl bg-emerald-50/80 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 flex items-center justify-between cursor-pointer hover:bg-emerald-100/70 dark:hover:bg-emerald-900/40 transition-colors"
+              className="text-[10px] font-bold px-2.5 py-1.5 rounded-xl bg-white dark:bg-neutral-800 text-emerald-700 dark:text-emerald-300 border border-emerald-300/80 dark:border-emerald-700 hover:bg-emerald-50 transition-colors cursor-pointer shadow-2xs"
             >
-              <div className="flex items-center space-x-2 text-xs text-emerald-800 dark:text-emerald-300">
-                <KeyRound className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                <div>
-                  <p className="font-semibold text-[10px]">Client / Demo User Login</p>
-                  <p className="font-mono text-[9px] opacity-90">ID: 9974428034 &bull; Pass: 11111111</p>
-                </div>
-              </div>
-              <span className="text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded bg-emerald-200/60 dark:bg-emerald-800/60 text-emerald-900 dark:text-emerald-200">
-                Use User
-              </span>
-            </div>
+              Auto-Fill
+            </button>
           </div>
 
           {/* Email / Mobile Login Form */}

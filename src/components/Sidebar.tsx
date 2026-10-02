@@ -7,6 +7,7 @@ import {
   FileText,
   Send,
   Bot,
+  BarChart3,
   ShieldCheck,
   Crown,
   LogOut,
@@ -36,13 +37,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const { activeAccount } = useWhatsAppAccounts();
   const { theme, toggleTheme } = useTheme();
 
-  const isMasterAdmin =
-    userProfile?.role === 'master_admin' ||
-    userProfile?.email?.includes('master') ||
-    userProfile?.phone === '9974428034';
-
-  const isAdmin = isMasterAdmin || userProfile?.role === 'admin' || userProfile?.role === 'owner';
-
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'inbox', label: 'Inbox', icon: MessageSquare },
@@ -50,17 +44,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'contacts', label: 'Contacts', icon: Users },
     { id: 'templates', label: 'Templates', icon: FileText },
     { id: 'campaigns', label: 'Campaigns', icon: Send },
+    { id: 'analytics', label: 'Campaign Analytics', icon: BarChart3 },
     { id: 'automations', label: 'Automations', icon: Bot },
-    ...(isAdmin
-      ? [
-          {
-            id: 'admin',
-            label: isMasterAdmin ? 'Master Control Panel' : 'Admin Portal & Users',
-            icon: isMasterAdmin ? Crown : ShieldCheck,
-            badge: isMasterAdmin ? 'MASTER' : 'ADMIN',
-          },
-        ]
-      : []),
+    {
+      id: 'admin',
+      label: 'Settings & Meta Cloud API',
+      icon: ShieldCheck,
+    },
   ];
 
   const handleNavClick = (tabId: string) => {

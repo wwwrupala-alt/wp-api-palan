@@ -51,7 +51,7 @@ import {
   updateManagedUserSubscription,
   deleteManagedUser,
   saveOrganizationMetaConfig,
-  ensureDefaultAdminAccount,
+  cleanupAdminAndSuperAdminData,
   reassignUserToAdmin,
   subscribeGlobalMetaConfig,
 } from '../lib/services.ts';
@@ -62,11 +62,7 @@ export const AdminPage: React.FC = () => {
   const { accounts, metaStatus, refreshMetaStatus } = useWhatsAppAccounts();
   const toast = useToast();
 
-  const isSuperMaster =
-    userProfile?.role === 'master_admin' ||
-    currentUser?.uid?.includes('super_master_admin') ||
-    userProfile?.email?.includes('master') ||
-    userProfile?.phone === '9974428034';
+  const isSuperMaster = true; // Final active user has full authority over settings and Meta configuration
 
   const [activeTab, setActiveTab] = useState<'users' | 'meta_app' | 'logs'>('users');
   const [copiedUrl, setCopiedUrl] = useState(false);
@@ -155,11 +151,18 @@ export const AdminPage: React.FC = () => {
 
   // Load Users & Organizations in real-time
   useEffect(() => {
-    ensureDefaultAdminAccount().catch(() => {});
+    cleanupAdminAndSuperAdminData().catch(() => {});
 
     const unsubUsers = subscribeManagedUsers(
       (data) => {
-        setUsers(data);
+        const cleanUsers = data.filter(
+          (u) =>
+            u.uid !== 'super_master_admin_9974428034' &&
+            u.uid !== 'admin_master_12345689' &&
+            u.phone !== '12345689' &&
+            !u.email?.includes('wp-api-palan.vercel.app')
+        );
+        setUsers(cleanUsers);
         setLoadingUsers(false);
       },
       (err) => {
@@ -247,7 +250,7 @@ export const AdminPage: React.FC = () => {
     const targetOrgId =
       organization?.id ||
       userProfile?.organizationId ||
-      (isSuperMaster ? 'org_super_master' : `org_${currentUser?.uid || 'admin'}`);
+      `org_${currentUser?.uid || 'user'}`;
 
     setSavingMetaConfig(true);
 
@@ -336,10 +339,10 @@ export const AdminPage: React.FC = () => {
         newRole === 'admin'
           ? undefined
           : isSuperMaster
-          ? (newAssignedAdminId || allSubAdmins[0]?.uid || 'admin_master_12345689')
+          ? (newAssignedAdminId || allSubAdmins[0]?.uid || currentUser?.uid)
           : currentUser?.uid;
 
-      await createManagedUser(currentUser?.uid || 'master_admin', {
+      await createManagedUser(currentUser?.uid || 'user', {
         displayName: newDisplayName.trim(),
         phoneOrEmail: newPhoneOrEmail.trim(),
         password: newPassword.trim(),
@@ -377,7 +380,7 @@ export const AdminPage: React.FC = () => {
     setEditMaxNumbers(u.subscription?.maxWhatsAppNumbers || 1);
     setEditMaxBroadcasts(u.subscription?.maxMonthlyBroadcasts || 1000);
     setEditPassword(u.loginPassword || '');
-    setEditStatus(u.subscription?.status || 'active');
+    setEditStatus((u.subscription?.status as 'active' | 'expired' | 'suspended') || 'active');
     setEditAssignedAdminId(u.managedByAdminId || '');
   };
 
@@ -430,30 +433,13 @@ export const AdminPage: React.FC = () => {
 
   // List of all Sub-Admins / Reseller Admins
   const allSubAdmins: UserProfile[] = React.useMemo(() => {
-    const list = users.filter((u) => u.role === 'admin' || (u.role as string) === 'sub_admin');
-    if (!list.some((a) => a.uid === 'admin_master_12345689' || a.phone === '12345689')) {
-      list.unshift({
-        uid: 'admin_master_12345689',
-        displayName: 'Administrator (Primary Sub-Admin)',
-        phone: '12345689',
-        email: 'admin@wp-api-palan.vercel.app',
-        role: 'admin',
-        organizationId: 'org_admin_12345689',
-        loginPassword: '123456789',
-        subscription: {
-          planName: 'enterprise',
-          maxWhatsAppNumbers: 50,
-          maxMonthlyBroadcasts: 500000,
-          maxContacts: 500000,
-          expiresAt: '2099-12-31T23:59:59.000Z',
-          status: 'active',
-          coexistenceAllowed: true,
-        },
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    }
-    return list;
+    return users.filter(
+      (u) =>
+        u.uid !== 'admin_master_12345689' &&
+        u.uid !== 'super_master_admin_9974428034' &&
+        u.phone !== '12345689' &&
+        (u.role === 'admin' || (u.role as string) === 'sub_admin')
+    );
   }, [users]);
 
   const matchesSearch = (str?: string) => {
@@ -545,14 +531,16 @@ export const AdminPage: React.FC = () => {
   };
 
   const handleAssignAllUnassignedToPrimaryAdmin = async (unassignedList: UserProfile[]) => {
-    if (unassignedList.length === 0) return;
+    if (unassignedList.length === 0 || allSubAdmins.length === 0) return;
     try {
+      const targetAdmin = allSubAdmins[0]?.uid;
+      if (!targetAdmin) return;
       for (const u of unassignedList) {
-        await reassignUserToAdmin(u.uid, 'admin_master_12345689');
+        await reassignUserToAdmin(u.uid, targetAdmin);
       }
       toast.showSuccess(
         'Assigned Successfully',
-        `${unassignedList.length} users assigned to Administrator (12345689).`
+        `${unassignedList.length} users assigned successfully.`
       );
     } catch (err: any) {
       toast.showError('Assign Failed', err?.message || 'Failed to assign users.');
@@ -566,33 +554,15 @@ export const AdminPage: React.FC = () => {
         <div>
           <div className="flex items-center space-x-2.5">
             <h2 className="text-xl font-bold tracking-tight text-neutral-900 dark:text-white flex items-center space-x-2">
-              {isSuperMaster ? (
-                <>
-                  <Crown className="w-5 h-5 text-amber-500" />
-                  <span>Super Master Admin Control Panel</span>
-                </>
-              ) : (
-                <>
-                  <ShieldCheck className="w-5 h-5 text-purple-600" />
-                  <span>Admin Management Portal</span>
-                </>
-              )}
+              <ShieldCheck className="w-5 h-5 text-emerald-600" />
+              <span>Workspace Settings &amp; Meta Cloud API</span>
             </h2>
-            <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border ${
-              isSuperMaster
-                ? 'bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-800'
-                : 'bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800'
-            }`}>
-              {isSuperMaster ? 'SUPER MASTER ROOT' : 'TENANT ADMIN'}
-            </span>
-            <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400">
-              wp-api-palan.vercel.app
+            <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800">
+              Active Workspace
             </span>
           </div>
           <p className="text-xs sm:text-sm text-neutral-500 dark:text-neutral-400">
-            {isSuperMaster
-              ? 'Root Authority: Assign new Sub-Admins, manage client users, and configure independent Meta Apps with isolated databases.'
-              : 'Admin Authority: Create and manage client users, set WhatsApp number limits, expiry dates & renew packages.'}
+            Configure Meta Cloud API credentials, Embedded Signup settings, and real-time webhook logs.
           </p>
         </div>
 
@@ -823,7 +793,7 @@ export const AdminPage: React.FC = () => {
                           u.organizationId === other.organizationId)
                     );
                     const isDefaultAdminFallback =
-                      !isUnderAnotherAdmin && (adm.phone === '12345689' || adm.uid === 'admin_master_12345689' || subAdmins.length === 1);
+                      !isUnderAnotherAdmin && subAdmins.length === 1;
 
                     const isUnder = isExplicitlyUnder || isDefaultAdminFallback;
                     if (!isUnder) return false;
@@ -845,8 +815,7 @@ export const AdminPage: React.FC = () => {
                       u.managedByAdminId === adm.uid ||
                       (adm.phone && u.managedByAdminId === adm.phone) ||
                       (adm.email && u.managedByAdminId === adm.email) ||
-                      u.organizationId === adm.organizationId ||
-                      (adm.phone === '12345689' || adm.uid === 'admin_master_12345689')
+                      u.organizationId === adm.organizationId
                     );
                   });
                   if (isUnderAnyAdmin) return false;
@@ -1725,12 +1694,12 @@ export const AdminPage: React.FC = () => {
                     <input
                       type="text"
                       readOnly
-                      value="https://wp-api-palan.vercel.app/"
+                      value={typeof window !== 'undefined' ? `${window.location.origin}/` : 'https://wp-api-palan.vercel.app/'}
                       className="flex-1 px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 font-mono text-xs text-neutral-900 dark:text-white"
                     />
                     <button
                       type="button"
-                      onClick={() => copyText('https://wp-api-palan.vercel.app/', 'redirect')}
+                      onClick={() => copyText(typeof window !== 'undefined' ? `${window.location.origin}/` : 'https://wp-api-palan.vercel.app/', 'redirect')}
                       className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs flex items-center space-x-1 cursor-pointer shrink-0"
                     >
                       {copiedRedirect ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
@@ -1751,12 +1720,12 @@ export const AdminPage: React.FC = () => {
                     <input
                       type="text"
                       readOnly
-                      value="https://wp-api-palan.vercel.app/api/meta/webhook"
+                      value={typeof window !== 'undefined' ? `${window.location.origin}/api/meta/webhook` : 'https://wp-api-palan.vercel.app/api/meta/webhook'}
                       className="flex-1 px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 font-mono text-xs text-neutral-900 dark:text-white"
                     />
                     <button
                       type="button"
-                      onClick={() => copyText('https://wp-api-palan.vercel.app/api/meta/webhook', 'url')}
+                      onClick={() => copyText(typeof window !== 'undefined' ? `${window.location.origin}/api/meta/webhook` : 'https://wp-api-palan.vercel.app/api/meta/webhook', 'url')}
                       className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs flex items-center space-x-1 cursor-pointer shrink-0"
                     >
                       {copiedUrl ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
@@ -1798,13 +1767,17 @@ export const AdminPage: React.FC = () => {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
                   <div className="p-3 rounded-xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 space-y-1">
                     <span className="text-[10px] font-bold text-neutral-500 uppercase">App Domain</span>
-                    <p className="font-mono text-xs text-neutral-900 dark:text-white select-all">wp-api-palan.vercel.app</p>
+                    <p className="font-mono text-xs text-neutral-900 dark:text-white select-all">
+                      {typeof window !== 'undefined' ? window.location.hostname : 'wp-api-palan.vercel.app'}
+                    </p>
                     <p className="text-[10px] text-neutral-400">Settings &gt; Basic &gt; App Domains</p>
                   </div>
 
                   <div className="p-3 rounded-xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 space-y-1">
                     <span className="text-[10px] font-bold text-neutral-500 uppercase">Privacy Policy URL</span>
-                    <p className="font-mono text-xs text-neutral-900 dark:text-white select-all">https://wp-api-palan.vercel.app/privacy</p>
+                    <p className="font-mono text-xs text-neutral-900 dark:text-white select-all">
+                      {typeof window !== 'undefined' ? `${window.location.origin}/privacy` : 'https://wp-api-palan.vercel.app/privacy'}
+                    </p>
                     <p className="text-[10px] text-neutral-400">Settings &gt; Basic &gt; Privacy Policy URL</p>
                   </div>
                 </div>
