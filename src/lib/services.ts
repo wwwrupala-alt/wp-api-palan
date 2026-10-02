@@ -454,21 +454,6 @@ export async function launchCampaign(
       for (const r of data.recipients) {
         const rRef = doc(db, 'organizations', orgId, 'campaigns', campaignId, 'recipients', r.id);
         await setDoc(rRef, removeUndefined(r), { merge: true }).catch(() => {});
-        if (r.whatsappMessageId) {
-          const wRef = doc(db, 'wamid_index', r.whatsappMessageId);
-          await setDoc(
-            wRef,
-            {
-              wamid: r.whatsappMessageId,
-              campaignId,
-              organizationId: orgId,
-              recipientId: r.id,
-              phoneNumber: r.phoneNumber || '',
-              status: r.currentStatus || 'sent',
-            },
-            { merge: true }
-          ).catch(() => {});
-        }
       }
     }
 
@@ -476,7 +461,6 @@ export async function launchCampaign(
       status: 'completed',
       completedAt: new Date().toISOString(),
       stats: data.stats,
-      recipients: data.recipients || [],
     }).catch(() => {});
 
     return data.stats;
@@ -688,6 +672,40 @@ export async function sendOutboundMessage(
   return msgId;
 }
 
+export async function updateConversationContactName(
+  orgId: string,
+  conversationId: string,
+  contactPhone: string,
+  newName: string
+): Promise<void> {
+  const convRef = doc(db, 'organizations', orgId, 'conversations', conversationId);
+  try {
+    await updateDoc(convRef, {
+      contactName: newName,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `organizations/${orgId}/conversations/${conversationId}`);
+  }
+
+  // Also update contact doc if found
+  try {
+    const contactsQuery = query(
+      collection(db, 'organizations', orgId, 'contacts'),
+      where('phone', '==', contactPhone)
+    );
+    const snap = await getDocs(contactsQuery);
+    snap.forEach((d) => {
+      updateDoc(d.ref, {
+        name: newName,
+        updatedAt: new Date().toISOString(),
+      }).catch(() => {});
+    });
+  } catch {
+    // Non-fatal if contact update fails
+  }
+}
+
 // -------------------------------------------------------------
 // AUTOMATIONS
 // -------------------------------------------------------------
@@ -827,8 +845,6 @@ export async function deleteBotFlow(orgId: string, flowId: string) {
 // -------------------------------------------------------------
 // CHATBOT ENGINE & LIVE INCOMING SIMULATION FOR TEST NUMBERS
 // -------------------------------------------------------------
-
-export const simulateIncomingCustomerMessage = simulateIncomingCustomerMessageAndRunBot;
 
 export async function simulateIncomingCustomerMessageAndRunBot(
   orgId: string,

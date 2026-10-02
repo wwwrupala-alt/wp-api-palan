@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import type { Request, Response } from 'express';
 import type {
   CampaignRecipient,
   CampaignStats,
@@ -228,84 +229,6 @@ export async function persistCampaignStatsToFirestore(
   }
 }
 
-export async function persistWamidIndexToFirestore(
-  wamid: string,
-  data: {
-    campaignId: string;
-    organizationId: string;
-    recipientId: string;
-    phoneNumber: string;
-    status: string;
-  }
-): Promise<void> {
-  try {
-    const fb = getFirebaseConfig();
-    const docPath = `wamid_index/${encodeURIComponent(wamid)}`;
-    const url = `https://firestore.googleapis.com/v1/projects/${fb.projectId}/databases/${fb.firestoreDatabaseId || '(default)'}/documents/${docPath}?key=${fb.apiKey}`;
-    const fields: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(data)) {
-      const val = toFirestoreValue(v);
-      if (val) fields[k] = val;
-    }
-    await fetch(url, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fields }),
-    });
-  } catch (err) {
-    console.warn('[AnalyticsService] Failed to persist wamid index:', err);
-  }
-}
-
-export async function fetchRecipientByWamidFromFirestore(
-  wamid: string,
-  recipientPhone?: string
-): Promise<CampaignRecipient | null> {
-  try {
-    const fb = getFirebaseConfig();
-    const docPath = `wamid_index/${encodeURIComponent(wamid)}`;
-    const url = `https://firestore.googleapis.com/v1/projects/${fb.projectId}/databases/${fb.firestoreDatabaseId || '(default)'}/documents/${docPath}?key=${fb.apiKey}`;
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const json = await res.json();
-    const fields = json.fields || {};
-    const orgId = fields.organizationId?.stringValue;
-    const campId = fields.campaignId?.stringValue;
-    const rcpId = fields.recipientId?.stringValue;
-
-    if (!orgId || !campId || !rcpId) return null;
-
-    const rcpUrl = `https://firestore.googleapis.com/v1/projects/${fb.projectId}/databases/${fb.firestoreDatabaseId || '(default)'}/documents/organizations/${orgId}/campaigns/${campId}/recipients/${rcpId}?key=${fb.apiKey}`;
-    const rcpRes = await fetch(rcpUrl);
-    if (!rcpRes.ok) return null;
-    const rcpDoc = await rcpRes.json();
-    const raw = fromFirestoreValue(rcpDoc) || {};
-
-    return {
-      id: rcpId,
-      campaignId: campId,
-      organizationId: orgId,
-      phoneNumber: raw.phoneNumber || recipientPhone || '',
-      customerName: raw.customerName || 'Customer',
-      whatsappMessageId: wamid,
-      currentStatus: raw.currentStatus || 'sent',
-      sentAt: raw.sentAt,
-      deliveredAt: raw.deliveredAt,
-      readAt: raw.readAt,
-      failedAt: raw.failedAt,
-      failureReason: raw.failureReason,
-      hasReplied: Boolean(raw.hasReplied),
-      timeline: Array.isArray(raw.timeline) ? raw.timeline : [],
-      variableValues: raw.variableValues,
-      createdAt: raw.createdAt || new Date().toISOString(),
-      updatedAt: raw.updatedAt || new Date().toISOString(),
-    } as CampaignRecipient;
-  } catch (err) {
-    console.warn('[AnalyticsService] Error fetching recipient from Firestore:', err);
-    return null;
-  }
-}
-
 /**
  * Initializes or updates recipients in memory and indexes them.
  */
@@ -321,15 +244,6 @@ export function registerRecipients(
     map.set(r.id, r);
     if (r.whatsappMessageId) {
       wamidIndex.set(r.whatsappMessageId, r);
-      if (orgId) {
-        persistWamidIndexToFirestore(r.whatsappMessageId, {
-          campaignId,
-          organizationId: orgId,
-          recipientId: r.id,
-          phoneNumber: r.phoneNumber,
-          status: r.currentStatus,
-        }).catch(() => {});
-      }
     }
     const cleanPhone = r.phoneNumber.replace(/[^0-9]/g, '');
     const pList = phoneIndex.get(cleanPhone) || [];
@@ -393,19 +307,6 @@ export async function processWebhookStatusUpdate(params: {
     if (recipient && !recipient.whatsappMessageId) {
       recipient.whatsappMessageId = wamid;
       wamidIndex.set(wamid, recipient);
-    }
-  }
-
-  // If still not found in memory (e.g. serverless cold start on Vercel), lookup Firestore
-  if (!recipient) {
-    recipient = (await fetchRecipientByWamidFromFirestore(wamid, recipientPhone)) || undefined;
-    if (recipient) {
-      wamidIndex.set(wamid, recipient);
-      const list = recipientsStore.get(recipient.campaignId) || [];
-      const idx = list.findIndex((x) => x.id === recipient!.id);
-      if (idx >= 0) list[idx] = recipient;
-      else list.push(recipient);
-      recipientsStore.set(recipient.campaignId, list);
     }
   }
 
@@ -660,4 +561,52 @@ export function getMessageDetails(identifier: string): CampaignRecipient | null 
  */
 export function getWebhookAuditEvents() {
   return [...webhookEventsLog];
+}
+
+export async function handleGetCampaignAnalytics(req: Request, res: Response) {
+  try {
+    const { campaignId } = req.params;
+    if (!campaignId) {
+      return res.status(400).json({ error: 'campaignId is required' });
+    }
+    const data = getCampaignAnalytics(campaignId);
+    return res.json(data);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to get campaign analytics' });
+  }
+}
+
+export async function handleGetCampaignMessages(req: Request, res: Response) {
+  try {
+    const { campaignId } = req.params;
+    const { search, status, page, limit } = req.query;
+    if (!campaignId) {
+      return res.status(400).json({ error: 'campaignId is required' });
+    }
+    const data = getCampaignRecipients(campaignId, {
+      search: search as string,
+      status: status as string,
+      page: page ? Number(page) : undefined,
+      limit: limit ? Number(limit) : undefined,
+    });
+    return res.json(data);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to get campaign messages' });
+  }
+}
+
+export async function handleGetMessageDetails(req: Request, res: Response) {
+  try {
+    const { messageId } = req.params;
+    if (!messageId) {
+      return res.status(400).json({ error: 'messageId is required' });
+    }
+    const data = getMessageDetails(messageId);
+    if (!data) {
+      return res.status(404).json({ error: 'Message not found' });
+    }
+    return res.json(data);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to get message details' });
+  }
 }

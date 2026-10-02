@@ -15,34 +15,15 @@ import {
   handleWebhookPost,
   handleGetWebhookLogs,
   handleSaveAdminMetaConfig,
+} from './metaService.ts';
+import {
   handleGetCampaignAnalytics,
   handleGetCampaignMessages,
   handleGetMessageDetails,
-  handleSyncCampaignDelivery,
-  handleSimulateCampaignRead,
-} from './metaService.ts';
-import { getWebhookAuditEvents } from './campaignAnalyticsService.ts';
+  getWebhookAuditEvents,
+} from './campaignAnalyticsService.ts';
 
 export const apiApp = express();
-
-// Enable CORS for Vercel and all origins
-apiApp.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(200);
-  }
-  next();
-});
-
-// Normalize request URL for Vercel Serverless Function rewrites
-apiApp.use((req, res, next) => {
-  if (!req.url.startsWith('/api/') && req.url !== '/api') {
-    req.url = '/api' + (req.url.startsWith('/') ? req.url : '/' + req.url);
-  }
-  next();
-});
 
 // Parse JSON bodies
 apiApp.use(express.json());
@@ -61,8 +42,6 @@ apiApp.post('/api/meta/templates', handleCreateTemplate);
 apiApp.delete('/api/meta/templates', handleDeleteTemplate);
 apiApp.post('/api/meta/send-message', handleSendMessage);
 apiApp.post('/api/meta/campaigns/send', handleSendCampaign);
-apiApp.post('/api/meta/campaigns/sync-delivery', handleSyncCampaignDelivery);
-apiApp.post('/api/meta/campaigns/simulate-read', handleSimulateCampaignRead);
 
 // WhatsApp Campaign Real-Time Tracking & Analytics Endpoints (Item 12)
 apiApp.get('/api/campaigns/:campaignId/analytics', handleGetCampaignAnalytics);

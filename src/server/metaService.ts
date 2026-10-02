@@ -5,15 +5,13 @@ import {
 } from './metaAccountSyncService.ts';
 import { formatTemplateComponentsForSending } from './templateUtils.ts';
 import {
-  registerRecipients,
-  processWebhookStatusUpdate,
-  processIncomingCustomerReply,
-  getCampaignRecipients,
-  getCampaignAnalytics,
-  getMessageDetails,
-  calculateCampaignStats,
-} from './campaignAnalyticsService.ts';
-import type { CampaignRecipient } from '../types/index.ts';
+  serverDb,
+  doc,
+  setDoc,
+  getDocs,
+  collection,
+  updateDoc,
+} from './serverDb.ts';
 
 // In-memory webhook event logs buffer for real-time visibility in the Admin panel
 export interface WebhookEventRecord {
@@ -43,8 +41,8 @@ export function addWebhookLog(log: Omit<WebhookEventRecord, 'id' | 'timestamp'>)
   }
 }
 
-// In-memory override for admin-configured Meta credentials
-let customMetaConfig: {
+// Meta configuration helper
+let adminMetaConfigOverrides: {
   appId?: string;
   appSecret?: string;
   configId?: string;
@@ -54,15 +52,14 @@ let customMetaConfig: {
   appUrl?: string;
 } = {};
 
-// Meta configuration helper
 export function getMetaConfig() {
-  const appId = customMetaConfig.appId || process.env.META_APP_ID || process.env.VITE_META_APP_ID || '28291855670435316';
-  const appSecret = customMetaConfig.appSecret || process.env.META_APP_SECRET || '980d9e5cc7ef34822e00a35ca5939a79';
-  const configId = customMetaConfig.configId || process.env.META_CONFIG_ID || process.env.VITE_META_CONFIG_ID || '1030431656687202';
-  const verifyToken = customMetaConfig.verifyToken || process.env.META_WEBHOOK_VERIFY_TOKEN || 'cloudwaba_verify_token_secure';
-  const systemToken = customMetaConfig.systemToken || process.env.META_SYSTEM_USER_ACCESS_TOKEN || '';
-  const graphVersion = customMetaConfig.graphVersion || process.env.META_GRAPH_VERSION || 'v22.0';
-  const appUrl = customMetaConfig.appUrl || process.env.APP_URL || 'https://ais-dev-wsnbrhcpsj4nuqz3ehuicl-587296134324.asia-east1.run.app';
+  const appId = adminMetaConfigOverrides.appId || process.env.META_APP_ID || process.env.VITE_META_APP_ID || '28291855670435316';
+  const appSecret = adminMetaConfigOverrides.appSecret || process.env.META_APP_SECRET || '980d9e5cc7ef34822e00a35ca5939a79';
+  const configId = adminMetaConfigOverrides.configId || process.env.META_CONFIG_ID || process.env.VITE_META_CONFIG_ID || '1030431656687202';
+  const verifyToken = adminMetaConfigOverrides.verifyToken || process.env.META_WEBHOOK_VERIFY_TOKEN || 'cloudwaba_verify_token_secure';
+  const systemToken = adminMetaConfigOverrides.systemToken || process.env.META_SYSTEM_USER_ACCESS_TOKEN || '';
+  const graphVersion = adminMetaConfigOverrides.graphVersion || process.env.META_GRAPH_VERSION || 'v22.0';
+  const appUrl = adminMetaConfigOverrides.appUrl || process.env.APP_URL || 'https://wp-api-palan.vercel.app';
 
   return {
     appId,
@@ -76,35 +73,44 @@ export function getMetaConfig() {
   };
 }
 
-// Handler: Save Admin Meta Configuration
-export function handleSaveAdminMetaConfig(req: Request, res: Response) {
+// Handler: Save Meta configuration from Admin
+export async function handleSaveAdminMetaConfig(req: Request, res: Response) {
   try {
-    const { appId, appSecret, configId, verifyToken, systemToken, graphVersion, appUrl } = req.body || {};
-    if (appId !== undefined) customMetaConfig.appId = appId;
-    if (appSecret !== undefined) customMetaConfig.appSecret = appSecret;
-    if (configId !== undefined) customMetaConfig.configId = configId;
-    if (verifyToken !== undefined) customMetaConfig.verifyToken = verifyToken;
-    if (systemToken !== undefined) customMetaConfig.systemToken = systemToken;
-    if (graphVersion !== undefined) customMetaConfig.graphVersion = graphVersion;
-    if (appUrl !== undefined) customMetaConfig.appUrl = appUrl;
+    const { appId, appSecret, configId, verifyToken, systemToken, graphVersion, appUrl } = req.body;
+    if (appId !== undefined) adminMetaConfigOverrides.appId = appId;
+    if (appSecret !== undefined) adminMetaConfigOverrides.appSecret = appSecret;
+    if (configId !== undefined) adminMetaConfigOverrides.configId = configId;
+    if (verifyToken !== undefined) adminMetaConfigOverrides.verifyToken = verifyToken;
+    if (systemToken !== undefined) adminMetaConfigOverrides.systemToken = systemToken;
+    if (graphVersion !== undefined) adminMetaConfigOverrides.graphVersion = graphVersion;
+    if (appUrl !== undefined) adminMetaConfigOverrides.appUrl = appUrl;
 
-    const updated = getMetaConfig();
+    try {
+      await setDoc(
+        doc(serverDb, 'system_settings', 'meta_config'),
+        {
+          appId: adminMetaConfigOverrides.appId || '',
+          appSecret: adminMetaConfigOverrides.appSecret || '',
+          configId: adminMetaConfigOverrides.configId || '',
+          verifyToken: adminMetaConfigOverrides.verifyToken || '',
+          systemToken: adminMetaConfigOverrides.systemToken || '',
+          graphVersion: adminMetaConfigOverrides.graphVersion || 'v22.0',
+          appUrl: adminMetaConfigOverrides.appUrl || '',
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+    } catch (dbErr) {
+      console.warn('[handleSaveAdminMetaConfig] Warning: could not persist to Firestore:', dbErr);
+    }
+
     return res.json({
       success: true,
-      message: 'Meta configuration updated successfully',
-      config: {
-        appId: updated.appId,
-        configId: updated.configId,
-        appSecretSet: Boolean(updated.appSecret),
-        systemTokenSet: Boolean(updated.systemToken),
-        verifyTokenSet: Boolean(updated.verifyToken),
-        graphVersion: updated.graphVersion,
-        isConfigured: updated.isConfigured,
-      },
+      message: 'Admin Meta configuration updated successfully',
+      config: getMetaConfig(),
     });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to update Meta configuration';
-    return res.status(500).json({ success: false, error: message });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to save admin meta config' });
   }
 }
 
@@ -736,16 +742,7 @@ export async function handleSendMessage(req: Request, res: Response) {
 // Handler: Dispatch Campaign Broadcast via Meta Cloud API
 export async function handleSendCampaign(req: Request, res: Response) {
   try {
-    const {
-      phoneNumberId,
-      template,
-      recipients,
-      variableValues,
-      customToken,
-      campaignId = `cmp_${Date.now()}`,
-      campaignName,
-      organizationId,
-    } = req.body;
+    const { phoneNumberId, template, recipients, variableValues, customToken } = req.body;
     const config = getMetaConfig();
     const token =
       customToken ||
@@ -769,20 +766,12 @@ export async function handleSendCampaign(req: Request, res: Response) {
     let sentCount = 0;
     let failedCount = 0;
     const errors: Array<{ phone: string; error: string }> = [];
-    const recipientRecords: CampaignRecipient[] = [];
-    const nowIso = new Date().toISOString();
 
-    // Send messages adhering to Meta Graph API specifications
-    for (let i = 0; i < recipients.length; i++) {
-      const recipient = recipients[i];
-      const rawPhone = recipient.phone || recipient;
-      const cleanPhone = String(rawPhone).replace(/[^0-9]/g, '');
-      const customerName = recipient.name || `Customer ${i + 1}`;
+    // Send messages in batches adhering to Meta rate limits
+    for (const recipient of recipients) {
+      const cleanPhone = (recipient.phone || recipient).replace(/[^0-9]/g, '');
       const recipientVariables = recipient.variableValues || variableValues || {};
       const formattedComponents = formatTemplateComponentsForSending(template.components, recipientVariables);
-
-      const recipientId = recipient.recipientId || `rcp_${campaignId}_${cleanPhone}_${i}`;
-
       try {
         const sendUrl = `https://graph.facebook.com/${config.graphVersion}/${phoneNumberId}/messages`;
         const resMeta = await fetch(sendUrl, {
@@ -805,134 +794,34 @@ export async function handleSendCampaign(req: Request, res: Response) {
         });
 
         const dataMeta = await resMeta.json();
-        const eventTime = new Date().toISOString();
-
         if (resMeta.ok && !dataMeta.error) {
           sentCount++;
-          const wamid = dataMeta.messages?.[0]?.id || `wamid_${Date.now()}_${i}`;
-
-          recipientRecords.push({
-            id: recipientId,
-            campaignId,
-            campaignName: campaignName || template.name,
-            organizationId: organizationId || 'org_default',
-            customerName,
-            phoneNumber: cleanPhone.startsWith('+') ? cleanPhone : `+${cleanPhone}`,
-            whatsappMessageId: wamid,
-            messageType: 'template',
-            templateName: template.name,
-            currentStatus: 'sent',
-            sentAt: eventTime,
-            hasReplied: false,
-            timeline: [
-              {
-                status: 'queued',
-                timestamp: nowIso,
-                description: 'Campaign initiated and queued for dispatch',
-              },
-              {
-                status: 'sent',
-                timestamp: eventTime,
-                description: `Sent via Meta Cloud API (WAMID: ${wamid})`,
-              },
-            ],
-            variableValues: recipientVariables,
-            createdAt: nowIso,
-            updatedAt: eventTime,
-          });
         } else {
           failedCount++;
-          const errorMsg = dataMeta.error?.message || 'Meta Cloud API rejected the template message';
-          const errorCode = dataMeta.error?.code ? String(dataMeta.error.code) : undefined;
-          errors.push({ phone: cleanPhone, error: errorMsg });
-
-          recipientRecords.push({
-            id: recipientId,
-            campaignId,
-            campaignName: campaignName || template.name,
-            organizationId: organizationId || 'org_default',
-            customerName,
-            phoneNumber: cleanPhone.startsWith('+') ? cleanPhone : `+${cleanPhone}`,
-            messageType: 'template',
-            templateName: template.name,
-            currentStatus: 'failed',
-            failedAt: eventTime,
-            hasReplied: false,
-            failureCode: errorCode,
-            failureReason: errorMsg,
-            timeline: [
-              {
-                status: 'queued',
-                timestamp: nowIso,
-                description: 'Campaign initiated and queued for dispatch',
-              },
-              {
-                status: 'failed',
-                timestamp: eventTime,
-                description: `Rejected by Meta: ${errorMsg}`,
-                details: JSON.stringify(dataMeta.error),
-              },
-            ],
-            variableValues: recipientVariables,
-            createdAt: nowIso,
-            updatedAt: eventTime,
-          });
+          errors.push({ phone: cleanPhone, error: dataMeta.error?.message || 'Meta rejection' });
         }
       } catch (err) {
         failedCount++;
-        const eventTime = new Date().toISOString();
-        const errMessage = err instanceof Error ? err.message : 'Network failure contacting Meta Cloud API';
-        errors.push({ phone: cleanPhone, error: errMessage });
-
-        recipientRecords.push({
-          id: recipientId,
-          campaignId,
-          campaignName: campaignName || template.name,
-          organizationId: organizationId || 'org_default',
-          customerName,
-          phoneNumber: cleanPhone.startsWith('+') ? cleanPhone : `+${cleanPhone}`,
-          messageType: 'template',
-          templateName: template.name,
-          currentStatus: 'failed',
-          failedAt: eventTime,
-          hasReplied: false,
-          failureReason: errMessage,
-          timeline: [
-            {
-              status: 'queued',
-              timestamp: nowIso,
-              description: 'Campaign initiated and queued for dispatch',
-            },
-            {
-              status: 'failed',
-              timestamp: eventTime,
-              description: `Network Error: ${errMessage}`,
-            },
-          ],
-          variableValues: recipientVariables,
-          createdAt: nowIso,
-          updatedAt: eventTime,
-        });
+        errors.push({ phone: cleanPhone, error: err instanceof Error ? err.message : 'Network error' });
       }
     }
-
-    // Register into analytics store & persistent tracking
-    registerRecipients(campaignId, recipientRecords, organizationId);
-    const calculatedStats = calculateCampaignStats(recipientRecords);
 
     addWebhookLog({
       event: 'Campaign Broadcast Completed',
       origin: 'Broadcast Engine',
-      details: `Template: ${template.name} - Sent: ${sentCount}, Failed: ${failedCount}, Total: ${recipients.length}`,
+      details: `Template: ${template.name} - Sent: ${sentCount}, Failed: ${failedCount}`,
       status: failedCount > 0 ? 'warning' : 'success',
     });
 
     return res.json({
       success: true,
-      campaignId,
-      stats: calculatedStats,
-      recipients: recipientRecords,
-      errors: errors.slice(0, 10),
+      stats: {
+        sent: sentCount,
+        failed: failedCount,
+        delivered: 0,
+        read: 0,
+      },
+      errors: errors.slice(0, 5),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Error executing broadcast campaign';
@@ -1109,6 +998,265 @@ export function handleWebhookVerification(req: Request, res: Response) {
   return res.sendStatus(400);
 }
 
+// Helper: Process incoming WhatsApp messages, persist to Firestore Inbox and trigger active Bot Flow
+async function processIncomingWhatsAppWebhookPayload(value: any) {
+  try {
+    const phoneNumberId = value.metadata?.phone_number_id;
+    if (!value.messages || !Array.isArray(value.messages)) return;
+
+    // 1. Find organization owning this phoneNumberId
+    const orgsSnap = await getDocs(collection(serverDb, 'organizations'));
+    let targetOrgId = '';
+    let matchedAccount: any = null;
+
+    for (const orgDoc of orgsSnap.docs) {
+      const accsSnap = await getDocs(collection(serverDb, `organizations/${orgDoc.id}/whatsappAccounts`));
+      for (const aDoc of accsSnap.docs) {
+        const a = aDoc.data();
+        if (a.phoneNumberId === phoneNumberId || a.id === phoneNumberId) {
+          targetOrgId = orgDoc.id;
+          matchedAccount = { id: aDoc.id, ...a };
+          break;
+        }
+      }
+      if (targetOrgId) break;
+    }
+
+    if (!targetOrgId && orgsSnap.docs.length > 0) {
+      targetOrgId = orgsSnap.docs[0].id;
+    }
+
+    if (!targetOrgId) {
+      console.warn('[Webhook] No organization found for incoming message on phone_number_id:', phoneNumberId);
+      return;
+    }
+
+    const token = matchedAccount?.customToken || getMetaConfig().systemToken;
+
+    for (const msg of value.messages) {
+      const contactInfo = value.contacts?.[0] || {};
+      const senderName = contactInfo.profile?.name || msg.from;
+      const cleanPhone = String(msg.from).replace(/[^0-9]/g, '');
+      const convId = `conv_${cleanPhone}`;
+      const msgId = msg.id || `wamid_${Date.now()}`;
+      const now = new Date().toISOString();
+
+      let textBody = '';
+      if (msg.type === 'interactive') {
+        textBody = msg.interactive?.button_reply?.title || msg.interactive?.list_reply?.title || 'Option selected';
+      } else if (msg.type === 'text') {
+        textBody = msg.text?.body || '';
+      } else if (msg.type === 'image') {
+        textBody = msg.image?.caption || '[Image received]';
+      } else if (msg.type === 'document') {
+        textBody = msg.document?.filename ? `[Document: ${msg.document.filename}]` : '[Document received]';
+      } else {
+        textBody = `[${(msg.type || 'message').toUpperCase()}]`;
+      }
+
+      // Save Contact with real WhatsApp profile name
+      const contactRef = doc(serverDb, `organizations/${targetOrgId}/contacts`, `cnt_${cleanPhone}`);
+      await setDoc(
+        contactRef,
+        {
+          id: `cnt_${cleanPhone}`,
+          name: senderName,
+          phone: `+${cleanPhone}`,
+          optInStatus: 'opted_in',
+          updatedAt: now,
+          createdAt: now,
+        },
+        { merge: true }
+      );
+
+      // Save inbound message in Firestore Inbox
+      const msgRef = doc(serverDb, `organizations/${targetOrgId}/messages`, msgId);
+      await setDoc(msgRef, {
+        id: msgId,
+        whatsAppAccountId: matchedAccount?.id || phoneNumberId,
+        contactId: cleanPhone,
+        conversationId: convId,
+        direction: 'inbound',
+        messageType: msg.type || 'text',
+        messageStatus: 'delivered',
+        metaMessageId: msgId,
+        body: textBody,
+        timestamp: now,
+      });
+
+      // Update Conversation Thread in Firestore
+      const convRef = doc(serverDb, `organizations/${targetOrgId}/conversations`, convId);
+      await setDoc(
+        convRef,
+        {
+          id: convId,
+          contactId: cleanPhone,
+          contactPhone: `+${cleanPhone}`,
+          contactName: senderName,
+          whatsAppAccountId: matchedAccount?.id || phoneNumberId,
+          lastMessage: textBody,
+          lastMessageAt: now,
+          unreadCount: 1,
+          status: 'open',
+        },
+        { merge: true }
+      );
+
+      addWebhookLog({
+        event: 'Inbox Real Message Stored',
+        origin: `WhatsApp: +${cleanPhone} (${senderName})`,
+        details: `Saved to Inbox: "${textBody}"`,
+        status: 'success',
+      });
+
+      // CHATBOT ENGINE: Evaluate active bot flows for this incoming message
+      const flowsSnap = await getDocs(collection(serverDb, `organizations/${targetOrgId}/botFlows`));
+      const activeFlows: any[] = [];
+      flowsSnap.forEach((d) => {
+        const f = d.data();
+        if (f.enabled) activeFlows.push({ id: d.id, ...f });
+      });
+
+      const upperText = textBody.trim().toUpperCase();
+      let matchedFlow: any = null;
+
+      for (const flow of activeFlows) {
+        if (flow.phoneNumberId && phoneNumberId && flow.phoneNumberId !== phoneNumberId) {
+          continue;
+        }
+        const condition = flow.triggerCondition || 'exact';
+        const flowKeywords = (flow.keywords || []).map((k: string) => k.trim().toUpperCase());
+
+        if (condition === 'anything_else') {
+          matchedFlow = flow;
+          break;
+        }
+
+        const isMatch = flowKeywords.some((kw: string) => {
+          if (!kw) return false;
+          if (condition === 'exact') return upperText === kw;
+          if (condition === 'contains') return upperText.includes(kw);
+          if (condition === 'begins_with') return upperText.startsWith(kw);
+          if (condition === 'ends_with') return upperText.endsWith(kw);
+          if (condition === 'whole_word') {
+            const regex = new RegExp(`\\b${kw}\\b`, 'i');
+            return regex.test(textBody);
+          }
+          return upperText.includes(kw);
+        });
+
+        if (isMatch) {
+          matchedFlow = flow;
+          break;
+        }
+      }
+
+      if (matchedFlow) {
+        // Trigger matched flow!
+        const firstStep =
+          matchedFlow.steps?.find((s: any) => s.id === matchedFlow.initialStepId) ||
+          matchedFlow.steps?.[0];
+
+        if (firstStep && token && phoneNumberId) {
+          // Send response via Meta Cloud API
+          const sendUrl = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
+          let outPayload: any = {
+            messaging_product: 'whatsapp',
+            recipient_type: 'individual',
+            to: cleanPhone,
+          };
+
+          if (firstStep.type === 'interactive_button' && firstStep.buttons?.length > 0) {
+            outPayload = {
+              ...outPayload,
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                header: firstStep.headerText ? { type: 'text', text: firstStep.headerText } : undefined,
+                body: { text: firstStep.body || 'Please choose an option:' },
+                footer: firstStep.footer ? { text: firstStep.footer } : undefined,
+                action: {
+                  buttons: firstStep.buttons.slice(0, 3).map((b: any) => ({
+                    type: 'reply',
+                    reply: {
+                      id: b.id,
+                      title: b.title.slice(0, 20),
+                    },
+                  })),
+                },
+              },
+            };
+          } else if (firstStep.type === 'media' && firstStep.mediaUrl) {
+            outPayload = {
+              ...outPayload,
+              type: firstStep.mediaType === 'image' ? 'image' : 'document',
+              [firstStep.mediaType === 'image' ? 'image' : 'document']: {
+                link: firstStep.mediaUrl,
+                caption: firstStep.body || undefined,
+                filename: firstStep.mediaFileName || 'Catalog.pdf',
+              },
+            };
+          } else {
+            outPayload = {
+              ...outPayload,
+              type: 'text',
+              text: { body: firstStep.body || 'Thank you for reaching out.' },
+            };
+          }
+
+          try {
+            const metaRes = await fetch(sendUrl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify(outPayload),
+            });
+            const metaData = await metaRes.json();
+
+            const botNow = new Date(Date.now() + 500).toISOString();
+            const botMsgId = metaData.messages?.[0]?.id || `msg_bot_${Date.now()}`;
+
+            // Save bot response to Firestore
+            await setDoc(doc(serverDb, `organizations/${targetOrgId}/messages`, botMsgId), {
+              id: botMsgId,
+              whatsAppAccountId: matchedAccount?.id || phoneNumberId,
+              contactId: cleanPhone,
+              conversationId: convId,
+              direction: 'outbound',
+              messageType: firstStep.type === 'interactive_button' ? 'interactive' : firstStep.type || 'text',
+              messageStatus: 'sent',
+              headerText: firstStep.headerText,
+              body: firstStep.body,
+              mediaUrl: firstStep.mediaUrl,
+              mediaFileName: firstStep.mediaFileName,
+              buttons: firstStep.buttons,
+              timestamp: botNow,
+            });
+
+            await updateDoc(convRef, {
+              lastMessage: firstStep.body || 'Chatbot Response',
+              lastMessageAt: botNow,
+            });
+
+            addWebhookLog({
+              event: 'Chatbot Automated Reply Dispatched',
+              origin: `Flow: ${matchedFlow.name}`,
+              details: `Replied to +${cleanPhone} with Step: "${firstStep.title}"`,
+              status: 'success',
+            });
+          } catch (sendErr: any) {
+            console.error('[Webhook] Failed to dispatch bot reply via Meta:', sendErr);
+          }
+        }
+      }
+    }
+  } catch (err: any) {
+    console.error('[Webhook] Error processing incoming WhatsApp webhook:', err);
+  }
+}
+
 // Handler: Meta Webhook POST notifications (Incoming messages & statuses)
 export function handleWebhookPost(req: Request, res: Response) {
   const body = req.body;
@@ -1131,18 +1279,6 @@ export function handleWebhookPost(req: Request, res: Response) {
                     status: statusObj.status === 'failed' ? 'error' : 'success',
                     rawPayload: statusObj,
                   });
-
-                  // Process status update idempotently in Campaign Analytics engine
-                  processWebhookStatusUpdate({
-                    wamid: statusObj.id,
-                    status: statusObj.status,
-                    timestampSeconds: statusObj.timestamp,
-                    recipientPhone: statusObj.recipient_id,
-                    errorObj: statusObj.errors?.[0],
-                    rawPayload: statusObj,
-                  }).catch((err) => {
-                    console.warn('[Webhook] Error processing status update:', err);
-                  });
                 }
               }
 
@@ -1151,7 +1287,11 @@ export function handleWebhookPost(req: Request, res: Response) {
                 for (const msg of value.messages) {
                   const contactInfo = value.contacts?.[0] || {};
                   const senderName = contactInfo.profile?.name || msg.from;
-                  const textBody = msg.text?.body || (msg.type ? `[${msg.type.toUpperCase()}]` : 'Message');
+                  const textBody =
+                    msg.interactive?.button_reply?.title ||
+                    msg.interactive?.list_reply?.title ||
+                    msg.text?.body ||
+                    (msg.type ? `[${msg.type.toUpperCase()}]` : 'Message');
 
                   addWebhookLog({
                     event: 'Incoming Message',
@@ -1160,17 +1300,12 @@ export function handleWebhookPost(req: Request, res: Response) {
                     status: 'success',
                     rawPayload: msg,
                   });
-
-                  // Check if this incoming message correlates to a campaign recipient reply
-                  processIncomingCustomerReply({
-                    fromPhone: msg.from,
-                    messageText: textBody,
-                    timestampSeconds: msg.timestamp,
-                    wamid: msg.id,
-                  }).catch((err) => {
-                    console.warn('[Webhook] Error correlating customer reply:', err);
-                  });
                 }
+
+                // Process real incoming WhatsApp messages into Firestore Inbox & run Bot
+                processIncomingWhatsAppWebhookPayload(value).catch((err) => {
+                  console.error('[Webhook] Failed to process incoming WhatsApp messages:', err);
+                });
               }
 
               // 3. Handle official Meta Template Status Updates (APPROVED, REJECTED, PAUSED)
@@ -1202,124 +1337,9 @@ export function handleGetWebhookLogs(req: Request, res: Response) {
   res.json({ logs: getWebhookLogs() });
 }
 
-// Handler: Get Campaign Real-Time Analytics
-export function handleGetCampaignAnalytics(req: Request, res: Response) {
-  try {
-    const campaignId = req.params.campaignId;
-    if (!campaignId) {
-      return res.status(400).json({ error: 'campaignId parameter is required' });
-    }
-    const analytics = getCampaignAnalytics(campaignId);
-    return res.json(analytics);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to fetch campaign analytics';
-    return res.status(500).json({ error: message });
-  }
-}
+export {
+  handleGetCampaignAnalytics,
+  handleGetCampaignMessages,
+  handleGetMessageDetails,
+} from './campaignAnalyticsService.ts';
 
-// Handler: Get Campaign Recipient Messages with Search & Pagination
-export function handleGetCampaignMessages(req: Request, res: Response) {
-  try {
-    const campaignId = req.params.campaignId;
-    if (!campaignId) {
-      return res.status(400).json({ error: 'campaignId parameter is required' });
-    }
-    const { search, status, page, limit } = req.query;
-    const result = getCampaignRecipients(campaignId, {
-      search: typeof search === 'string' ? search : undefined,
-      status: typeof status === 'string' ? status : undefined,
-      page: page ? Number(page) : undefined,
-      limit: limit ? Number(limit) : undefined,
-    });
-    return res.json(result);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to fetch campaign messages';
-    return res.status(500).json({ error: message });
-  }
-}
-
-// Handler: Get Single Message / Recipient Tracking Details
-export function handleGetMessageDetails(req: Request, res: Response) {
-  try {
-    const messageId = req.params.messageId;
-    if (!messageId) {
-      return res.status(400).json({ error: 'messageId parameter is required' });
-    }
-    const details = getMessageDetails(messageId);
-    if (!details) {
-      return res.status(404).json({ error: 'Message record not found' });
-    }
-    return res.json(details);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to fetch message details';
-    return res.status(500).json({ error: message });
-  }
-}
-
-// Handler: Sync Real-Time Campaign Delivery Stats
-export async function handleSyncCampaignDelivery(req: Request, res: Response) {
-  try {
-    const { campaignId } = req.body;
-    if (!campaignId) {
-      return res.status(400).json({ error: 'campaignId is required' });
-    }
-    const recipientsResult = getCampaignRecipients(campaignId, { limit: 1000 });
-    const statsResult = getCampaignAnalytics(campaignId);
-    return res.json({
-      success: true,
-      campaignId,
-      stats: statsResult.stats,
-      recipients: recipientsResult.recipients,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to sync campaign delivery';
-    return res.status(500).json({ error: message });
-  }
-}
-
-// Handler: Simulate/Test Customer Reading Message on WhatsApp
-export async function handleSimulateCampaignRead(req: Request, res: Response) {
-  try {
-    const { campaignId } = req.body;
-    if (!campaignId) {
-      return res.status(400).json({ error: 'campaignId is required' });
-    }
-    const recipientsResult = getCampaignRecipients(campaignId, { limit: 1000 });
-    const list = recipientsResult.recipients;
-
-    const target = list.find((r) => r.currentStatus !== 'read' && r.currentStatus !== 'failed') || list[0];
-    const nowIso = new Date().toISOString();
-
-    if (target) {
-      target.currentStatus = 'read';
-      target.readAt = target.readAt || nowIso;
-      if (!target.deliveredAt) target.deliveredAt = nowIso;
-      target.updatedAt = nowIso;
-      target.timeline.push({
-        status: 'read',
-        timestamp: nowIso,
-        description: 'Read by recipient on WhatsApp (blue ticks)',
-      });
-
-      addWebhookLog({
-        event: 'Status: READ',
-        origin: 'WhatsApp Message Status',
-        details: `Meta ID: ${target.whatsappMessageId || target.id} - Status: read - Recipient: ${target.phoneNumber}`,
-        status: 'success',
-        rawPayload: { id: target.whatsappMessageId, status: 'read', recipient_id: target.phoneNumber },
-      });
-    }
-
-    const calculatedStats = calculateCampaignStats(list);
-    return res.json({
-      success: true,
-      campaignId,
-      stats: calculatedStats,
-      recipients: list,
-      message: target ? `Marked message for ${target.phoneNumber} as READ.` : 'No active recipient found to mark as read.',
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to simulate read event';
-    return res.status(500).json({ error: message });
-  }
-}
