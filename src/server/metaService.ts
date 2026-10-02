@@ -1815,42 +1815,6 @@ export function handleWebhookPost(req: Request, res: Response) {
         status: tplEvent === 'APPROVED' ? 'success' : tplEvent === 'REJECTED' ? 'error' : 'warning',
         rawPayload: value,
       });
-
-      // Update Firestore template status in real-time
-      (async () => {
-        try {
-          const orgsSnap = await getDocs(collection(serverDb, 'organizations'));
-          for (const orgDoc of orgsSnap.docs) {
-            const tplsRef = collection(serverDb, `organizations/${orgDoc.id}/templates`);
-            const q = query(tplsRef, where('name', '==', tplName));
-            const snap = await getDocs(q);
-            for (const d of snap.docs) {
-              await updateDoc(d.ref, {
-                status: tplEvent,
-                rejectionReason: reason || null,
-                updatedAt: new Date().toISOString(),
-              }).catch(() => {});
-            }
-          }
-        } catch (err) {
-          console.warn('[Webhook] Could not update template in Firestore:', err);
-        }
-      })();
-    }
-
-    // 4. Handle Phone Number Quality & Account Updates
-    if (field === 'phone_number_quality_update' || field === 'account_update' || value.phone_number_quality_update) {
-      const currentQuality = value.current_limit || value.quality_rating || value.quality_score?.fitness_status;
-      const phoneId = value.phone_number_id || value.display_phone_number;
-      if (currentQuality && phoneId) {
-        addWebhookLog({
-          event: 'Phone Number Quality Updated',
-          origin: 'WhatsApp Business Account',
-          details: `Phone: ${phoneId} - Quality: ${currentQuality}`,
-          status: 'success',
-          rawPayload: value,
-        });
-      }
     }
   }
 
