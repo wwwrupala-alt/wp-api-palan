@@ -1,8 +1,39 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
+
+    // Connection testing endpoint for healthchecks
+    match /test/{docId} {
       allow read, write: if true;
+    }
+
+    // Global system configuration
+    match /system_config/{configId} {
+      allow read, write: if true;
+    }
+
+    // Webhook audit events
+    match /webhook_events/{eventId} {
+      allow read, write: if true;
+    }
+
+    // WAMID Tracking mapping for campaign and message delivery
+    match /wamidTracker/{wamid} {
+      allow read, write: if true;
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+
+    // Organizations Collection and all Subcollections
+    match /organizations/{orgId} {
+      allow read, write: if true;
+
+      match /{allSubcollections=**} {
+        allow read, write: if true;
+      }
     }
   }
 }

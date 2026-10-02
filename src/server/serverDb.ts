@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { initializeFirestore, doc, setDoc, getDocs, collection, query, where, updateDoc } from 'firebase/firestore';
+import { initializeFirestore, doc, setDoc, getDoc, getDocs, collection, query, where, updateDoc } from 'firebase/firestore';
 import fs from 'fs';
 import path from 'path';
 
@@ -22,4 +22,4 @@ export const serverDb = initializeFirestore(
   firebaseConfig.firestoreDatabaseId
 );
 
-export { doc, setDoc, getDocs, collection, query, where, updateDoc };
+export { doc, setDoc, getDoc, getDocs, collection, query, where, updateDoc };

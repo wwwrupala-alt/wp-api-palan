@@ -15,6 +15,7 @@ import {
   handleWebhookPost,
   handleGetWebhookLogs,
   handleSaveAdminMetaConfig,
+  processIncomingWhatsAppStatusUpdate,
 } from './metaService.ts';
 import {
   handleGetCampaignAnalytics,
@@ -57,3 +58,19 @@ apiApp.post('/api/webhooks/whatsapp', handleWebhookPost);
 apiApp.get('/api/meta/webhook', handleWebhookVerification);
 apiApp.post('/api/meta/webhook', handleWebhookPost);
 apiApp.get('/api/meta/webhook/logs', handleGetWebhookLogs);
+apiApp.post('/api/meta/simulate-status', async (req, res) => {
+  try {
+    const { wamid, status, phone } = req.body;
+    const statusObj = {
+      id: wamid || `wamid_${Date.now()}`,
+      status: status || 'read',
+      timestamp: Math.floor(Date.now() / 1000).toString(),
+      recipient_id: phone ? String(phone).replace(/[^0-9]/g, '') : '',
+    };
+    await processIncomingWhatsAppStatusUpdate(statusObj);
+    res.json({ success: true, statusObj });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Error simulating status' });
+  }
+});
+

@@ -8,10 +8,19 @@ import {
   serverDb,
   doc,
   setDoc,
+  getDoc,
   getDocs,
   collection,
+  query,
+  where,
   updateDoc,
 } from './serverDb.ts';
+import {
+  registerRecipients,
+  processWebhookStatusUpdate,
+  processIncomingCustomerReply,
+} from './campaignAnalyticsService.ts';
+import type { CampaignRecipient } from '../types/index.ts';
 
 // In-memory webhook event logs buffer for real-time visibility in the Admin panel
 export interface WebhookEventRecord {
@@ -721,6 +730,27 @@ export async function handleSendMessage(req: Request, res: Response) {
 
     const metaMessageId = sendData.messages?.[0]?.id || `wamid_${Date.now()}`;
 
+    if (metaMessageId) {
+      const now = new Date().toISOString();
+      try {
+        await setDoc(
+          doc(serverDb, 'wamidTracker', metaMessageId),
+          {
+            wamid: metaMessageId,
+            organizationId: req.body.organizationId || '',
+            conversationId: req.body.conversationId || `conv_${cleanPhone}`,
+            phoneNumber: cleanPhone,
+            status: 'sent',
+            createdAt: now,
+            updatedAt: now,
+          },
+          { merge: true }
+        );
+      } catch (trackerErr) {
+        console.warn('[handleSendMessage] Could not index wamidTracker:', trackerErr);
+      }
+    }
+
     addWebhookLog({
       event: 'Outbound Message Sent',
       origin: 'WhatsApp Cloud API',
@@ -742,7 +772,16 @@ export async function handleSendMessage(req: Request, res: Response) {
 // Handler: Dispatch Campaign Broadcast via Meta Cloud API
 export async function handleSendCampaign(req: Request, res: Response) {
   try {
-    const { phoneNumberId, template, recipients, variableValues, customToken } = req.body;
+    const {
+      phoneNumberId,
+      template,
+      recipients,
+      variableValues,
+      customToken,
+      campaignId,
+      campaignName,
+      organizationId,
+    } = req.body;
     const config = getMetaConfig();
     const token =
       customToken ||
@@ -766,12 +805,17 @@ export async function handleSendCampaign(req: Request, res: Response) {
     let sentCount = 0;
     let failedCount = 0;
     const errors: Array<{ phone: string; error: string }> = [];
+    const dispatchedRecipients: CampaignRecipient[] = [];
+    const nowIso = new Date().toISOString();
 
     // Send messages in batches adhering to Meta rate limits
     for (const recipient of recipients) {
       const cleanPhone = (recipient.phone || recipient).replace(/[^0-9]/g, '');
       const recipientVariables = recipient.variableValues || variableValues || {};
       const formattedComponents = formatTemplateComponentsForSending(template.components, recipientVariables);
+      const recipientId = recipient.id || `rec_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const customerName = recipient.name || 'Customer';
+
       try {
         const sendUrl = `https://graph.facebook.com/${config.graphVersion}/${phoneNumberId}/messages`;
         const resMeta = await fetch(sendUrl, {
@@ -796,13 +840,135 @@ export async function handleSendCampaign(req: Request, res: Response) {
         const dataMeta = await resMeta.json();
         if (resMeta.ok && !dataMeta.error) {
           sentCount++;
+          const wamid = dataMeta.messages?.[0]?.id || `wamid_${Date.now()}_${cleanPhone}`;
+
+          const recItem: CampaignRecipient = {
+            id: recipientId,
+            campaignId: campaignId || '',
+            campaignName: campaignName || template.name,
+            organizationId: organizationId || '',
+            phoneNumber: `+${cleanPhone}`,
+            customerName,
+            whatsappMessageId: wamid,
+            currentStatus: 'sent',
+            sentAt: nowIso,
+            timeline: [
+              {
+                status: 'queued',
+                timestamp: nowIso,
+                description: 'Campaign message queued',
+              },
+              {
+                status: 'sent',
+                timestamp: nowIso,
+                description: 'Dispatched via Meta WhatsApp Cloud API',
+                details: `WAMID: ${wamid}`,
+              },
+            ],
+            createdAt: nowIso,
+            updatedAt: nowIso,
+          };
+          dispatchedRecipients.push(recItem);
+
+          if (organizationId && campaignId) {
+            try {
+              // 1. Save recipient to campaign subcollection in Firestore
+              const recDocRef = doc(serverDb, `organizations/${organizationId}/campaigns/${campaignId}/recipients`, recipientId);
+              await setDoc(recDocRef, recItem, { merge: true });
+
+              // 2. Index in wamidTracker for instantaneous status webhook correlation
+              const trackerRef = doc(serverDb, 'wamidTracker', wamid);
+              await setDoc(
+                trackerRef,
+                {
+                  wamid,
+                  organizationId,
+                  campaignId,
+                  recipientId,
+                  phoneNumber: cleanPhone,
+                  customerName,
+                  status: 'sent',
+                  updatedAt: nowIso,
+                },
+                { merge: true }
+              );
+            } catch (saveErr) {
+              console.warn('[Broadcast] Error writing recipient/tracker to Firestore:', saveErr);
+            }
+          }
         } else {
           failedCount++;
-          errors.push({ phone: cleanPhone, error: dataMeta.error?.message || 'Meta rejection' });
+          const errorMsg = dataMeta.error?.message || 'Meta rejection';
+          errors.push({ phone: cleanPhone, error: errorMsg });
+
+          const failRec: CampaignRecipient = {
+            id: recipientId,
+            campaignId: campaignId || '',
+            campaignName: campaignName || template.name,
+            organizationId: organizationId || '',
+            phoneNumber: `+${cleanPhone}`,
+            customerName,
+            currentStatus: 'failed',
+            failedAt: nowIso,
+            failureReason: errorMsg,
+            failureCode: dataMeta.error?.code ? String(dataMeta.error.code) : undefined,
+            timeline: [
+              {
+                status: 'failed',
+                timestamp: nowIso,
+                description: `Failed to deliver: ${errorMsg}`,
+              },
+            ],
+            createdAt: nowIso,
+            updatedAt: nowIso,
+          };
+          dispatchedRecipients.push(failRec);
+
+          if (organizationId && campaignId) {
+            try {
+              const recDocRef = doc(serverDb, `organizations/${organizationId}/campaigns/${campaignId}/recipients`, recipientId);
+              await setDoc(recDocRef, failRec, { merge: true });
+            } catch (saveErr) {
+              console.warn('[Broadcast] Error saving failed recipient to Firestore:', saveErr);
+            }
+          }
         }
       } catch (err) {
         failedCount++;
-        errors.push({ phone: cleanPhone, error: err instanceof Error ? err.message : 'Network error' });
+        const netError = err instanceof Error ? err.message : 'Network error';
+        errors.push({ phone: cleanPhone, error: netError });
+      }
+    }
+
+    if (campaignId) {
+      registerRecipients(campaignId, dispatchedRecipients, organizationId);
+    }
+
+    const campaignStats = {
+      sent: sentCount,
+      failed: failedCount,
+      delivered: 0,
+      read: 0,
+      replied: 0,
+      total: recipients.length,
+      queued: 0,
+      deliveryRate: 0,
+      readRate: 0,
+      failureRate: recipients.length > 0 ? Number(((failedCount / recipients.length) * 100).toFixed(1)) : 0,
+      replyRate: 0,
+    };
+
+    if (organizationId && campaignId) {
+      try {
+        const campDocRef = doc(serverDb, `organizations/${organizationId}/campaigns`, campaignId);
+        await updateDoc(campDocRef, {
+          status: 'completed',
+          completedAt: nowIso,
+          stats: campaignStats,
+          updatedAt: nowIso,
+        });
+      } catch (campErr) {
+        console.warn('[Broadcast] Error updating campaign stats:', campErr);
       }
     }
 
@@ -815,12 +981,8 @@ export async function handleSendCampaign(req: Request, res: Response) {
 
     return res.json({
       success: true,
-      stats: {
-        sent: sentCount,
-        failed: failedCount,
-        delivered: 0,
-        read: 0,
-      },
+      stats: campaignStats,
+      recipients: dispatchedRecipients,
       errors: errors.slice(0, 5),
     });
   } catch (error) {
@@ -1109,6 +1271,17 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
         status: 'success',
       });
 
+      // Correlate with campaign delivery: mark recipient as replied and read in real-time
+      processIncomingCustomerReply({
+        fromPhone: cleanPhone,
+        messageText: textBody,
+        timestampSeconds: msg.timestamp,
+        wamid: msg.id,
+        organizationId: targetOrgId,
+      }).catch((err) => {
+        console.warn('[Webhook] processIncomingCustomerReply error:', err);
+      });
+
       // CHATBOT ENGINE: Evaluate active bot flows for this incoming message
       const flowsSnap = await getDocs(collection(serverDb, `organizations/${targetOrgId}/botFlows`));
       const activeFlows: any[] = [];
@@ -1257,79 +1430,395 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
   }
 }
 
+/**
+ * Processes incoming WhatsApp message status updates (sent, delivered, read, failed)
+ * and updates Firestore in real-time so that campaign analytics and inbox blue ticks update.
+ */
+export async function processIncomingWhatsAppStatusUpdate(statusObj: any, metadata?: any) {
+  try {
+    const wamid = statusObj.id;
+    if (!wamid) return;
+
+    const rawStatus = (statusObj.status || '').toLowerCase().trim();
+    const validStatuses = ['sent', 'delivered', 'read', 'failed'];
+    if (!validStatuses.includes(rawStatus)) {
+      return;
+    }
+    const status = rawStatus as 'sent' | 'delivered' | 'read' | 'failed';
+
+    const timestampSeconds = statusObj.timestamp;
+    const nowIso = new Date().toISOString();
+    const eventTimeIso = timestampSeconds
+      ? new Date(Number(timestampSeconds) * 1000).toISOString()
+      : nowIso;
+
+    const recipientPhone = statusObj.recipient_id ? String(statusObj.recipient_id).replace(/[^0-9]/g, '') : '';
+    const errorObj = statusObj.errors?.[0];
+
+    // 1. Process into in-memory analytics engine
+    try {
+      await processWebhookStatusUpdate({
+        wamid,
+        status,
+        timestampSeconds,
+        recipientPhone,
+        errorObj,
+        rawPayload: statusObj,
+      });
+    } catch (memErr) {
+      console.warn('[processIncomingWhatsAppStatusUpdate] In-memory update error:', memErr);
+    }
+
+    // 2. Look up in wamidTracker to find campaign and recipient IDs
+    let targetOrgId = '';
+    let targetCampaignId = '';
+    let targetRecipientId = '';
+
+    try {
+      const trackerSnap = await getDoc(doc(serverDb, 'wamidTracker', wamid));
+      if (trackerSnap.exists()) {
+        const d: any = trackerSnap.data();
+        targetOrgId = d.organizationId || '';
+        targetCampaignId = d.campaignId || '';
+        targetRecipientId = d.recipientId || '';
+      }
+    } catch (trackerErr) {
+      console.warn('[processIncomingWhatsAppStatusUpdate] Tracker lookup error:', trackerErr);
+    }
+
+    // 3. If not in wamidTracker, search Firestore across organizations and campaigns
+    if (!targetRecipientId) {
+      try {
+        const orgsSnap = await getDocs(collection(serverDb, 'organizations'));
+        for (const orgDoc of orgsSnap.docs) {
+          const orgId = orgDoc.id;
+          const campsSnap = await getDocs(collection(serverDb, `organizations/${orgId}/campaigns`));
+
+          for (const campDoc of campsSnap.docs) {
+            const campId = campDoc.id;
+            const recsQuery = query(
+              collection(serverDb, `organizations/${orgId}/campaigns/${campId}/recipients`),
+              where('whatsappMessageId', '==', wamid)
+            );
+            const recsSnap = await getDocs(recsQuery);
+            if (!recsSnap.empty) {
+              targetOrgId = orgId;
+              targetCampaignId = campId;
+              targetRecipientId = recsSnap.docs[0].id;
+              break;
+            }
+          }
+          if (targetRecipientId) break;
+        }
+
+        // If still not matched by WAMID, match by phone in recent campaigns
+        if (!targetRecipientId && recipientPhone) {
+          for (const orgDoc of orgsSnap.docs) {
+            const orgId = orgDoc.id;
+            const campsSnap = await getDocs(collection(serverDb, `organizations/${orgId}/campaigns`));
+            const campList: any[] = [];
+            campsSnap.forEach((d) => campList.push({ id: d.id, ...d.data() }));
+            campList.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+
+            for (const camp of campList.slice(0, 5)) {
+              const recsSnap = await getDocs(collection(serverDb, `organizations/${orgId}/campaigns/${camp.id}/recipients`));
+              for (const rDoc of recsSnap.docs) {
+                const rData: any = rDoc.data();
+                const rPhone = String(rData.phoneNumber || '').replace(/[^0-9]/g, '');
+                if (rPhone === recipientPhone || rPhone.endsWith(recipientPhone) || recipientPhone.endsWith(rPhone)) {
+                  targetOrgId = orgId;
+                  targetCampaignId = camp.id;
+                  targetRecipientId = rDoc.id;
+                  break;
+                }
+              }
+              if (targetRecipientId) break;
+            }
+            if (targetRecipientId) break;
+          }
+        }
+      } catch (searchErr) {
+        console.warn('[processIncomingWhatsAppStatusUpdate] Search error:', searchErr);
+      }
+    }
+
+    // 4. Update the campaign recipient and recalculate campaign stats in Firestore
+    if (targetOrgId && targetCampaignId && targetRecipientId) {
+      try {
+        const recRef = doc(serverDb, `organizations/${targetOrgId}/campaigns/${targetCampaignId}/recipients`, targetRecipientId);
+        const recSnap = await getDoc(recRef);
+        const existingData: any = recSnap.exists() ? recSnap.data() : {};
+
+        const rank: Record<string, number> = { queued: 0, sent: 1, delivered: 2, read: 3, failed: -1 };
+        const currentRank = rank[existingData?.currentStatus || 'queued'] ?? 0;
+        const newRank = rank[status] ?? 0;
+
+        const updateFields: any = {
+          updatedAt: nowIso,
+          whatsappMessageId: wamid,
+        };
+
+        if (status === 'failed') {
+          updateFields.currentStatus = 'failed';
+          updateFields.failedAt = existingData?.failedAt || eventTimeIso;
+          updateFields.failureReason = errorObj?.message || errorObj?.title || 'WhatsApp Cloud API rejection';
+          if (errorObj?.code) updateFields.failureCode = String(errorObj.code);
+        } else if (newRank >= currentRank) {
+          updateFields.currentStatus = status;
+          if (status === 'sent') updateFields.sentAt = existingData?.sentAt || eventTimeIso;
+          if (status === 'delivered') updateFields.deliveredAt = existingData?.deliveredAt || eventTimeIso;
+          if (status === 'read') {
+            updateFields.readAt = existingData?.readAt || eventTimeIso;
+            if (!existingData?.deliveredAt) updateFields.deliveredAt = eventTimeIso;
+            if (!existingData?.sentAt) updateFields.sentAt = eventTimeIso;
+          }
+        }
+
+        // Timeline entry
+        let desc = `Message ${status}`;
+        if (status === 'sent') desc = 'Message sent via Meta Cloud API';
+        if (status === 'delivered') desc = 'Delivered to recipient phone (double ticks)';
+        if (status === 'read') desc = 'Read by recipient (blue ticks)';
+        if (status === 'failed') desc = `Failed to deliver: ${updateFields.failureReason || 'Meta rejection'}`;
+
+        const existingTimeline: any[] = Array.isArray(existingData?.timeline) ? existingData.timeline : [];
+        const isDuplicate = existingTimeline.some(
+          (t: any) => t.status === status && Math.abs(new Date(t.timestamp).getTime() - new Date(eventTimeIso).getTime()) < 5000
+        );
+
+        if (!isDuplicate) {
+          updateFields.timeline = [
+            ...existingTimeline,
+            {
+              status,
+              timestamp: eventTimeIso,
+              description: desc,
+              details: errorObj ? JSON.stringify(errorObj) : undefined,
+            },
+          ];
+        }
+
+        await updateDoc(recRef, updateFields);
+
+        // Update wamidTracker for subsequent events
+        await setDoc(
+          doc(serverDb, 'wamidTracker', wamid),
+          {
+            wamid,
+            organizationId: targetOrgId,
+            campaignId: targetCampaignId,
+            recipientId: targetRecipientId,
+            phoneNumber: recipientPhone,
+            status,
+            updatedAt: nowIso,
+          },
+          { merge: true }
+        );
+
+        // Recalculate campaign stats
+        const allRecsSnap = await getDocs(collection(serverDb, `organizations/${targetOrgId}/campaigns/${targetCampaignId}/recipients`));
+        let sentCount = 0;
+        let deliveredCount = 0;
+        let readCount = 0;
+        let failedCount = 0;
+        let repliedCount = 0;
+        let totalCount = 0;
+
+        allRecsSnap.forEach((d) => {
+          totalCount++;
+          const r: any = d.data();
+          if (r.currentStatus === 'sent' || r.sentAt) sentCount++;
+          if (r.currentStatus === 'delivered' || r.deliveredAt) deliveredCount++;
+          if (r.currentStatus === 'read' || r.readAt) {
+            readCount++;
+            if (!r.deliveredAt) deliveredCount++;
+          }
+          if (r.currentStatus === 'failed') failedCount++;
+          if (r.hasReplied || r.repliedAt) repliedCount++;
+        });
+
+        const deliveryRate = totalCount > 0 ? Number(((deliveredCount / totalCount) * 100).toFixed(1)) : 0;
+        const readRate = deliveredCount > 0 ? Number(((readCount / deliveredCount) * 100).toFixed(1)) : 0;
+        const failureRate = totalCount > 0 ? Number(((failedCount / totalCount) * 100).toFixed(1)) : 0;
+        const replyRate = deliveredCount > 0 ? Number(((repliedCount / deliveredCount) * 100).toFixed(1)) : 0;
+
+        await updateDoc(doc(serverDb, `organizations/${targetOrgId}/campaigns`, targetCampaignId), {
+          stats: {
+            total: totalCount,
+            sent: Math.max(sentCount, deliveredCount, readCount),
+            delivered: deliveredCount,
+            read: readCount,
+            failed: failedCount,
+            replied: repliedCount,
+            deliveryRate,
+            readRate,
+            failureRate,
+            replyRate,
+          },
+          updatedAt: nowIso,
+        }).catch(() => {});
+
+      } catch (err) {
+        console.warn('[processIncomingWhatsAppStatusUpdate] Recipient update error:', err);
+      }
+    }
+
+    // 5. Update messages collection for Inbox double check ticks
+    try {
+      const orgsSnap = await getDocs(collection(serverDb, 'organizations'));
+      for (const orgDoc of orgsSnap.docs) {
+        const orgId = orgDoc.id;
+        const msgsQuery = query(collection(serverDb, `organizations/${orgId}/messages`), where('metaMessageId', '==', wamid));
+        const msgsSnap = await getDocs(msgsQuery);
+        for (const mDoc of msgsSnap.docs) {
+          await updateDoc(mDoc.ref, {
+            messageStatus: status,
+            ...(status === 'read' ? { readAt: eventTimeIso } : {}),
+            ...(status === 'delivered' ? { deliveredAt: eventTimeIso } : {}),
+            updatedAt: nowIso,
+          }).catch(() => {});
+        }
+
+        // Direct doc check
+        try {
+          const directRef = doc(serverDb, `organizations/${orgId}/messages`, wamid);
+          const directSnap = await getDoc(directRef);
+          if (directSnap.exists()) {
+            await updateDoc(directRef, {
+              messageStatus: status,
+              ...(status === 'read' ? { readAt: eventTimeIso } : {}),
+              ...(status === 'delivered' ? { deliveredAt: eventTimeIso } : {}),
+              updatedAt: nowIso,
+            }).catch(() => {});
+          }
+        } catch {}
+      }
+    } catch (msgErr) {
+      console.warn('[processIncomingWhatsAppStatusUpdate] Message collection update error:', msgErr);
+    }
+
+  } catch (fatalErr) {
+    console.error('[processIncomingWhatsAppStatusUpdate] Fatal error:', fatalErr);
+  }
+}
+
 // Handler: Meta Webhook POST notifications (Incoming messages & statuses)
 export function handleWebhookPost(req: Request, res: Response) {
   const body = req.body;
+  if (!body || typeof body !== 'object') {
+    return res.status(200).send('EVENT_RECEIVED');
+  }
 
-  if (body.object === 'whatsapp_business_account') {
-    if (body.entry && Array.isArray(body.entry)) {
-      for (const entry of body.entry) {
-        const changes = entry.changes;
-        if (changes && Array.isArray(changes)) {
-          for (const change of changes) {
-            const value = change.value;
-            if (value) {
-              // 1. Handle incoming message statuses (sent, delivered, read, failed)
-              if (value.statuses && Array.isArray(value.statuses)) {
-                for (const statusObj of value.statuses) {
-                  addWebhookLog({
-                    event: `Status: ${statusObj.status.toUpperCase()}`,
-                    origin: 'WhatsApp Message Status',
-                    details: `Meta ID: ${statusObj.id} - Status: ${statusObj.status} - Recipient: ${statusObj.recipient_id}`,
-                    status: statusObj.status === 'failed' ? 'error' : 'success',
-                    rawPayload: statusObj,
-                  });
-                }
-              }
+  // Extract all "value" objects from payload across all Meta formats
+  const valuesToProcess: Array<{ value: any; field?: string }> = [];
 
-              // 2. Handle incoming WhatsApp customer messages
-              if (value.messages && Array.isArray(value.messages)) {
-                for (const msg of value.messages) {
-                  const contactInfo = value.contacts?.[0] || {};
-                  const senderName = contactInfo.profile?.name || msg.from;
-                  const textBody =
-                    msg.interactive?.button_reply?.title ||
-                    msg.interactive?.list_reply?.title ||
-                    msg.text?.body ||
-                    (msg.type ? `[${msg.type.toUpperCase()}]` : 'Message');
-
-                  addWebhookLog({
-                    event: 'Incoming Message',
-                    origin: `Customer: ${msg.from} (${senderName})`,
-                    details: `Text: ${textBody}`,
-                    status: 'success',
-                    rawPayload: msg,
-                  });
-                }
-
-                // Process real incoming WhatsApp messages into Firestore Inbox & run Bot
-                processIncomingWhatsAppWebhookPayload(value).catch((err) => {
-                  console.error('[Webhook] Failed to process incoming WhatsApp messages:', err);
-                });
-              }
-
-              // 3. Handle official Meta Template Status Updates (APPROVED, REJECTED, PAUSED)
-              if (change.field === 'message_template_status_update' || value.event) {
-                const tplEvent = value.event || 'UPDATED';
-                const tplName = value.message_template_name || value.template_name || 'Template';
-                const reason = value.reason ? ` - Reason: ${value.reason}` : '';
-
-                addWebhookLog({
-                  event: `Template ${tplEvent}`,
-                  origin: 'Meta WhatsApp Template Review',
-                  details: `Template "${tplName}" is now ${tplEvent}${reason}`,
-                  status: tplEvent === 'APPROVED' ? 'success' : tplEvent === 'REJECTED' ? 'error' : 'warning',
-                  rawPayload: value,
-                });
-              }
-            }
+  if (body.object === 'whatsapp_business_account' && Array.isArray(body.entry)) {
+    for (const entry of body.entry) {
+      if (Array.isArray(entry.changes)) {
+        for (const change of entry.changes) {
+          if (change && change.value) {
+            valuesToProcess.push({ value: change.value, field: change.field });
           }
         }
       }
     }
-    return res.status(200).send('EVENT_RECEIVED');
+  } else if (Array.isArray(body.entry)) {
+    for (const entry of body.entry) {
+      if (Array.isArray(entry.changes)) {
+        for (const change of entry.changes) {
+          if (change && change.value) {
+            valuesToProcess.push({ value: change.value, field: change.field });
+          }
+        }
+      }
+    }
+  } else if (Array.isArray(body.changes)) {
+    for (const change of body.changes) {
+      if (change && change.value) {
+        valuesToProcess.push({ value: change.value, field: change.field });
+      }
+    }
+  } else if (body.field && body.value) {
+    // Direct change object: { field: "messages", value: { ... } } (common in Meta test console)
+    valuesToProcess.push({ value: body.value, field: body.field });
+  } else if (body.value) {
+    valuesToProcess.push({ value: body.value });
+  } else if (body.messages || body.statuses) {
+    // Raw value payload passed directly
+    valuesToProcess.push({ value: body });
   }
-  return res.sendStatus(404);
+
+  if (valuesToProcess.length === 0) {
+    console.warn('[Webhook] Unrecognized webhook payload structure:', JSON.stringify(body).slice(0, 300));
+    return res.status(200).send('EVENT_RECEIVED'); // Always respond with 200 so Meta doesn't error
+  }
+
+  for (const item of valuesToProcess) {
+    const value = item.value;
+    const field = item.field;
+    if (!value) continue;
+
+    // 1. Handle incoming message statuses (sent, delivered, read, failed)
+    if (value.statuses && Array.isArray(value.statuses)) {
+      for (const statusObj of value.statuses) {
+        addWebhookLog({
+          event: `Status: ${(statusObj.status || '').toUpperCase()}`,
+          origin: 'WhatsApp Message Status',
+          details: `Meta ID: ${statusObj.id} - Status: ${statusObj.status} - Recipient: ${statusObj.recipient_id}`,
+          status: statusObj.status === 'failed' ? 'error' : 'success',
+          rawPayload: statusObj,
+        });
+
+        // Process status update into Firestore and Campaign Analytics
+        processIncomingWhatsAppStatusUpdate(statusObj, value.metadata).catch((err) => {
+          console.error('[Webhook] Failed to process status update:', err);
+        });
+      }
+    }
+
+    // 2. Handle incoming WhatsApp customer messages
+    if (value.messages && Array.isArray(value.messages)) {
+      for (const msg of value.messages) {
+        const contactInfo = value.contacts?.[0] || {};
+        const senderName = contactInfo.profile?.name || msg.from;
+        const textBody =
+          msg.interactive?.button_reply?.title ||
+          msg.interactive?.list_reply?.title ||
+          msg.text?.body ||
+          (msg.type ? `[${msg.type.toUpperCase()}]` : 'Message');
+
+        addWebhookLog({
+          event: 'Incoming Message',
+          origin: `Customer: ${msg.from} (${senderName})`,
+          details: `Text: ${textBody}`,
+          status: 'success',
+          rawPayload: msg,
+        });
+      }
+
+      // Process real incoming WhatsApp messages into Firestore Inbox & run Bot
+      processIncomingWhatsAppWebhookPayload(value).catch((err) => {
+        console.error('[Webhook] Failed to process incoming WhatsApp messages:', err);
+      });
+    }
+
+    // 3. Handle official Meta Template Status Updates (APPROVED, REJECTED, PAUSED)
+    if (field === 'message_template_status_update' || value.event) {
+      const tplEvent = value.event || 'UPDATED';
+      const tplName = value.message_template_name || value.template_name || 'Template';
+      const reason = value.reason ? ` - Reason: ${value.reason}` : '';
+
+      addWebhookLog({
+        event: `Template ${tplEvent}`,
+        origin: 'Meta WhatsApp Template Review',
+        details: `Template "${tplName}" is now ${tplEvent}${reason}`,
+        status: tplEvent === 'APPROVED' ? 'success' : tplEvent === 'REJECTED' ? 'error' : 'warning',
+        rawPayload: value,
+      });
+    }
+  }
+
+  return res.status(200).send('EVENT_RECEIVED');
 }
 
 // Handler: Retrieve Webhook Logs for Admin UI
