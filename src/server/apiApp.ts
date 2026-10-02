@@ -25,6 +25,25 @@ import { getWebhookAuditEvents } from './campaignAnalyticsService.ts';
 
 export const apiApp = express();
 
+// Enable CORS for Vercel and all origins
+apiApp.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
+// Normalize request URL for Vercel Serverless Function rewrites
+apiApp.use((req, res, next) => {
+  if (!req.url.startsWith('/api/') && req.url !== '/api') {
+    req.url = '/api' + (req.url.startsWith('/') ? req.url : '/' + req.url);
+  }
+  next();
+});
+
 // Parse JSON bodies
 apiApp.use(express.json());
 apiApp.use(express.urlencoded({ extended: true }));
