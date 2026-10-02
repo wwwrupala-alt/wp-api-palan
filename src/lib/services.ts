@@ -828,6 +828,8 @@ export async function deleteBotFlow(orgId: string, flowId: string) {
 // CHATBOT ENGINE & LIVE INCOMING SIMULATION FOR TEST NUMBERS
 // -------------------------------------------------------------
 
+export const simulateIncomingCustomerMessage = simulateIncomingCustomerMessageAndRunBot;
+
 export async function simulateIncomingCustomerMessageAndRunBot(
   orgId: string,
   params: {
