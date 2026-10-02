@@ -69,6 +69,11 @@ export interface WhatsAppAccount {
   connectionStatus: 'connected' | 'disconnected' | 'pending';
   webhookStatus: 'active' | 'unverified' | 'error';
   qualityRating?: 'GREEN' | 'YELLOW' | 'RED' | 'UNKNOWN';
+  messagingLimitTier?: 'TIER_50' | 'TIER_250' | 'TIER_1K' | 'TIER_10K' | 'TIER_100K' | 'TIER_UNLIMITED' | 'TIER_NOT_SET' | string;
+  messagingLimitLabel?: string;
+  maxDailyConversations?: number;
+  codeVerificationStatus?: string;
+  throughputLevel?: string;
   createdAt: string;
   updatedAt: string;
 }

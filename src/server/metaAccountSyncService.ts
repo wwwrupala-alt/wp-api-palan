@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { getMetaConfig, addWebhookLog } from './metaService.ts';
+import { parseMessagingLimitTier } from '../lib/metaLimits.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -165,6 +166,9 @@ export async function fetchAndSyncMetaAccount(params: {
     displayPhoneNumber: string;
     verifiedName: string;
     qualityRating: string;
+    messagingLimitTier?: string;
+    messagingLimitLabel?: string;
+    maxDailyConversations?: number;
     connectionStatus: string;
     webhookStatus: string;
   };
@@ -184,6 +188,9 @@ export async function fetchAndSyncMetaAccount(params: {
   let resolvedDisplayPhone = fallbackPhone || resolvedPhoneId;
   let resolvedBusinessName = fallbackName || 'WhatsApp Business';
   let resolvedQualityRating: 'GREEN' | 'YELLOW' | 'RED' | 'UNKNOWN' = 'GREEN';
+  let resolvedMessagingLimitTier = 'TIER_250';
+  let resolvedThroughput = 'STANDARD';
+  let resolvedCodeVerification = 'VERIFIED';
   let tokenValid = false;
 
   // 1. If token is available, query Meta Graph API live
@@ -191,7 +198,7 @@ export async function fetchAndSyncMetaAccount(params: {
     try {
       // Step A: If Phone Number ID is provided, query it directly
       if (resolvedPhoneId) {
-        const phoneUrl = `https://graph.facebook.com/${config.graphVersion}/${resolvedPhoneId}?fields=id,verified_name,display_phone_number,quality_rating,code_verification_status,whatsapp_business_account&access_token=${token}`;
+        const phoneUrl = `https://graph.facebook.com/${config.graphVersion}/${resolvedPhoneId}?fields=id,verified_name,display_phone_number,quality_rating,code_verification_status,messaging_limit_tier,throughput,status,whatsapp_business_account&access_token=${token}`;
         const phoneRes = await fetch(phoneUrl);
         const phoneData = await phoneRes.json();
 
@@ -201,6 +208,16 @@ export async function fetchAndSyncMetaAccount(params: {
           resolvedDisplayPhone = phoneData.display_phone_number || resolvedDisplayPhone;
           resolvedBusinessName = phoneData.verified_name || resolvedBusinessName;
           resolvedQualityRating = (phoneData.quality_rating as 'GREEN' | 'YELLOW' | 'RED') || 'GREEN';
+
+          if (phoneData.messaging_limit_tier) {
+            resolvedMessagingLimitTier = phoneData.messaging_limit_tier;
+          }
+          if (phoneData.throughput?.level) {
+            resolvedThroughput = phoneData.throughput.level;
+          }
+          if (phoneData.code_verification_status) {
+            resolvedCodeVerification = phoneData.code_verification_status;
+          }
 
           if (phoneData.whatsapp_business_account?.id) {
             resolvedWabaId = phoneData.whatsapp_business_account.id;
@@ -284,6 +301,7 @@ export async function fetchAndSyncMetaAccount(params: {
 
   const nowIso = new Date().toISOString();
   const accountDocumentId = resolvedPhoneId;
+  const limitInfo = parseMessagingLimitTier(resolvedMessagingLimitTier);
 
   const accountDocData: Record<string, unknown> = {
     id: accountDocumentId,
@@ -292,6 +310,11 @@ export async function fetchAndSyncMetaAccount(params: {
     displayPhoneNumber: resolvedDisplayPhone,
     verifiedName: resolvedBusinessName,
     qualityRating: resolvedQualityRating,
+    messagingLimitTier: limitInfo.tier,
+    messagingLimitLabel: limitInfo.label,
+    maxDailyConversations: limitInfo.limit,
+    codeVerificationStatus: resolvedCodeVerification,
+    throughputLevel: resolvedThroughput,
     connectionStatus: 'connected',
     webhookStatus: 'active',
     updatedAt: nowIso,
@@ -314,7 +337,7 @@ export async function fetchAndSyncMetaAccount(params: {
   addWebhookLog({
     event: 'WhatsApp Account Synced & Saved to Firestore',
     origin: 'Meta Cloud API Backend Service',
-    details: `Synced WABA: ${resolvedWabaId}, Phone: ${resolvedPhoneId} (${resolvedBusinessName}) into organizations/${organizationId}/whatsappAccounts/${accountDocumentId}`,
+    details: `Synced WABA: ${resolvedWabaId}, Phone: ${resolvedPhoneId} (${resolvedBusinessName}) [Limit: ${limitInfo.label}] into organizations/${organizationId}/whatsappAccounts/${accountDocumentId}`,
     status: firestoreRes.success ? 'success' : 'warning',
     rawPayload: {
       accountDocData,
@@ -331,6 +354,9 @@ export async function fetchAndSyncMetaAccount(params: {
       displayPhoneNumber: resolvedDisplayPhone,
       verifiedName: resolvedBusinessName,
       qualityRating: resolvedQualityRating,
+      messagingLimitTier: limitInfo.tier,
+      messagingLimitLabel: limitInfo.label,
+      maxDailyConversations: limitInfo.limit,
       connectionStatus: 'connected',
       webhookStatus: 'active',
     },

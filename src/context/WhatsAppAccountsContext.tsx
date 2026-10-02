@@ -160,7 +160,8 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
   // Helper to safely initialize Facebook SDK with valid App ID and version
   const initFacebookSDK = () => {
     if (typeof window === 'undefined' || !window.FB) return;
-    const resolvedAppId = metaStatus?.appId || (import.meta.env.VITE_META_APP_ID as string) || '28291855670435316';
+    const resolvedAppId = (metaStatus?.appId || (import.meta.env.VITE_META_APP_ID as string) || '').trim();
+    if (!resolvedAppId) return; // Do not initialize FB SDK until real Meta App ID is configured
     const resolvedVersion = metaStatus?.graphVersion || 'v22.0';
     try {
       window.FB.init({
@@ -199,10 +200,17 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
   const connectViaEmbeddedSignup = async (options?: { isCoexistence?: boolean; featureType?: string }): Promise<void> => {
     if (!organization?.id) throw new Error('Organization not found. Please re-login.');
 
-    const resolvedAppId = metaStatus?.appId || (import.meta.env.VITE_META_APP_ID as string) || '28291855670435316';
+    const resolvedAppId = (metaStatus?.appId || (import.meta.env.VITE_META_APP_ID as string) || '').trim();
     if (!resolvedAppId) {
       throw new Error(
-        'Meta App ID is not yet configured in server environment. Please use the "Connect by Phone Number" tab to connect your WhatsApp account directly.'
+        'Meta App ID is not yet configured in Admin panel. Please go to Admin Settings > Meta App Config to save your Meta App ID.'
+      );
+    }
+
+    const configId = (metaStatus?.configId || (import.meta.env.VITE_META_CONFIG_ID as string) || '').trim();
+    if (!configId) {
+      throw new Error(
+        'Facebook Login Configuration ID is not configured. Please go to Admin Settings > Meta App Config to save your Configuration ID.'
       );
     }
 
@@ -279,8 +287,6 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
         } catch (initErr) {
           console.warn('[Meta SDK] Pre-login init notice:', initErr);
         }
-
-        const configId = metaStatus?.configId || (import.meta.env.VITE_META_CONFIG_ID as string) || '1030431656687202';
 
         // Coexistence vs Standard: featureType determines whether Meta opens the WhatsApp Business App mobile onboarding branch
         const isCoexistence = options?.isCoexistence !== false;

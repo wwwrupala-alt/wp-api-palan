@@ -6,6 +6,7 @@ import {
   Key,
   CheckCircle2,
   AlertCircle,
+  AlertTriangle,
   HelpCircle,
   ExternalLink,
   Shield,
@@ -143,11 +144,13 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
     setError(null);
     setSuccess(null);
 
-    const hasAppId = Boolean(metaStatus?.appIdSet || metaStatus?.appId || import.meta.env.VITE_META_APP_ID || '28291855670435316');
-    if (!hasAppId) {
-      const msg = 'Meta App ID is not yet configured in server environment. Please use the "Real Meta API Credentials" tab to connect your WhatsApp account directly.';
+    const hasAppId = Boolean(metaStatus?.appId && metaStatus.appId.trim() !== '');
+    const hasConfigId = Boolean(metaStatus?.configId && metaStatus.configId.trim() !== '');
+
+    if (!hasAppId || !hasConfigId) {
+      const msg = 'Meta App ID ya Facebook Login Configuration ID set nahi hai. Kripya Admin Panel > Meta App Config me ja kar apni details save karein.';
       setError(msg);
-      toast.showWarning('Meta App ID Missing', msg);
+      toast.showWarning('Meta App Configuration Missing', msg);
       return;
     }
 
@@ -547,15 +550,15 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
                 </div>
               </div>
 
-              {Boolean(metaStatus?.appId || metaStatus?.appIdSet || '28291855670435316') ? (
+              {Boolean(metaStatus?.appId && metaStatus?.configId) ? (
                 <div className="p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/40 space-y-1.5 text-xs text-emerald-800 dark:text-emerald-300">
                   <div className="flex items-center space-x-2 font-semibold">
                     <div className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
                     <span>Meta Embedded Signup Ready ({embeddedMode === 'coexistence' ? 'Coexistence Mode' : 'Standard'})</span>
                   </div>
                   <div className="text-[11px] space-y-1 font-mono text-neutral-700 dark:text-neutral-300 bg-white/70 dark:bg-neutral-900/60 p-2.5 rounded-xl border border-emerald-200/60 dark:border-emerald-900/40">
-                    <div>App ID: <strong>{metaStatus?.appId || '28291855670435316'}</strong></div>
-                    <div>Config ID: <strong>{metaStatus?.configId || '1030431656687202'}</strong></div>
+                    <div>App ID: <strong>{metaStatus?.appId}</strong></div>
+                    <div>Config ID: <strong>{metaStatus?.configId}</strong></div>
                     <div>
                       sessionInfoVersion: <strong className="text-emerald-700 dark:text-emerald-400">"3"</strong> • scope: <strong>"whatsapp_business_management..."</strong>
                     </div>
@@ -569,11 +572,16 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
                 </div>
               ) : (
                 <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/40 flex items-start space-x-2.5 text-xs text-amber-800 dark:text-amber-300">
-                  <HelpCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                  <div>
-                    <p className="font-semibold">Setup Notice</p>
-                    <p className="mt-0.5 text-[11px] leading-relaxed">
-                      Use the <strong>Real Meta API Credentials</strong> tab to connect with your Phone Number ID and Token directly.
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
+                  <div className="space-y-1">
+                    <p className="font-semibold text-amber-900 dark:text-amber-200">
+                      Meta App ID &amp; Configuration ID Not Set Yet
+                    </p>
+                    <p className="text-[11px] leading-relaxed text-amber-800 dark:text-amber-300/90">
+                      Embedded Signup shuru karne ke liye aapke Meta Developer App ka <strong>Meta App ID</strong> aur <strong>Facebook Login Configuration ID</strong> zaroori hai. Admin panel ke <strong>Meta App Config</strong> mein details daal kar <strong>Save</strong> karein.
+                    </p>
+                    <p className="text-[11px] text-neutral-600 dark:text-neutral-400 pt-0.5">
+                      💡 Ya fir upar <strong>Real Meta API Credentials</strong> tab par click karke direct Phone Number ID aur Token se connect kar sakte hain.
                     </p>
                   </div>
                 </div>
@@ -582,8 +590,8 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
               <button
                 type="button"
                 onClick={handleEmbeddedSignup}
-                disabled={loading}
-                className="w-full py-3.5 px-4 rounded-xl bg-[#1877F2] hover:bg-[#166fe5] text-white font-medium flex items-center justify-center space-x-2 transition-all shadow-sm hover:shadow-md disabled:opacity-60 cursor-pointer text-sm"
+                disabled={loading || !Boolean(metaStatus?.appId && metaStatus?.configId)}
+                className="w-full py-3.5 px-4 rounded-xl bg-[#1877F2] hover:bg-[#166fe5] text-white font-medium flex items-center justify-center space-x-2 transition-all shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer text-sm"
               >
                 {loading ? (
                   <>
@@ -594,9 +602,11 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
                   <>
                     <Facebook className="w-5 h-5 fill-current" />
                     <span>
-                      {embeddedMode === 'coexistence'
-                        ? 'Launch WhatsApp Mobile Coexistence Onboarding'
-                        : 'Connect WhatsApp with Facebook'}
+                      {Boolean(metaStatus?.appId && metaStatus?.configId)
+                        ? embeddedMode === 'coexistence'
+                          ? 'Launch WhatsApp Mobile Coexistence Onboarding'
+                          : 'Connect WhatsApp with Facebook'
+                        : 'Admin Panel me Meta App ID & Config ID Save Karein'}
                     </span>
                   </>
                 )}

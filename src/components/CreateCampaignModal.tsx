@@ -21,6 +21,7 @@ import {
   ChevronLeft,
   ShieldCheck,
   RefreshCw,
+  Zap,
 } from 'lucide-react';
 import type { Template, Contact, ContactGroup, WhatsAppAccount } from '../types/index.ts';
 import { useToast } from '../context/ToastContext.tsx';
@@ -866,13 +867,22 @@ Rahul: 919974428034
         {/* Footer Actions - Responsive: Mobile Sticky Touch-Friendly Bar */}
         <div className="p-3.5 sm:px-6 sm:py-4 border-t border-neutral-200 dark:border-neutral-800 bg-neutral-50/90 dark:bg-neutral-800/90 backdrop-blur-md flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 shrink-0">
           <div className="flex items-center justify-between sm:justify-start text-xs text-neutral-600 dark:text-neutral-400">
-            <span className="flex items-center space-x-1.5 font-medium">
-              <Info className="w-4 h-4 text-emerald-500 shrink-0" />
-              <span>Target:</span>
-              <strong className="text-emerald-600 dark:text-emerald-400 font-mono text-sm">
-                {totalTargetRecipients.length} recipients
-              </strong>
-            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="flex items-center space-x-1.5 font-medium">
+                <Info className="w-4 h-4 text-emerald-500 shrink-0" />
+                <span>Target:</span>
+                <strong className="text-emerald-600 dark:text-emerald-400 font-mono text-sm">
+                  {totalTargetRecipients.length} recipients
+                </strong>
+              </span>
+
+              {activeAccount && (
+                <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-neutral-200/80 dark:bg-neutral-700/70 text-neutral-700 dark:text-neutral-300">
+                  <Zap className="w-3 h-3 text-amber-500" />
+                  <span>24h Limit: {activeAccount.messagingLimitLabel || '250 / 24h'}</span>
+                </span>
+              )}
+            </div>
 
             {/* Quick Preview jump link on mobile */}
             {mobileActiveTab === 'setup' && (

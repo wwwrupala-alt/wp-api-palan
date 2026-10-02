@@ -54,6 +54,8 @@
         "connectionStatus": { "type": "string", "enum": ["connected", "disconnected", "pending"] },
         "webhookStatus": { "type": "string", "enum": ["active", "unverified", "error"] },
         "qualityRating": { "type": "string", "enum": ["GREEN", "YELLOW", "RED", "UNKNOWN"] },
+        "messagingLimitTier": { "type": "string", "maxLength": 50 },
+        "messagingLimitLabel": { "type": "string", "maxLength": 100 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },

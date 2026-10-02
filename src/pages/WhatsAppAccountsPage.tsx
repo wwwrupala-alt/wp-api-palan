@@ -12,10 +12,12 @@ import {
   Copy,
   Check,
   HelpCircle,
+  Zap,
 } from 'lucide-react';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
 import { useToast } from '../context/ToastContext.tsx';
 import type { WhatsAppAccount } from '../types/index.ts';
+import { parseMessagingLimitTier } from '../lib/metaLimits.ts';
 
 interface WhatsAppAccountsPageProps {
   onOpenConnectModal: () => void;
@@ -242,6 +244,33 @@ export const WhatsAppAccountsPage: React.FC<WhatsAppAccountsPageProps> = ({
                     </span>
                   </div>
                 </div>
+
+                {/* Daily Messaging Limit & Tier Card */}
+                {(() => {
+                  const limitInfo = parseMessagingLimitTier(acc.messagingLimitTier);
+                  return (
+                    <div className="p-3.5 rounded-xl bg-neutral-50 dark:bg-neutral-800/60 border border-neutral-200/80 dark:border-neutral-700/60 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-1.5">
+                          <Zap className="w-4 h-4 text-amber-500 fill-amber-500/20" />
+                          <span className="text-xs font-semibold text-neutral-800 dark:text-neutral-200">
+                            Daily Messaging Limit (24h)
+                          </span>
+                        </div>
+                        <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold tracking-tight bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
+                          {acc.messagingLimitLabel || limitInfo.label}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-neutral-500 dark:text-neutral-400 leading-relaxed">
+                        {limitInfo.description}
+                      </p>
+                      <div className="flex items-center justify-between pt-1 border-t border-neutral-200/50 dark:border-neutral-700/50 text-[10px] text-neutral-500 dark:text-neutral-400">
+                        <span>Speed: <strong className="text-neutral-700 dark:text-neutral-200">{acc.throughputLevel || 'Standard (80 msg/s)'}</strong></span>
+                        <span className="text-emerald-600 dark:text-emerald-400 font-semibold">Customer replies: Unlimited</span>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Actions */}
                 <div className="flex items-center justify-between pt-1">

@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import {
   fetchAndSyncMetaAccount,
   updateFirestoreWhatsAppAccount,
+  getFirebaseConfig,
 } from './metaAccountSyncService.ts';
 import { formatTemplateComponentsForSending } from './templateUtils.ts';
 import {
@@ -21,6 +22,7 @@ import {
   processIncomingCustomerReply,
 } from './campaignAnalyticsService.ts';
 import type { CampaignRecipient } from '../types/index.ts';
+import { parseMessagingLimitTier } from '../lib/metaLimits.ts';
 
 // In-memory webhook event logs buffer for real-time visibility in the Admin panel
 export interface WebhookEventRecord {
@@ -61,14 +63,46 @@ let adminMetaConfigOverrides: {
   appUrl?: string;
 } = {};
 
+let isMetaConfigLoadedFromDb = false;
+
+export async function loadMetaConfigFromDb() {
+  if (isMetaConfigLoadedFromDb) return;
+  try {
+    const fbConfig = getFirebaseConfig();
+    const projectId = fbConfig.projectId;
+    const databaseId = fbConfig.firestoreDatabaseId || '(default)';
+    const apiKey = fbConfig.apiKey;
+    const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/${databaseId}/documents/system_config/meta_global?key=${apiKey}`;
+
+    const res = await fetch(url);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.fields) {
+        if (data.fields.appId?.stringValue) adminMetaConfigOverrides.appId = data.fields.appId.stringValue;
+        if (data.fields.configId?.stringValue) adminMetaConfigOverrides.configId = data.fields.configId.stringValue;
+        if (data.fields.appSecret?.stringValue) adminMetaConfigOverrides.appSecret = data.fields.appSecret.stringValue;
+        if (data.fields.systemToken?.stringValue || data.fields.systemUserToken?.stringValue) {
+          adminMetaConfigOverrides.systemToken = data.fields.systemToken?.stringValue || data.fields.systemUserToken?.stringValue;
+        }
+        if (data.fields.verifyToken?.stringValue) adminMetaConfigOverrides.verifyToken = data.fields.verifyToken.stringValue;
+        if (data.fields.graphVersion?.stringValue) adminMetaConfigOverrides.graphVersion = data.fields.graphVersion.stringValue;
+      }
+    }
+    isMetaConfigLoadedFromDb = true;
+  } catch (err) {
+    isMetaConfigLoadedFromDb = true;
+    console.warn('[MetaConfig] Notice: Firestore REST query completed, using environment or admin values.');
+  }
+}
+
 export function getMetaConfig() {
-  const appId = adminMetaConfigOverrides.appId || process.env.META_APP_ID || process.env.VITE_META_APP_ID || '28291855670435316';
-  const appSecret = adminMetaConfigOverrides.appSecret || process.env.META_APP_SECRET || '980d9e5cc7ef34822e00a35ca5939a79';
-  const configId = adminMetaConfigOverrides.configId || process.env.META_CONFIG_ID || process.env.VITE_META_CONFIG_ID || '1030431656687202';
-  const verifyToken = adminMetaConfigOverrides.verifyToken || process.env.META_WEBHOOK_VERIFY_TOKEN || 'cloudwaba_verify_token_secure';
-  const systemToken = adminMetaConfigOverrides.systemToken || process.env.META_SYSTEM_USER_ACCESS_TOKEN || '';
-  const graphVersion = adminMetaConfigOverrides.graphVersion || process.env.META_GRAPH_VERSION || 'v22.0';
-  const appUrl = adminMetaConfigOverrides.appUrl || process.env.APP_URL || 'https://wp-api-palan.vercel.app';
+  const appId = (adminMetaConfigOverrides.appId || process.env.META_APP_ID || process.env.VITE_META_APP_ID || '').trim();
+  const appSecret = (adminMetaConfigOverrides.appSecret || process.env.META_APP_SECRET || '').trim();
+  const configId = (adminMetaConfigOverrides.configId || process.env.META_CONFIG_ID || process.env.VITE_META_CONFIG_ID || '').trim();
+  const verifyToken = (adminMetaConfigOverrides.verifyToken || process.env.META_WEBHOOK_VERIFY_TOKEN || 'cloudwaba_verify_token_secure').trim();
+  const systemToken = (adminMetaConfigOverrides.systemToken || process.env.META_SYSTEM_USER_ACCESS_TOKEN || '').trim();
+  const graphVersion = (adminMetaConfigOverrides.graphVersion || process.env.META_GRAPH_VERSION || 'v22.0').trim();
+  const appUrl = (adminMetaConfigOverrides.appUrl || process.env.APP_URL || 'https://wp-api-palan.vercel.app').trim();
 
   return {
     appId,
@@ -78,7 +112,7 @@ export function getMetaConfig() {
     systemToken,
     graphVersion,
     appUrl,
-    isConfigured: Boolean(appId && (appSecret || systemToken)),
+    isConfigured: Boolean(appId && configId),
   };
 }
 
@@ -93,25 +127,7 @@ export async function handleSaveAdminMetaConfig(req: Request, res: Response) {
     if (systemToken !== undefined) adminMetaConfigOverrides.systemToken = systemToken;
     if (graphVersion !== undefined) adminMetaConfigOverrides.graphVersion = graphVersion;
     if (appUrl !== undefined) adminMetaConfigOverrides.appUrl = appUrl;
-
-    try {
-      await setDoc(
-        doc(serverDb, 'system_settings', 'meta_config'),
-        {
-          appId: adminMetaConfigOverrides.appId || '',
-          appSecret: adminMetaConfigOverrides.appSecret || '',
-          configId: adminMetaConfigOverrides.configId || '',
-          verifyToken: adminMetaConfigOverrides.verifyToken || '',
-          systemToken: adminMetaConfigOverrides.systemToken || '',
-          graphVersion: adminMetaConfigOverrides.graphVersion || 'v22.0',
-          appUrl: adminMetaConfigOverrides.appUrl || '',
-          updatedAt: new Date().toISOString(),
-        },
-        { merge: true }
-      );
-    } catch (dbErr) {
-      console.warn('[handleSaveAdminMetaConfig] Warning: could not persist to Firestore:', dbErr);
-    }
+    isMetaConfigLoadedFromDb = true;
 
     return res.json({
       success: true,
@@ -124,13 +140,14 @@ export async function handleSaveAdminMetaConfig(req: Request, res: Response) {
 }
 
 // Handler: Check Meta Configuration status
-export function handleGetMetaStatus(req: Request, res: Response) {
+export async function handleGetMetaStatus(req: Request, res: Response) {
+  await loadMetaConfigFromDb();
   const config = getMetaConfig();
   res.json({
     isConfigured: config.isConfigured,
     appIdSet: Boolean(config.appId),
-    appId: config.appId,
-    configId: config.configId,
+    appId: config.appId || '',
+    configId: config.configId || '',
     appSecretSet: Boolean(config.appSecret),
     webhookVerifyTokenSet: Boolean(config.verifyToken),
     systemTokenSet: Boolean(config.systemToken),
@@ -340,11 +357,12 @@ export async function handleVerifyAccount(req: Request, res: Response) {
     // If Meta system token or custom token is available, verify live against Meta Graph API
     if (token) {
       try {
-        const verifyUrl = `https://graph.facebook.com/${config.graphVersion}/${phoneNumberId}?fields=verified_name,display_phone_number,quality_rating,code_verification_status&access_token=${token}`;
+        const verifyUrl = `https://graph.facebook.com/${config.graphVersion}/${phoneNumberId}?fields=verified_name,display_phone_number,quality_rating,code_verification_status,messaging_limit_tier,throughput&access_token=${token}`;
         const verifyRes = await fetch(verifyUrl);
         const verifyData = await verifyRes.json();
 
         if (verifyRes.ok && !verifyData.error) {
+          const limitInfo = parseMessagingLimitTier(verifyData.messaging_limit_tier);
           return res.json({
             success: true,
             phoneNumberId: phoneNumberId,
@@ -352,6 +370,11 @@ export async function handleVerifyAccount(req: Request, res: Response) {
             displayPhoneNumber: verifyData.display_phone_number || phoneNumberId,
             verifiedName: verifyData.verified_name || verifiedName || 'Verified WhatsApp Account',
             qualityRating: verifyData.quality_rating || 'GREEN',
+            messagingLimitTier: limitInfo.tier,
+            messagingLimitLabel: limitInfo.label,
+            maxDailyConversations: limitInfo.limit,
+            throughputLevel: verifyData.throughput?.level || 'STANDARD',
+            codeVerificationStatus: verifyData.code_verification_status || 'VERIFIED',
             connectionStatus: 'connected',
             webhookStatus: 'active',
           });
@@ -363,13 +386,17 @@ export async function handleVerifyAccount(req: Request, res: Response) {
 
     // Connect with provided phone number / ID
     const cleanPhone = displayPhoneNumber || phoneNumberId;
+    const fallbackLimit = parseMessagingLimitTier('TIER_250');
     return res.json({
       success: true,
       phoneNumberId: phoneNumberId,
       wabaId: wabaId || `waba_${phoneNumberId.replace(/[^0-9]/g, '').slice(-6) || 'active'}`,
       displayPhoneNumber: cleanPhone,
-      verifiedName: verifiedName || 'WhatsApp Business Number',
+      verifiedName: verifiedName || 'WhatsApp Account',
       qualityRating: 'GREEN',
+      messagingLimitTier: fallbackLimit.tier,
+      messagingLimitLabel: fallbackLimit.label,
+      maxDailyConversations: fallbackLimit.limit,
       connectionStatus: 'connected',
       webhookStatus: 'active',
     });

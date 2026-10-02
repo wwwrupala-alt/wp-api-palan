@@ -7,8 +7,12 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
-    // Global system configuration
+    // Global system configuration and settings
     match /system_config/{configId} {
+      allow read, write: if true;
+    }
+
+    match /system_settings/{settingId} {
       allow read, write: if true;
     }
 

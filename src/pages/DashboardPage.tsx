@@ -11,6 +11,7 @@ import {
   ShieldCheck,
   RefreshCw,
   Sparkles,
+  Zap,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -20,6 +21,7 @@ import {
   subscribeConversations,
 } from '../lib/services.ts';
 import type { Contact, Campaign, Conversation } from '../types/index.ts';
+import { parseMessagingLimitTier } from '../lib/metaLimits.ts';
 
 interface DashboardPageProps {
   onOpenConnectModal: () => void;
@@ -159,9 +161,20 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                   {activeAccount.qualityRating || 'Active'}
                 </span>
               </div>
-              <p className="text-xs font-mono text-neutral-600 dark:text-neutral-400 mt-0.5">
-                {activeAccount.displayPhoneNumber} &bull; WABA: {activeAccount.wabaId}
-              </p>
+              <div className="flex flex-wrap items-center gap-2 mt-1">
+                <p className="text-xs font-mono text-neutral-600 dark:text-neutral-400">
+                  {activeAccount.displayPhoneNumber} &bull; WABA: {activeAccount.wabaId}
+                </p>
+                {(() => {
+                  const limitInfo = parseMessagingLimitTier(activeAccount.messagingLimitTier);
+                  return (
+                    <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border border-amber-300/80 dark:border-amber-800">
+                      <Zap className="w-3 h-3 text-amber-600 fill-amber-500/20" />
+                      <span>Daily Limit: {activeAccount.messagingLimitLabel || limitInfo.label}</span>
+                    </span>
+                  );
+                })()}
+              </div>
             </div>
           </div>
 
