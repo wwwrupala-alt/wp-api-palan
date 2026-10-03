@@ -307,7 +307,6 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
           config_id: configId,
           response_type: 'code',
           override_default_response_type: true,
-          scope: 'whatsapp_business_management,whatsapp_business_messaging',
           extras: extrasPayload,
         };
 

@@ -413,6 +413,28 @@ export async function createCampaign(
   }
 }
 
+export async function deleteCampaign(orgId: string, campaignId: string) {
+  const path = `organizations/${orgId}/campaigns/${campaignId}`;
+  try {
+    // Delete recipients subcollection items if any (best-effort)
+    try {
+      const recSnap = await getDocs(collection(db, `${path}/recipients`));
+      if (!recSnap.empty) {
+        await Promise.all(recSnap.docs.map((d) => deleteDoc(d.ref)));
+      }
+    } catch {
+      // Best-effort cleanup
+    }
+    await deleteDoc(doc(db, 'organizations', orgId, 'campaigns', campaignId));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, path);
+  }
+}
+
+export async function deleteMultipleCampaigns(orgId: string, campaignIds: string[]) {
+  return Promise.all(campaignIds.map((id) => deleteCampaign(orgId, id)));
+}
+
 export async function launchCampaign(
   orgId: string,
   campaignId: string,

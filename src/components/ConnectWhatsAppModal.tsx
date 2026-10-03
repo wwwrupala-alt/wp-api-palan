@@ -560,7 +560,7 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
                     <div>App ID: <strong>{metaStatus?.appId}</strong></div>
                     <div>Config ID: <strong>{metaStatus?.configId}</strong></div>
                     <div>
-                      sessionInfoVersion: <strong className="text-emerald-700 dark:text-emerald-400">"3"</strong> • scope: <strong>"whatsapp_business_management..."</strong>
+                      sessionInfoVersion: <strong className="text-emerald-700 dark:text-emerald-400">"3"</strong>
                     </div>
                     <div>
                       featureType:{' '}
@@ -569,6 +569,17 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
                       </strong>
                     </div>
                   </div>
+                  {metaStatus?.appId === metaStatus?.configId && (
+                    <div className="p-2.5 rounded-xl bg-amber-100/80 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-800 text-[11px] text-amber-900 dark:text-amber-200 space-y-1">
+                      <div className="flex items-center space-x-1.5 font-semibold text-amber-800 dark:text-amber-300">
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                        <span>Attention: Config ID aur App ID dono same hain!</span>
+                      </div>
+                      <p className="text-[10px] leading-relaxed">
+                        Meta popup me <em>&quot;config_id is required&quot;</em> error aane ka kaaran yeh hai ki aapne App ID ko hi Config ID me paste kiya hai. Asli <strong>Configuration ID</strong> Meta Developer Console ke <strong>WhatsApp &gt; Quickstart</strong> ya <strong>Facebook Login for Business &gt; Configurations</strong> se copy karke Admin panel me update karein.
+                      </p>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/40 flex items-start space-x-2.5 text-xs text-amber-800 dark:text-amber-300">

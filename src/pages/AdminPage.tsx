@@ -1604,6 +1604,20 @@ export const AdminPage: React.FC = () => {
                   </p>
                 </div>
 
+                {metaConfigIdInput.trim() === metaAppIdInput.trim() && metaConfigIdInput.trim().length > 0 && (
+                  <div className="md:col-span-2 p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-[11px] text-amber-900 dark:text-amber-200 flex items-start space-x-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <div className="space-y-0.5">
+                      <span className="font-semibold">Dhyaan Dein: Configuration ID aur Meta App ID same nahi hote!</span>
+                      <p className="leading-relaxed">
+                        Aapne dono me ek hi number (<code className="font-mono bg-amber-100 dark:bg-amber-900/60 px-1 py-0.5 rounded">{metaAppIdInput.trim()}</code>) daala hua hai. 
+                        Isi wajah se Facebook popup me <strong>&quot;Invalid parameter: config_id is required&quot;</strong> error aata hai.
+                        Apne Meta Developer Dashboard me jakar <strong>WhatsApp &gt; Quickstart</strong> ya <strong>Facebook Login for Business &gt; Configurations</strong> me se apna asli <strong>Configuration ID</strong> copy karein aur pehle box me paste karein.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 {/* 3. App Secret */}
                 <div className="space-y-1">
                   <label className="font-semibold text-neutral-800 dark:text-neutral-200 flex items-center justify-between">
