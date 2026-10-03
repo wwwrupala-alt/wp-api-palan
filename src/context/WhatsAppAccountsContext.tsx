@@ -410,19 +410,24 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
       const accountId = data.phoneNumberId || `wa_${Date.now()}`;
       const accountDocRef = doc(db, 'organizations', organization.id, 'whatsappAccounts', accountId);
 
-      const newAccount: Omit<WhatsAppAccount, 'id'> = {
+      const newAccount: Record<string, any> = {
         wabaId: data.wabaId || params.wabaId || 'waba_direct',
         phoneNumberId: data.phoneNumberId,
         displayPhoneNumber: data.displayPhoneNumber || params.displayPhoneNumber || params.phoneNumberId,
         verifiedName: data.verifiedName || params.verifiedName || 'WhatsApp Business',
-        customToken: params.customToken || undefined,
-        pin: params.pin || undefined,
         connectionStatus: 'connected',
         webhookStatus: 'active',
         qualityRating: data.qualityRating || 'GREEN',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
+
+      if (params.customToken && params.customToken.trim()) {
+        newAccount.customToken = params.customToken.trim();
+      }
+      if (params.pin && params.pin.trim()) {
+        newAccount.pin = params.pin.trim();
+      }
 
       try {
         await setDoc(accountDocRef, newAccount);
