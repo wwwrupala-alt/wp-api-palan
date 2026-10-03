@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Smartphone,
@@ -14,11 +14,6 @@ import {
   Phone,
   Sparkles,
   ArrowRight,
-  Copy,
-  Check,
-  Webhook,
-  ChevronDown,
-  ChevronUp,
   Eye,
   EyeOff,
   Activity,
@@ -52,13 +47,28 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
   const [showToken, setShowToken] = useState(false);
   const [embeddedMode, setEmbeddedMode] = useState<'coexistence' | 'standard'>('coexistence');
 
-  // Direct connect fields - Real Meta details
+  // Direct connect fields - Real Meta details (always blank by default)
   const [phoneNumberId, setPhoneNumberId] = useState('');
   const [wabaId, setWabaId] = useState('');
   const [customToken, setCustomToken] = useState('');
-  const [displayPhone, setDisplayPhone] = useState('+91 9974428034');
-  const [businessName, setBusinessName] = useState('CloudWABA Business');
-  const [pin, setPin] = useState('111111');
+  const [displayPhone, setDisplayPhone] = useState('');
+  const [businessName, setBusinessName] = useState('');
+  const [pin, setPin] = useState('');
+
+  // Reset form whenever modal opens so it is always clean & blank
+  useEffect(() => {
+    if (isOpen) {
+      setPhoneNumberId('');
+      setWabaId('');
+      setCustomToken('');
+      setDisplayPhone('');
+      setBusinessName('');
+      setPin('');
+      setError(null);
+      setSuccess(null);
+      setDiagnostics(null);
+    }
+  }, [isOpen]);
 
   // Diagnostics result from live test
   const [diagnostics, setDiagnostics] = useState<{
@@ -72,26 +82,7 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
     errors?: string[];
   } | null>(null);
 
-  // Webhook details & copy state
-  const [copiedUrl, setCopiedUrl] = useState(false);
-  const [copiedToken, setCopiedToken] = useState(false);
-  const [showWebhookGuide, setShowWebhookGuide] = useState(true);
-
-  const webhookUrl = metaStatus?.webhookUrl || `${window.location.origin}/api/meta/webhook`;
-  const verifyToken = metaStatus?.webhookVerifyToken || 'cloudwaba_verify_token_secure';
-
   if (!isOpen) return null;
-
-  const handleCopy = (text: string, type: 'url' | 'token') => {
-    navigator.clipboard.writeText(text);
-    if (type === 'url') {
-      setCopiedUrl(true);
-      setTimeout(() => setCopiedUrl(false), 2000);
-    } else {
-      setCopiedToken(true);
-      setTimeout(() => setCopiedToken(false), 2000);
-    }
-  };
 
   const handleTestMetaConnection = async () => {
     if (!customToken.trim()) {
@@ -381,7 +372,7 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
                   </label>
                   <input
                     type="text"
-                    placeholder="+91 9974428034"
+                    placeholder="e.g. +91 9876543210"
                     value={displayPhone}
                     onChange={(e) => setDisplayPhone(e.target.value)}
                     className="w-full px-3 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white placeholder-neutral-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 font-mono text-xs"
@@ -394,7 +385,7 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
                   </label>
                   <input
                     type="text"
-                    placeholder="CloudWABA"
+                    placeholder="e.g. My Business Name"
                     value={businessName}
                     onChange={(e) => setBusinessName(e.target.value)}
                     className="w-full px-3 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white placeholder-neutral-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 text-xs"
@@ -408,7 +399,7 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
                   <input
                     type="text"
                     maxLength={6}
-                    placeholder="111111"
+                    placeholder="e.g. 123456"
                     value={pin}
                     onChange={(e) => setPin(e.target.value)}
                     className="w-full px-3 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white placeholder-neutral-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 font-mono text-xs tracking-widest text-center"
@@ -624,109 +615,6 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
               </button>
             </div>
           )}
-
-          {/* Dedicated Meta Webhook Configuration Section */}
-          <div className="pt-4 border-t border-neutral-200 dark:border-neutral-800 space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2">
-                <div className="w-6 h-6 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
-                  <Webhook className="w-3.5 h-3.5" />
-                </div>
-                <div>
-                  <h4 className="font-bold text-neutral-900 dark:text-white text-xs">
-                    Meta Webhook Configuration
-                  </h4>
-                  <p className="text-[10px] text-neutral-500">
-                    Incoming messages, delivery status &amp; template approvals sync
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowWebhookGuide(!showWebhookGuide)}
-                className="text-xs text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-300 flex items-center space-x-1 cursor-pointer"
-              >
-                <span>{showWebhookGuide ? 'Hide Details' : 'Show Details'}</span>
-                {showWebhookGuide ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-              </button>
-            </div>
-
-            {showWebhookGuide && (
-              <div className="bg-neutral-50 dark:bg-neutral-800/50 p-4 rounded-2xl border border-neutral-200/80 dark:border-neutral-800 space-y-3">
-                <p className="text-[11px] text-neutral-600 dark:text-neutral-300 leading-relaxed">
-                  Meta Developer Console mein Webhook configure karne ke liye niche di gayi <strong>Callback URL</strong> aur <strong>Verify Token</strong> ko copy karke paste karein:
-                </p>
-
-                {/* Callback URL */}
-                <div className="space-y-1">
-                  <div className="flex items-center justify-between text-[11px]">
-                    <span className="font-semibold text-neutral-700 dark:text-neutral-300">
-                      1. Callback URL (Webhook URL):
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => handleCopy(webhookUrl, 'url')}
-                      className="text-emerald-600 dark:text-emerald-400 hover:underline flex items-center space-x-1 font-medium cursor-pointer text-[10px]"
-                    >
-                      {copiedUrl ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
-                      <span>{copiedUrl ? 'Copied URL!' : 'Copy URL'}</span>
-                    </button>
-                  </div>
-                  <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 p-2.5 rounded-xl font-mono text-[11px] text-neutral-800 dark:text-neutral-200 break-all select-all flex items-center justify-between">
-                    <span>{webhookUrl}</span>
-                  </div>
-                </div>
-
-                {/* Verify Token */}
-                <div className="space-y-1">
-                  <div className="flex items-center justify-between text-[11px]">
-                    <span className="font-semibold text-neutral-700 dark:text-neutral-300">
-                      2. Verify Token:
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => handleCopy(verifyToken, 'token')}
-                      className="text-emerald-600 dark:text-emerald-400 hover:underline flex items-center space-x-1 font-medium cursor-pointer text-[10px]"
-                    >
-                      {copiedToken ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
-                      <span>{copiedToken ? 'Copied Token!' : 'Copy Token'}</span>
-                    </button>
-                  </div>
-                  <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 p-2.5 rounded-xl font-mono text-[11px] text-neutral-800 dark:text-neutral-200 break-all select-all">
-                    {verifyToken}
-                  </div>
-                </div>
-
-                {/* Subscription Fields */}
-                <div className="pt-1">
-                  <span className="font-semibold text-neutral-700 dark:text-neutral-300 text-[11px] block mb-1">
-                    3. Webhook Subscribed Fields (Meta Console mein Manage button daba kar check karein):
-                  </span>
-                  <div className="flex flex-wrap gap-1.5">
-                    <span className="px-2 py-0.5 rounded-lg bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 font-mono text-[10px] font-semibold border border-emerald-300 dark:border-emerald-800">
-                      messages
-                    </span>
-                    <span className="px-2 py-0.5 rounded-lg bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 font-mono text-[10px] font-semibold border border-emerald-300 dark:border-emerald-800">
-                      message_template_status_update
-                    </span>
-                  </div>
-                </div>
-
-                <div className="pt-2 flex items-center justify-between border-t border-neutral-200/60 dark:border-neutral-700/60 text-[11px]">
-                  <span className="text-neutral-500">Kahan paste karein? Meta Portal &gt; WhatsApp &gt; Configuration &gt; Webhook</span>
-                  <a
-                    href="https://developers.facebook.com/apps"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-emerald-600 dark:text-emerald-400 hover:underline flex items-center space-x-1 font-medium"
-                  >
-                    <span>Open Meta Portal</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
-                </div>
-              </div>
-            )}
-          </div>
         </div>
       </div>
     </div>

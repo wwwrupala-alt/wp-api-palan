@@ -1231,7 +1231,12 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
       const now = new Date().toISOString();
 
       let textBody = '';
+      let interactiveButtonId = '';
+      let interactiveListId = '';
+
       if (msg.type === 'interactive') {
+        interactiveButtonId = msg.interactive?.button_reply?.id || '';
+        interactiveListId = msg.interactive?.list_reply?.id || '';
         textBody = msg.interactive?.button_reply?.title || msg.interactive?.list_reply?.title || 'Option selected';
       } else if (msg.type === 'text') {
         textBody = msg.text?.body || '';
@@ -1319,88 +1324,197 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
 
       const upperText = textBody.trim().toUpperCase();
       let matchedFlow: any = null;
+      let targetStep: any = null;
 
-      for (const flow of activeFlows) {
-        if (flow.phoneNumberId && phoneNumberId && flow.phoneNumberId !== phoneNumberId) {
-          continue;
-        }
-        const condition = flow.triggerCondition || 'exact';
-        const flowKeywords = (flow.keywords || []).map((k: string) => k.trim().toUpperCase());
+      // 1. If incoming message is an interactive button click or list selection
+      if (interactiveButtonId || interactiveListId) {
+        const clickedId = interactiveButtonId || interactiveListId;
+        for (const flow of activeFlows) {
+          for (const step of (flow.steps || [])) {
+            // Check buttons
+            const btn = (step.buttons || []).find(
+              (b: any) => b.id === clickedId || b.title?.trim().toLowerCase() === textBody.trim().toLowerCase()
+            );
+            if (btn) {
+              matchedFlow = flow;
+              if (btn.action === 'assign_agent') {
+                targetStep = {
+                  type: 'text',
+                  title: 'Agent Transfer',
+                  body: '👤 Your request has been transferred to a live human agent. Our team will assist you shortly.',
+                };
+              } else if (btn.targetStepId) {
+                targetStep = (flow.steps || []).find((s: any) => s.id === btn.targetStepId);
+              } else {
+                targetStep = {
+                  type: 'text',
+                  title: 'Completed',
+                  body: '✅ Thank you! Your choice has been recorded.',
+                };
+              }
+              break;
+            }
 
-        if (condition === 'anything_else') {
-          matchedFlow = flow;
-          break;
-        }
-
-        const isMatch = flowKeywords.some((kw: string) => {
-          if (!kw) return false;
-          if (condition === 'exact') return upperText === kw;
-          if (condition === 'contains') return upperText.includes(kw);
-          if (condition === 'begins_with') return upperText.startsWith(kw);
-          if (condition === 'ends_with') return upperText.endsWith(kw);
-          if (condition === 'whole_word') {
-            const regex = new RegExp(`\\b${kw}\\b`, 'i');
-            return regex.test(textBody);
+            // Check list sections
+            for (const sec of (step.listSections || [])) {
+              const row = (sec.rows || []).find(
+                (r: any) => r.id === clickedId || r.title?.trim().toLowerCase() === textBody.trim().toLowerCase()
+              );
+              if (row) {
+                matchedFlow = flow;
+                if (row.targetStepId) {
+                  targetStep = (flow.steps || []).find((s: any) => s.id === row.targetStepId);
+                } else {
+                  targetStep = {
+                    type: 'text',
+                    title: 'Completed',
+                    body: '✅ Thank you! Your selection has been recorded.',
+                  };
+                }
+                break;
+              }
+            }
+            if (targetStep) break;
           }
-          return upperText.includes(kw);
-        });
-
-        if (isMatch) {
-          matchedFlow = flow;
-          break;
+          if (targetStep) break;
         }
       }
 
-      if (matchedFlow) {
-        // Trigger matched flow!
-        const firstStep =
-          matchedFlow.steps?.find((s: any) => s.id === matchedFlow.initialStepId) ||
-          matchedFlow.steps?.[0];
+      // 2. If not an interactive click, match by keyword trigger
+      if (!targetStep) {
+        for (const flow of activeFlows) {
+          const flowPhoneId = flow.phoneNumberId?.trim();
+          if (flowPhoneId && flowPhoneId !== 'all') {
+            const matchedPhoneNum = matchedAccount?.displayPhoneNumber?.replace(/[^0-9]/g, '');
+            const isPhoneMatch =
+              flowPhoneId === phoneNumberId ||
+              flowPhoneId === matchedPhoneNum ||
+              flowPhoneId === `+${matchedPhoneNum}`;
+            if (!isPhoneMatch) {
+              continue;
+            }
+          }
 
-        if (firstStep && token && phoneNumberId) {
-          // Send response via Meta Cloud API
-          const sendUrl = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
+          const condition = flow.triggerCondition || 'exact';
+          const flowKeywords = (flow.keywords || []).map((k: string) => k.trim().toUpperCase());
+
+          if (condition === 'anything_else') {
+            matchedFlow = flow;
+            targetStep = flow.steps?.find((s: any) => s.id === flow.initialStepId) || flow.steps?.[0];
+            break;
+          }
+
+          const isMatch = flowKeywords.some((kw: string) => {
+            if (!kw) return false;
+            if (condition === 'exact') return upperText === kw;
+            if (condition === 'contains') return upperText.includes(kw);
+            if (condition === 'begins_with') return upperText.startsWith(kw);
+            if (condition === 'ends_with') return upperText.endsWith(kw);
+            if (condition === 'whole_word') {
+              const regex = new RegExp(`\\b${kw}\\b`, 'i');
+              return regex.test(textBody);
+            }
+            return upperText.includes(kw);
+          });
+
+          if (isMatch) {
+            matchedFlow = flow;
+            targetStep = flow.steps?.find((s: any) => s.id === flow.initialStepId) || flow.steps?.[0];
+            break;
+          }
+        }
+      }
+
+      if (matchedFlow && targetStep) {
+        // Increment flow triggered statistics in Firestore
+        updateDoc(doc(serverDb, `organizations/${targetOrgId}/botFlows`, matchedFlow.id), {
+          totalTriggeredCount: (matchedFlow.totalTriggeredCount || 0) + 1,
+          lastTriggeredAt: now,
+        }).catch(() => {});
+
+        if (token && phoneNumberId) {
+          const sendUrl = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`;
           let outPayload: any = {
             messaging_product: 'whatsapp',
             recipient_type: 'individual',
             to: cleanPhone,
           };
 
-          if (firstStep.type === 'interactive_button' && firstStep.buttons?.length > 0) {
+          if (targetStep.type === 'interactive_button' && targetStep.buttons?.length > 0) {
             outPayload = {
               ...outPayload,
               type: 'interactive',
               interactive: {
                 type: 'button',
-                header: firstStep.headerText ? { type: 'text', text: firstStep.headerText } : undefined,
-                body: { text: firstStep.body || 'Please choose an option:' },
-                footer: firstStep.footer ? { text: firstStep.footer } : undefined,
+                body: { text: targetStep.body?.trim() || 'Please choose an option:' },
                 action: {
-                  buttons: firstStep.buttons.slice(0, 3).map((b: any) => ({
+                  buttons: targetStep.buttons.slice(0, 3).map((b: any, idx: number) => ({
                     type: 'reply',
                     reply: {
-                      id: b.id,
-                      title: b.title.slice(0, 20),
+                      id: String(b.id || `btn_${idx}`).slice(0, 256),
+                      title: String(b.title || `Option ${idx + 1}`).trim().slice(0, 20),
                     },
                   })),
                 },
               },
             };
-          } else if (firstStep.type === 'media' && firstStep.mediaUrl) {
+            if (targetStep.headerType && targetStep.headerType !== 'none' && targetStep.headerText?.trim()) {
+              outPayload.interactive.header = {
+                type: 'text',
+                text: targetStep.headerText.trim(),
+              };
+            }
+            if (targetStep.footer?.trim()) {
+              outPayload.interactive.footer = {
+                text: targetStep.footer.trim(),
+              };
+            }
+          } else if (targetStep.type === 'interactive_list' && targetStep.listSections?.length > 0) {
             outPayload = {
               ...outPayload,
-              type: firstStep.mediaType === 'image' ? 'image' : 'document',
-              [firstStep.mediaType === 'image' ? 'image' : 'document']: {
-                link: firstStep.mediaUrl,
-                caption: firstStep.body || undefined,
-                filename: firstStep.mediaFileName || 'Catalog.pdf',
+              type: 'interactive',
+              interactive: {
+                type: 'list',
+                body: { text: targetStep.body?.trim() || 'Please select an option:' },
+                action: {
+                  button: targetStep.listButtonText?.trim() || 'View Options',
+                  sections: targetStep.listSections.map((sec: any) => ({
+                    title: (sec.title || 'Options').slice(0, 24),
+                    rows: (sec.rows || []).map((row: any) => ({
+                      id: String(row.id).slice(0, 200),
+                      title: String(row.title).slice(0, 24),
+                      description: row.description ? String(row.description).slice(0, 72) : undefined,
+                    })),
+                  })),
+                },
+              },
+            };
+            if (targetStep.headerText?.trim()) {
+              outPayload.interactive.header = {
+                type: 'text',
+                text: targetStep.headerText.trim(),
+              };
+            }
+            if (targetStep.footer?.trim()) {
+              outPayload.interactive.footer = {
+                text: targetStep.footer.trim(),
+              };
+            }
+          } else if (targetStep.type === 'media' && targetStep.mediaUrl) {
+            outPayload = {
+              ...outPayload,
+              type: targetStep.mediaType === 'image' ? 'image' : 'document',
+              [targetStep.mediaType === 'image' ? 'image' : 'document']: {
+                link: targetStep.mediaUrl,
+                caption: targetStep.body || undefined,
+                filename: targetStep.mediaFileName || 'Catalog.pdf',
               },
             };
           } else {
             outPayload = {
               ...outPayload,
               type: 'text',
-              text: { body: firstStep.body || 'Thank you for reaching out.' },
+              text: { body: targetStep.body || 'Thank you for reaching out.' },
             };
           }
 
@@ -1418,36 +1532,56 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
             const botNow = new Date(Date.now() + 500).toISOString();
             const botMsgId = metaData.messages?.[0]?.id || `msg_bot_${Date.now()}`;
 
-            // Save bot response to Firestore
-            await setDoc(doc(serverDb, `organizations/${targetOrgId}/messages`, botMsgId), {
-              id: botMsgId,
-              whatsAppAccountId: matchedAccount?.id || phoneNumberId,
-              contactId: cleanPhone,
-              conversationId: convId,
-              direction: 'outbound',
-              messageType: firstStep.type === 'interactive_button' ? 'interactive' : firstStep.type || 'text',
-              messageStatus: 'sent',
-              headerText: firstStep.headerText,
-              body: firstStep.body,
-              mediaUrl: firstStep.mediaUrl,
-              mediaFileName: firstStep.mediaFileName,
-              buttons: firstStep.buttons,
-              timestamp: botNow,
-            });
+            if (metaRes.ok && metaData.messages?.[0]?.id) {
+              // Save bot response to Firestore without any undefined fields
+              const botMsgData: Record<string, any> = {
+                id: botMsgId,
+                whatsAppAccountId: matchedAccount?.id || phoneNumberId,
+                contactId: cleanPhone,
+                conversationId: convId,
+                direction: 'outbound',
+                messageType: targetStep.type === 'interactive_button' ? 'interactive' : targetStep.type || 'text',
+                messageStatus: 'sent',
+                body: targetStep.body || 'Chatbot Response',
+                timestamp: botNow,
+              };
+              if (targetStep.headerText?.trim()) botMsgData.headerText = targetStep.headerText.trim();
+              if (targetStep.mediaUrl?.trim()) botMsgData.mediaUrl = targetStep.mediaUrl.trim();
+              if (targetStep.mediaFileName?.trim()) botMsgData.mediaFileName = targetStep.mediaFileName.trim();
+              if (targetStep.buttons && Array.isArray(targetStep.buttons)) botMsgData.buttons = targetStep.buttons;
 
-            await updateDoc(convRef, {
-              lastMessage: firstStep.body || 'Chatbot Response',
-              lastMessageAt: botNow,
-            });
+              await setDoc(doc(serverDb, `organizations/${targetOrgId}/messages`, botMsgId), botMsgData);
 
-            addWebhookLog({
-              event: 'Chatbot Automated Reply Dispatched',
-              origin: `Flow: ${matchedFlow.name}`,
-              details: `Replied to +${cleanPhone} with Step: "${firstStep.title}"`,
-              status: 'success',
-            });
+              await updateDoc(convRef, {
+                lastMessage: targetStep.body || 'Chatbot Response',
+                lastMessageAt: botNow,
+              });
+
+              addWebhookLog({
+                event: 'Chatbot Reply Sent',
+                origin: `Flow: ${matchedFlow.name}`,
+                details: `Dispatched "${targetStep.title || targetStep.type}" to +${cleanPhone}`,
+                status: 'success',
+              });
+            } else {
+              const errMsg = metaData.error?.message || JSON.stringify(metaData);
+              console.warn('[Webhook] Meta API rejected bot reply:', errMsg);
+              addWebhookLog({
+                event: 'Chatbot Reply Error',
+                origin: `Flow: ${matchedFlow.name}`,
+                details: `Meta API rejected message to +${cleanPhone}: ${errMsg}`,
+                status: 'error',
+                rawPayload: metaData,
+              });
+            }
           } catch (sendErr: any) {
             console.error('[Webhook] Failed to dispatch bot reply via Meta:', sendErr);
+            addWebhookLog({
+              event: 'Chatbot Dispatch Error',
+              origin: `Flow: ${matchedFlow.name}`,
+              details: `Network error: ${sendErr?.message || 'Failed to connect to Meta API'}`,
+              status: 'error',
+            });
           }
         }
       }

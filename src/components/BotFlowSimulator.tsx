@@ -118,51 +118,105 @@ export const BotFlowSimulator: React.FC<BotFlowSimulatorProps> = ({
     resetSimulator();
   }, [flow.id, flow.updatedAt, flow.steps]);
 
-  const handleStepTransition = (targetStepId?: string, userLabel?: string) => {
+  const handleStepTransition = (
+    btnOrTarget?: string | { targetStepId?: string; action?: string; url?: string; phoneNumber?: string; title?: string },
+    userLabel?: string
+  ) => {
     const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const targetStepId = typeof btnOrTarget === 'string' ? btnOrTarget : btnOrTarget?.targetStepId;
+    const action = typeof btnOrTarget === 'object' ? btnOrTarget.action : undefined;
+    const label = userLabel || (typeof btnOrTarget === 'object' ? btnOrTarget.title : undefined);
 
     // 1. Add user click/message to chat
-    if (userLabel) {
+    if (label) {
       setMessages((prev) => [
         ...prev,
         {
           id: `usr_${Date.now()}`,
           sender: 'user',
           type: 'text',
-          body: userLabel,
+          body: label,
           timestamp: now,
         },
       ]);
     }
 
-    if (!targetStepId) return;
+    // 2. Action: Transfer to Human Agent
+    if (action === 'assign_agent') {
+      setTimeout(() => {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `sim_${Date.now()}`,
+            sender: 'bot',
+            type: 'agent_transfer',
+            body: '👤 Your request has been transferred to a live human agent. An agent will respond to you shortly.',
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          },
+        ]);
+      }, 450);
+      return;
+    }
 
-    // 2. Find target step in pipeline
-    const nextStep = flow.steps.find((s) => s.id === targetStepId);
-    if (!nextStep) return;
+    // 3. Action: Call Support
+    if (action === 'call_phone' && typeof btnOrTarget === 'object' && btnOrTarget.phoneNumber) {
+      setTimeout(() => {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `sim_${Date.now()}`,
+            sender: 'bot',
+            type: 'text',
+            body: `📞 You can call our support directly at: ${btnOrTarget.phoneNumber}`,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          },
+        ]);
+      }, 450);
+      return;
+    }
 
-    setActiveStepId(targetStepId);
+    // 4. Action: Next step in pipeline
+    if (targetStepId) {
+      const nextStep = flow.steps.find((s) => s.id === targetStepId);
+      if (nextStep) {
+        setActiveStepId(targetStepId);
 
-    // 3. Bot responds after realistic delay
+        setTimeout(() => {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `sim_${Date.now()}`,
+              sender: 'bot',
+              type: nextStep.type,
+              body: nextStep.body,
+              headerType: nextStep.headerType,
+              headerText: nextStep.headerText,
+              headerMediaUrl: nextStep.headerMediaUrl,
+              footer: nextStep.footer,
+              buttons: nextStep.buttons,
+              listButtonText: nextStep.listButtonText,
+              listSections: nextStep.listSections,
+              mediaType: nextStep.mediaType,
+              mediaUrl: nextStep.mediaUrl,
+              mediaCaption: nextStep.mediaCaption,
+              mediaFileName: nextStep.mediaFileName,
+              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            },
+          ]);
+        }, 450);
+        return;
+      }
+    }
+
+    // 5. Default completion response when there are no more steps
     setTimeout(() => {
       setMessages((prev) => [
         ...prev,
         {
           id: `sim_${Date.now()}`,
           sender: 'bot',
-          type: nextStep.type,
-          body: nextStep.body,
-          headerType: nextStep.headerType,
-          headerText: nextStep.headerText,
-          headerMediaUrl: nextStep.headerMediaUrl,
-          footer: nextStep.footer,
-          buttons: nextStep.buttons,
-          listButtonText: nextStep.listButtonText,
-          listSections: nextStep.listSections,
-          mediaType: nextStep.mediaType,
-          mediaUrl: nextStep.mediaUrl,
-          mediaCaption: nextStep.mediaCaption,
-          mediaFileName: nextStep.mediaFileName,
+          type: 'text',
+          body: '✅ Thank you! Your choice has been recorded. Let us know if you need anything else.',
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         },
       ]);
@@ -216,16 +270,52 @@ export const BotFlowSimulator: React.FC<BotFlowSimulatorProps> = ({
 
     setInputText('');
 
+    // Check if user input matches any trigger keyword (e.g. "KT")
+    const isKeyword = (flow.keywords || []).some(
+      (kw) => kw.trim().toUpperCase() === query.toUpperCase()
+    );
+
+    if (isKeyword) {
+      const firstStep = flow.steps.find((s) => s.id === flow.initialStepId) || flow.steps[0];
+      if (firstStep) {
+        setActiveStepId(firstStep.id);
+        setTimeout(() => {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `sim_${Date.now()}`,
+              sender: 'bot',
+              type: firstStep.type,
+              body: firstStep.body,
+              headerType: firstStep.headerType,
+              headerText: firstStep.headerText,
+              headerMediaUrl: firstStep.headerMediaUrl,
+              footer: firstStep.footer,
+              buttons: firstStep.buttons,
+              listButtonText: firstStep.listButtonText,
+              listSections: firstStep.listSections,
+              mediaType: firstStep.mediaType,
+              mediaUrl: firstStep.mediaUrl,
+              mediaCaption: firstStep.mediaCaption,
+              mediaFileName: firstStep.mediaFileName,
+              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            },
+          ]);
+        }, 400);
+        return;
+      }
+    }
+
     // Check if custom message matches any button label in current step
     const currentStep = flow.steps.find((s) => s.id === activeStepId);
     const matchedBtn = currentStep?.buttons?.find(
       (b) => b.title.trim().toLowerCase() === query.toLowerCase()
     );
 
-    if (matchedBtn?.targetStepId) {
-      handleStepTransition(matchedBtn.targetStepId);
+    if (matchedBtn) {
+      handleStepTransition(matchedBtn, matchedBtn.title);
     } else {
-      // Default echo reply
+      // Default echo reply with hint
       setTimeout(() => {
         setMessages((prev) => [
           ...prev,
@@ -233,7 +323,7 @@ export const BotFlowSimulator: React.FC<BotFlowSimulatorProps> = ({
             id: `sim_${Date.now()}`,
             sender: 'bot',
             type: 'text',
-            body: `Thank you for your response: "${query}". Please tap one of the option buttons above to proceed.`,
+            body: `Thank you for your message: "${query}". You can send "${flow.keywords?.[0] || 'KT'}" to restart this automated flow or tap an option button above.`,
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           },
         ]);
@@ -541,7 +631,7 @@ export const BotFlowSimulator: React.FC<BotFlowSimulatorProps> = ({
                                 if (btn.action === 'url' && btn.url) {
                                   window.open(btn.url, '_blank');
                                 } else {
-                                  handleStepTransition(btn.targetStepId, btn.title);
+                                  handleStepTransition(btn, btn.title);
                                 }
                               }}
                               className="w-full py-2 px-3 text-center text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors flex items-center justify-center space-x-1.5 cursor-pointer"
