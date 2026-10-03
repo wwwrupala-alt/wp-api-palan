@@ -394,16 +394,19 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
 
                 <div>
                   <label className="block font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
-                    6-Digit PIN <span className="text-neutral-400 font-normal">(Coexistence)</span>
+                    6-Digit PIN <span className="text-neutral-400 font-normal">(Optional)</span>
                   </label>
                   <input
                     type="text"
                     maxLength={6}
-                    placeholder="e.g. 123456"
+                    placeholder="Optional (e.g. 123456)"
                     value={pin}
                     onChange={(e) => setPin(e.target.value)}
                     className="w-full px-3 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white placeholder-neutral-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 font-mono text-xs tracking-widest text-center"
                   />
+                  <p className="text-[10px] text-neutral-400 mt-1">
+                    Meta 2-Step Security PIN (Zaroori nahi hai, ise khali chhod sakte hain)
+                  </p>
                 </div>
               </div>
 
