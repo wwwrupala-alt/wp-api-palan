@@ -112,7 +112,7 @@ export const BotFlowEditorModal: React.FC<BotFlowEditorModalProps> = ({
                 body: 'Welcome! How can we assist you today?',
                 footer: '',
                 buttons: [
-                  { id: 'btn_1', title: 'Option 1', action: 'assign_agent' },
+                  { id: 'btn_1', title: 'Option 1', action: 'next_step' },
                 ],
               },
             ];

@@ -1,4 +1,6 @@
 import express from 'express';
+import path from 'path';
+import fs from 'fs';
 import {
   handleGetMetaStatus,
   handleEmbeddedSignupExchange,
@@ -26,9 +28,55 @@ import {
 
 export const apiApp = express();
 
-// Parse JSON bodies
-apiApp.use(express.json());
-apiApp.use(express.urlencoded({ extended: true }));
+// Parse JSON and URL-encoded bodies up to 50MB for media upload from PC/device
+apiApp.use(express.json({ limit: '50mb' }));
+apiApp.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Ensure public uploads directory exists and mount static serving
+const uploadsDir = path.join(process.cwd(), 'public', 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+apiApp.use('/uploads', express.static(uploadsDir));
+
+// PC / Device File Upload API Route (Images, Videos, Documents)
+apiApp.post('/api/upload', (req, res) => {
+  try {
+    const { fileName, fileType, base64Data } = req.body;
+    if (!base64Data || !fileName) {
+      return res.status(400).json({ error: 'base64Data and fileName are required' });
+    }
+
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+
+    const cleanName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const uniqueFileName = `${Date.now()}_${cleanName}`;
+    const filePath = path.join(uploadsDir, uniqueFileName);
+
+    const base64Clean = base64Data.replace(/^data:[^;]+;base64,/, '');
+    const buffer = Buffer.from(base64Clean, 'base64');
+    fs.writeFileSync(filePath, buffer);
+
+    const relativeUrl = `/uploads/${uniqueFileName}`;
+    const protocol = req.protocol || 'http';
+    const host = req.get('host') || 'localhost:3000';
+    const fullUrl = `${protocol}://${host}${relativeUrl}`;
+
+    return res.json({
+      success: true,
+      fileName: cleanName,
+      fileType: fileType || 'application/octet-stream',
+      fileSize: buffer.length,
+      url: relativeUrl,
+      fullUrl,
+    });
+  } catch (err: any) {
+    console.error('[Upload API] File upload error:', err);
+    return res.status(500).json({ error: err.message || 'Failed to save uploaded file' });
+  }
+});
 
 // Meta Cloud API Routes
 apiApp.get('/api/meta/status', handleGetMetaStatus);

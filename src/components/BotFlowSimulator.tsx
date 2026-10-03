@@ -119,7 +119,7 @@ export const BotFlowSimulator: React.FC<BotFlowSimulatorProps> = ({
   }, [flow.id, flow.updatedAt, flow.steps]);
 
   const handleStepTransition = (
-    btnOrTarget?: string | { targetStepId?: string; action?: string; url?: string; phoneNumber?: string; title?: string },
+    btnOrTarget?: string | { targetStepId?: string; targetStepIds?: string[]; action?: string; url?: string; phoneNumber?: string; title?: string },
     userLabel?: string
   ) => {
     const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -141,24 +141,7 @@ export const BotFlowSimulator: React.FC<BotFlowSimulatorProps> = ({
       ]);
     }
 
-    // 2. Action: Transfer to Human Agent
-    if (action === 'assign_agent') {
-      setTimeout(() => {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `sim_${Date.now()}`,
-            sender: 'bot',
-            type: 'agent_transfer',
-            body: '👤 Your request has been transferred to a live human agent. An agent will respond to you shortly.',
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          },
-        ]);
-      }, 450);
-      return;
-    }
-
-    // 3. Action: Call Support
+    // 2. Action: Call Support
     if (action === 'call_phone' && typeof btnOrTarget === 'object' && btnOrTarget.phoneNumber) {
       setTimeout(() => {
         setMessages((prev) => [
@@ -175,52 +158,49 @@ export const BotFlowSimulator: React.FC<BotFlowSimulatorProps> = ({
       return;
     }
 
-    // 4. Action: Next step in pipeline
-    if (targetStepId) {
-      const nextStep = flow.steps.find((s) => s.id === targetStepId);
-      if (nextStep) {
-        setActiveStepId(targetStepId);
+    // 3. Action: Next step in pipeline (supports ONE BUTTON TO MULTIPLE NODES!)
+    const targetStepIds = (typeof btnOrTarget === 'object' && btnOrTarget.targetStepIds && btnOrTarget.targetStepIds.length > 0)
+      ? btnOrTarget.targetStepIds
+      : (targetStepId ? [targetStepId] : []);
 
-        setTimeout(() => {
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: `sim_${Date.now()}`,
-              sender: 'bot',
-              type: nextStep.type,
-              body: nextStep.body,
-              headerType: nextStep.headerType,
-              headerText: nextStep.headerText,
-              headerMediaUrl: nextStep.headerMediaUrl,
-              footer: nextStep.footer,
-              buttons: nextStep.buttons,
-              listButtonText: nextStep.listButtonText,
-              listSections: nextStep.listSections,
-              mediaType: nextStep.mediaType,
-              mediaUrl: nextStep.mediaUrl,
-              mediaCaption: nextStep.mediaCaption,
-              mediaFileName: nextStep.mediaFileName,
-              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            },
-          ]);
-        }, 450);
+    if (targetStepIds.length > 0) {
+      const nextSteps = targetStepIds
+        .map((id: string) => flow.steps.find((s) => s.id === id))
+        .filter(Boolean) as BotStep[];
+
+      if (nextSteps.length > 0) {
+        setActiveStepId(nextSteps[nextSteps.length - 1].id);
+
+        nextSteps.forEach((nextStep, sIdx) => {
+          setTimeout(() => {
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `sim_${Date.now()}_${sIdx}`,
+                sender: 'bot',
+                type: nextStep.type,
+                body: nextStep.body,
+                headerType: nextStep.headerType,
+                headerText: nextStep.headerText,
+                headerMediaUrl: nextStep.headerMediaUrl,
+                footer: nextStep.footer,
+                buttons: nextStep.buttons,
+                listButtonText: nextStep.listButtonText,
+                listSections: nextStep.listSections,
+                mediaType: nextStep.mediaType,
+                mediaUrl: nextStep.mediaUrl,
+                mediaCaption: nextStep.mediaCaption,
+                mediaFileName: nextStep.mediaFileName,
+                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              },
+            ]);
+          }, 450 + sIdx * 450);
+        });
         return;
       }
     }
 
-    // 5. Default completion response when there are no more steps
-    setTimeout(() => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `sim_${Date.now()}`,
-          sender: 'bot',
-          type: 'text',
-          body: '✅ Thank you! Your choice has been recorded. Let us know if you need anything else.',
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        },
-      ]);
-    }, 450);
+    // 4. If there is no next step, the flow ends cleanly without sending unwanted messages.
   };
 
   // Jump directly to test any step in the pipeline

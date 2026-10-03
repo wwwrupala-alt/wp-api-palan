@@ -243,8 +243,9 @@ export interface Conversation {
 export interface BotButton {
   id: string;
   title: string; // up to 20 chars (Meta limit)
-  action: 'next_step' | 'url' | 'call' | 'assign_agent';
+  action: 'next_step' | 'url' | 'call' | 'assign_agent' | 'none';
   targetStepId?: string;
+  targetStepIds?: string[];
   url?: string;
   phoneNumber?: string;
 }
@@ -254,6 +255,7 @@ export interface BotListRow {
   title: string; // up to 24 chars
   description?: string; // up to 72 chars
   targetStepId?: string;
+  targetStepIds?: string[];
 }
 
 export interface BotListSection {
@@ -282,6 +284,7 @@ export interface BotStep {
   mediaFileName?: string;
   // Fallback / Auto-delay
   autoNextStepId?: string;
+  autoNextStepIds?: string[];
 }
 
 export type TriggerCondition =

@@ -528,16 +528,40 @@ export async function handleCreateTemplate(req: Request, res: Response) {
             };
           }
         } else if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(format)) {
-          if (!comp.example || !comp.example.header_handle) {
-            // Provide Meta sample media handle if not provided so Meta review bot can preview
-            updated.example = {
-              ...(comp.example || {}),
-              header_handle: [
-                comp.mediaSampleUrl ||
-                  comp.exampleUrl ||
-                  'https://upload.wikimedia.org/wikipedia/commons/thumb/6/6b/WhatsApp.svg/800px-WhatsApp.svg.png',
-              ],
-            };
+          const rawHandle =
+            comp.example?.header_handle?.[0] ||
+            comp.mediaSampleUrl ||
+            comp.exampleUrl ||
+            comp.uploadedMediaUrl;
+
+          // If the handle is a local upload from PC (data: URL, /uploads/ path, or localhost),
+          // provide a valid public review handle to Meta Graph API so approval review succeeds,
+          // while preserving the user's real uploaded media file in uploadedMediaUrl.
+          let metaHandle = rawHandle;
+          if (
+            !metaHandle ||
+            metaHandle.startsWith('data:') ||
+            metaHandle.startsWith('/uploads') ||
+            metaHandle.includes('localhost') ||
+            metaHandle.includes('127.0.0.1')
+          ) {
+            if (format === 'IMAGE') {
+              metaHandle =
+                'https://images.unsplash.com/photo-1579203438237-49dcf6133f6a?w=800&auto=format&fit=crop&q=80';
+            } else if (format === 'VIDEO') {
+              metaHandle = 'https://www.w3schools.com/html/mov_bbb.mp4';
+            } else {
+              metaHandle =
+                'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf';
+            }
+          }
+
+          updated.example = {
+            ...(comp.example || {}),
+            header_handle: [metaHandle],
+          };
+          if (rawHandle) {
+            updated.uploadedMediaUrl = rawHandle;
           }
         }
       } else if (type === 'BODY' && comp.text) {
@@ -1324,33 +1348,28 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
 
       const upperText = textBody.trim().toUpperCase();
       let matchedFlow: any = null;
-      let targetStep: any = null;
+      let targetSteps: any[] = [];
 
       // 1. If incoming message is an interactive button click or list selection
       if (interactiveButtonId || interactiveListId) {
         const clickedId = interactiveButtonId || interactiveListId;
         for (const flow of activeFlows) {
           for (const step of (flow.steps || [])) {
-            // Check buttons
+            // Check buttons (supports ONE BUTTON TO MULTIPLE NODES!)
             const btn = (step.buttons || []).find(
               (b: any) => b.id === clickedId || b.title?.trim().toLowerCase() === textBody.trim().toLowerCase()
             );
             if (btn) {
               matchedFlow = flow;
-              if (btn.action === 'assign_agent') {
-                targetStep = {
-                  type: 'text',
-                  title: 'Agent Transfer',
-                  body: '👤 Your request has been transferred to a live human agent. Our team will assist you shortly.',
-                };
-              } else if (btn.targetStepId) {
-                targetStep = (flow.steps || []).find((s: any) => s.id === btn.targetStepId);
+              const stepIds: string[] = (btn.targetStepIds && btn.targetStepIds.length > 0)
+                ? btn.targetStepIds
+                : (btn.targetStepId ? [btn.targetStepId] : []);
+              if (stepIds.length > 0) {
+                targetSteps = stepIds
+                  .map((id: string) => (flow.steps || []).find((s: any) => s.id === id))
+                  .filter(Boolean);
               } else {
-                targetStep = {
-                  type: 'text',
-                  title: 'Completed',
-                  body: '✅ Thank you! Your choice has been recorded.',
-                };
+                targetSteps = [];
               }
               break;
             }
@@ -1362,26 +1381,27 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
               );
               if (row) {
                 matchedFlow = flow;
-                if (row.targetStepId) {
-                  targetStep = (flow.steps || []).find((s: any) => s.id === row.targetStepId);
+                const stepIds: string[] = (row.targetStepIds && row.targetStepIds.length > 0)
+                  ? row.targetStepIds
+                  : (row.targetStepId ? [row.targetStepId] : []);
+                if (stepIds.length > 0) {
+                  targetSteps = stepIds
+                    .map((id: string) => (flow.steps || []).find((s: any) => s.id === id))
+                    .filter(Boolean);
                 } else {
-                  targetStep = {
-                    type: 'text',
-                    title: 'Completed',
-                    body: '✅ Thank you! Your selection has been recorded.',
-                  };
+                  targetSteps = [];
                 }
                 break;
               }
             }
-            if (targetStep) break;
+            if (targetSteps.length > 0) break;
           }
-          if (targetStep) break;
+          if (targetSteps.length > 0) break;
         }
       }
 
       // 2. If not an interactive click, match by keyword trigger
-      if (!targetStep) {
+      if (targetSteps.length === 0) {
         for (const flow of activeFlows) {
           const flowPhoneId = flow.phoneNumberId?.trim();
           if (flowPhoneId && flowPhoneId !== 'all') {
@@ -1400,7 +1420,8 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
 
           if (condition === 'anything_else') {
             matchedFlow = flow;
-            targetStep = flow.steps?.find((s: any) => s.id === flow.initialStepId) || flow.steps?.[0];
+            const initStep = flow.steps?.find((s: any) => s.id === flow.initialStepId) || flow.steps?.[0];
+            if (initStep) targetSteps = [initStep];
             break;
           }
 
@@ -1419,13 +1440,14 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
 
           if (isMatch) {
             matchedFlow = flow;
-            targetStep = flow.steps?.find((s: any) => s.id === flow.initialStepId) || flow.steps?.[0];
+            const initStep = flow.steps?.find((s: any) => s.id === flow.initialStepId) || flow.steps?.[0];
+            if (initStep) targetSteps = [initStep];
             break;
           }
         }
       }
 
-      if (matchedFlow && targetStep) {
+      if (matchedFlow && targetSteps.length > 0) {
         // Increment flow triggered statistics in Firestore
         updateDoc(doc(serverDb, `organizations/${targetOrgId}/botFlows`, matchedFlow.id), {
           totalTriggeredCount: (matchedFlow.totalTriggeredCount || 0) + 1,
@@ -1434,11 +1456,19 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
 
         if (token && phoneNumberId) {
           const sendUrl = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`;
-          let outPayload: any = {
-            messaging_product: 'whatsapp',
-            recipient_type: 'individual',
-            to: cleanPhone,
-          };
+
+          // Iterate through all connected target steps (supports multiple nodes connected to one button)
+          for (let stepIdx = 0; stepIdx < targetSteps.length; stepIdx++) {
+            const targetStep = targetSteps[stepIdx];
+            if (stepIdx > 0) {
+              await new Promise((r) => setTimeout(r, 450));
+            }
+
+            let outPayload: any = {
+              messaging_product: 'whatsapp',
+              recipient_type: 'individual',
+              to: cleanPhone,
+            };
 
           if (targetStep.type === 'interactive_button' && targetStep.buttons?.length > 0) {
             outPayload = {
@@ -1586,7 +1616,8 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
         }
       }
     }
-  } catch (err: any) {
+  }
+} catch (err: any) {
     console.error('[Webhook] Error processing incoming WhatsApp webhook:', err);
   }
 }

@@ -1092,19 +1092,28 @@ export async function handleInboxButtonClick(
     })
   );
 
-  // 2. If action is next_step and targetStepId is provided, find that step across botFlows
-  if (params.button.action === 'next_step' && params.button.targetStepId) {
+  // 2. If action is next_step and target steps are provided, find steps across botFlows
+  const targetStepIds = (params.button.targetStepIds && params.button.targetStepIds.length > 0)
+    ? params.button.targetStepIds
+    : (params.button.targetStepId ? [params.button.targetStepId] : []);
+
+  if (params.button.action === 'next_step' && targetStepIds.length > 0) {
     const flowsSnap = await getDocs(collection(db, `organizations/${orgId}/botFlows`));
-    let nextStep: BotStep | null = null;
+    const nextSteps: BotStep[] = [];
     flowsSnap.forEach((d) => {
       const f = d.data() as BotFlow;
-      const found = f.steps?.find((s) => s.id === params.button.targetStepId);
-      if (found) nextStep = found;
+      targetStepIds.forEach((tId) => {
+        const found = f.steps?.find((s) => s.id === tId);
+        if (found && !nextSteps.some((existing) => existing.id === found.id)) {
+          nextSteps.push(found);
+        }
+      });
     });
 
-    if (nextStep) {
-      const botNow = new Date(Date.now() + 400).toISOString();
-      const botMsgId = `msg_bot_${Date.now()}`;
+    for (let i = 0; i < nextSteps.length; i++) {
+      const nextStep = nextSteps[i];
+      const botNow = new Date(Date.now() + 400 + i * 350).toISOString();
+      const botMsgId = `msg_bot_${Date.now()}_${i}`;
       await setDoc(
         doc(db, 'organizations', orgId, 'messages', botMsgId),
         removeUndefined({
@@ -1134,24 +1143,8 @@ export async function handleInboxButtonClick(
         lastMessageAt: botNow,
       }).catch(() => {});
     }
-  } else if (params.button.action === 'assign_agent') {
-    const botNow = new Date(Date.now() + 400).toISOString();
-    const botMsgId = `msg_bot_${Date.now()}`;
-    await setDoc(
-      doc(db, 'organizations', orgId, 'messages', botMsgId),
-      removeUndefined({
-        id: botMsgId,
-        whatsAppAccountId: params.accountId || 'test_account',
-        contactId: params.contactPhone,
-        conversationId: params.conversationId,
-        direction: 'outbound',
-        messageType: 'text',
-        messageStatus: 'sent',
-        body: '👨‍💼 Support team has been assigned to your chat. An agent will connect with you shortly.',
-        timestamp: botNow,
-      })
-    );
   }
+  // When there is no next step (end of flow), no automated support assignment message is dispatched.
 }
 
 /**
