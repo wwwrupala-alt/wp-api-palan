@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Smartphone,
@@ -16,11 +16,6 @@ import {
   Plus,
   Trash2,
   Copy,
-  UploadCloud,
-  FolderUp,
-  HardDrive,
-  FileCheck,
-  RefreshCw,
 } from 'lucide-react';
 import type { Template, TemplateComponent } from '../types/index.ts';
 
@@ -62,14 +57,6 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
   const [headerMediaSampleUrl, setHeaderMediaSampleUrl] = useState(
     'https://images.unsplash.com/photo-1579203438237-49dcf6133f6a?w=800&auto=format&fit=crop&q=80'
   );
-
-  // PC / Device File Upload State
-  const [mediaSourceMode, setMediaSourceMode] = useState<'UPLOAD' | 'URL'>('UPLOAD');
-  const [uploadedFile, setUploadedFile] = useState<{ name: string; size: number; type: string } | null>(null);
-  const [isUploading, setIsUploading] = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Body State
   const [bodyText, setBodyText] = useState(
@@ -242,67 +229,6 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
         return b;
       })
     );
-  };
-
-  // PC / Device File Upload Processing
-  const handleProcessFile = async (file: File) => {
-    setUploadError(null);
-    if (!file) return;
-
-    // Check size limit: 25MB for video/doc, 10MB for image
-    const maxSizeBytes = headerType === 'IMAGE' ? 10 * 1024 * 1024 : 25 * 1024 * 1024;
-    if (file.size > maxSizeBytes) {
-      setUploadError(
-        `File too large (${(file.size / 1024 / 1024).toFixed(1)}MB). Maximum allowed is ${
-          maxSizeBytes / 1024 / 1024
-        }MB.`
-      );
-      return;
-    }
-
-    setIsUploading(true);
-
-    try {
-      // 1. Read locally as Base64 for instant preview in phone mockup
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        const base64Data = e.target?.result as string;
-        setHeaderMediaSampleUrl(base64Data);
-        setUploadedFile({
-          name: file.name,
-          size: file.size,
-          type: file.type,
-        });
-
-        // 2. Upload to server storage endpoint /api/upload
-        try {
-          const res = await fetch('/api/upload', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              fileName: file.name,
-              fileType: file.type,
-              base64Data,
-            }),
-          });
-          const data = await res.json();
-          if (data.success && data.url) {
-            // Keep preview data or update to server relative URL
-            // Both work, data.url is clean
-          }
-        } catch (serverErr) {
-          console.warn('Server upload fallback to local preview:', serverErr);
-        }
-      };
-      reader.onerror = () => {
-        setUploadError('Failed to read selected file from your device.');
-      };
-      reader.readAsDataURL(file);
-    } catch (err: any) {
-      setUploadError(err.message || 'Error processing file from PC');
-    } finally {
-      setIsUploading(false);
-    }
   };
 
   // Compute live rendered preview text by replacing {{1}}, {{2}} with sample values
@@ -589,229 +515,20 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
               )}
 
               {['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerType) && (
-                <div className="space-y-3 p-3.5 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700/80 shadow-2xs">
-                  {/* Mode Selector Tabs */}
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-xs text-neutral-800 dark:text-neutral-200 flex items-center space-x-1.5">
-                      <HardDrive className="w-4 h-4 text-emerald-600" />
-                      <span>Choose Header Media Source:</span>
-                    </span>
-                    <div className="flex items-center bg-neutral-100 dark:bg-neutral-800 p-0.5 rounded-xl border border-neutral-200 dark:border-neutral-700">
-                      <button
-                        type="button"
-                        onClick={() => setMediaSourceMode('UPLOAD')}
-                        className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center space-x-1.5 ${
-                          mediaSourceMode === 'UPLOAD'
-                            ? 'bg-emerald-600 text-white shadow-xs'
-                            : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white'
-                        }`}
-                      >
-                        <FolderUp className="w-3.5 h-3.5" />
-                        <span>Upload from PC / Device</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setMediaSourceMode('URL')}
-                        className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center space-x-1.5 ${
-                          mediaSourceMode === 'URL'
-                            ? 'bg-emerald-600 text-white shadow-xs'
-                            : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white'
-                        }`}
-                      >
-                        <Link className="w-3.5 h-3.5" />
-                        <span>Media Web Link</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Mode 1: PC / Device File Upload */}
-                  {mediaSourceMode === 'UPLOAD' ? (
-                    <div className="space-y-2">
-                      <input
-                        ref={fileInputRef}
-                        type="file"
-                        className="hidden"
-                        accept={
-                          headerType === 'IMAGE'
-                            ? 'image/png,image/jpeg,image/jpg,image/webp'
-                            : headerType === 'VIDEO'
-                            ? 'video/mp4,video/3gpp,video/quicktime'
-                            : '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,application/pdf'
-                        }
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) handleProcessFile(file);
-                        }}
-                      />
-
-                      {uploadedFile ? (
-                        /* Uploaded File Card */
-                        <div className="p-3 rounded-xl border-2 border-emerald-500/50 bg-emerald-50/40 dark:bg-emerald-950/30 flex items-center justify-between">
-                          <div className="flex items-center space-x-3 truncate">
-                            <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-900/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
-                              {headerType === 'IMAGE' ? (
-                                <ImageIcon className="w-5 h-5" />
-                              ) : headerType === 'VIDEO' ? (
-                                <Video className="w-5 h-5" />
-                              ) : (
-                                <FileText className="w-5 h-5" />
-                              )}
-                            </div>
-                            <div className="truncate">
-                              <div className="flex items-center space-x-1.5">
-                                <span className="font-bold text-xs text-neutral-900 dark:text-white truncate">
-                                  {uploadedFile.name}
-                                </span>
-                                <span className="px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-emerald-600 text-white shrink-0">
-                                  ✓ Ready
-                                </span>
-                              </div>
-                              <p className="text-[10px] text-neutral-500 dark:text-neutral-400">
-                                {(uploadedFile.size / 1024 / 1024).toFixed(2)} MB • Uploaded from your computer
-                              </p>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center space-x-2 shrink-0 ml-2">
-                            <button
-                              type="button"
-                              onClick={() => fileInputRef.current?.click()}
-                              className="px-2.5 py-1 rounded-lg text-[11px] font-semibold border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-neutral-700 dark:text-neutral-200 hover:border-emerald-500 cursor-pointer"
-                            >
-                              Change File
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setUploadedFile(null);
-                                setHeaderMediaSampleUrl('');
-                                if (fileInputRef.current) fileInputRef.current.value = '';
-                              }}
-                              className="p-1 rounded-lg text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
-                              title="Remove uploaded file"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        /* Dropzone to select file from PC */
-                        <div
-                          onDragOver={(e) => {
-                            e.preventDefault();
-                            setIsDragging(true);
-                          }}
-                          onDragLeave={() => setIsDragging(false)}
-                          onDrop={(e) => {
-                            e.preventDefault();
-                            setIsDragging(false);
-                            const file = e.dataTransfer.files?.[0];
-                            if (file) handleProcessFile(file);
-                          }}
-                          onClick={() => fileInputRef.current?.click()}
-                          className={`p-5 rounded-2xl border-2 border-dashed transition-all cursor-pointer flex flex-col items-center justify-center text-center space-y-2 ${
-                            isDragging
-                              ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/50 scale-[1.01]'
-                              : 'border-neutral-300 dark:border-neutral-700 hover:border-emerald-500 bg-neutral-50/50 dark:bg-neutral-800/40 hover:bg-emerald-50/20'
-                          }`}
-                        >
-                          <div className="w-12 h-12 rounded-2xl bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shadow-2xs">
-                            {isUploading ? (
-                              <Loader2 className="w-6 h-6 animate-spin text-emerald-600" />
-                            ) : (
-                              <UploadCloud className="w-6 h-6" />
-                            )}
-                          </div>
-                          <div>
-                            <p className="font-bold text-xs text-neutral-800 dark:text-neutral-200">
-                              {isUploading ? 'Uploading file from device...' : 'Click to choose file from your PC / Device'}
-                            </p>
-                            <p className="text-[11px] text-neutral-500 dark:text-neutral-400 mt-0.5">
-                              or drag and drop your{' '}
-                              <strong className="text-emerald-600 dark:text-emerald-400">
-                                {headerType === 'IMAGE'
-                                  ? 'Image (PNG, JPG, WEBP)'
-                                  : headerType === 'VIDEO'
-                                  ? 'Video (MP4, 3GP)'
-                                  : 'Document (PDF, DOC, XLSX)'}
-                              </strong>{' '}
-                              here
-                            </p>
-                          </div>
-                          <span className="px-3 py-1 rounded-xl bg-emerald-600 text-white font-semibold text-[11px] shadow-xs hover:bg-emerald-700">
-                            Browse PC Files
-                          </span>
-                        </div>
-                      )}
-
-                      {uploadError && (
-                        <div className="p-2 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-[11px] text-rose-700 dark:text-rose-300 flex items-center space-x-1.5">
-                          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                          <span>{uploadError}</span>
-                        </div>
-                      )}
-
-                      <p className="text-[10px] text-neutral-400">
-                        ⚡ Your file from PC is saved instantly and previewed live on the WhatsApp phone mockup.
-                      </p>
-                    </div>
-                  ) : (
-                    /* Mode 2: Web URL input */
-                    <div className="space-y-1.5">
-                      <label className="block text-[11px] font-semibold text-neutral-700 dark:text-neutral-300">
-                        Media Web URL / CDN Link:
-                      </label>
-                      <input
-                        type="url"
-                        placeholder={`https://example.com/sample.${
-                          headerType === 'DOCUMENT' ? 'pdf' : headerType === 'VIDEO' ? 'mp4' : 'jpg'
-                        }`}
-                        value={headerMediaSampleUrl}
-                        onChange={(e) => setHeaderMediaSampleUrl(e.target.value)}
-                        className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white font-mono text-[11px]"
-                      />
-                      <div className="flex items-center space-x-2 text-[10px] text-neutral-500">
-                        <span>Quick Presets:</span>
-                        {headerType === 'IMAGE' && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setHeaderMediaSampleUrl(
-                                'https://images.unsplash.com/photo-1579203438237-49dcf6133f6a?w=800&auto=format&fit=crop&q=80'
-                              )
-                            }
-                            className="text-emerald-600 hover:underline cursor-pointer font-medium"
-                          >
-                            Unsplash Sample
-                          </button>
-                        )}
-                        {headerType === 'VIDEO' && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setHeaderMediaSampleUrl('https://www.w3schools.com/html/mov_bbb.mp4')
-                            }
-                            className="text-emerald-600 hover:underline cursor-pointer font-medium"
-                          >
-                            Sample MP4
-                          </button>
-                        )}
-                        {headerType === 'DOCUMENT' && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setHeaderMediaSampleUrl(
-                                'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf'
-                              )
-                            }
-                            className="text-emerald-600 hover:underline cursor-pointer font-medium"
-                          >
-                            Sample PDF
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  )}
+                <div className="space-y-1.5">
+                  <label className="block font-semibold text-neutral-700 dark:text-neutral-300">
+                    Sample Media URL (Required by Meta for Review)
+                  </label>
+                  <input
+                    type="url"
+                    placeholder={`https://example.com/sample.${headerType === 'DOCUMENT' ? 'pdf' : headerType === 'VIDEO' ? 'mp4' : 'jpg'}`}
+                    value={headerMediaSampleUrl}
+                    onChange={(e) => setHeaderMediaSampleUrl(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white font-mono text-[11px]"
+                  />
+                  <p className="text-[10px] text-neutral-400">
+                    Meta reviewers inspect this sample media during approval. When broadcasting, you can send any image link!
+                  </p>
                 </div>
               )}
             </div>
@@ -1076,26 +793,8 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
                     )}
 
                     {headerType === 'VIDEO' && (
-                      <div className="rounded-xl overflow-hidden aspect-video bg-neutral-900 flex flex-col items-center justify-center text-white relative">
-                        {headerMediaSampleUrl &&
-                        (headerMediaSampleUrl.startsWith('data:video') ||
-                          headerMediaSampleUrl.endsWith('.mp4') ||
-                          headerMediaSampleUrl.startsWith('/uploads')) ? (
-                          <video
-                            src={headerMediaSampleUrl}
-                            className="w-full h-full object-cover"
-                            controls
-                            playsInline
-                            muted
-                          />
-                        ) : (
-                          <>
-                            <Video className="w-8 h-8 text-neutral-400 mb-1" />
-                            <span className="text-[10px] text-neutral-300 font-medium px-2 text-center truncate max-w-[90%]">
-                              {uploadedFile?.name || 'Sample Video (MP4)'}
-                            </span>
-                          </>
-                        )}
+                      <div className="rounded-xl overflow-hidden aspect-video bg-neutral-900 flex items-center justify-center text-white relative">
+                        <Video className="w-8 h-8 text-neutral-400" />
                         <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/60 text-white text-[9px]">
                           Video
                         </span>
@@ -1103,20 +802,11 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
                     )}
 
                     {headerType === 'DOCUMENT' && (
-                      <div className="p-2.5 rounded-xl bg-neutral-100 dark:bg-neutral-800/90 border border-neutral-200 dark:border-neutral-700 flex items-center space-x-2.5">
-                        <div className="w-8 h-8 rounded-lg bg-red-100 dark:bg-red-950/60 text-red-600 flex items-center justify-center shrink-0">
-                          <FileText className="w-5 h-5" />
-                        </div>
+                      <div className="p-2 rounded-xl bg-neutral-100 dark:bg-neutral-800/90 border border-neutral-200 dark:border-neutral-700 flex items-center space-x-2">
+                        <FileText className="w-6 h-6 text-red-500" />
                         <div className="flex-1 truncate">
-                          <p className="text-[10.5px] font-bold truncate text-neutral-900 dark:text-neutral-100">
-                            {uploadedFile?.name || 'Sample_Document.pdf'}
-                          </p>
-                          <p className="text-[9px] text-neutral-500">
-                            {uploadedFile?.size
-                              ? `${(uploadedFile.size / 1024).toFixed(0)} KB • `
-                              : ''}
-                            Document File
-                          </p>
+                          <p className="text-[10px] font-semibold truncate">Sample_Document.pdf</p>
+                          <p className="text-[8px] text-neutral-500">PDF Document</p>
                         </div>
                       </div>
                     )}
