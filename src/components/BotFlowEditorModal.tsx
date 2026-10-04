@@ -130,6 +130,8 @@ export const BotFlowEditorModal: React.FC<BotFlowEditorModalProps> = ({
         initialStepId: initialFlow?.initialStepId || 'step_1',
         steps: defaultSteps,
         enabled: initialFlow?.enabled ?? true,
+        isFinal: initialFlow?.isFinal,
+        version: initialFlow?.version,
         createdAt: initialFlow?.createdAt || new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };

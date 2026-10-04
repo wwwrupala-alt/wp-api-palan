@@ -1,4 +1,5 @@
 import express from 'express';
+import path from 'path';
 import {
   handleGetMetaStatus,
   handleEmbeddedSignupExchange,
@@ -15,6 +16,7 @@ import {
   handleWebhookPost,
   handleGetWebhookLogs,
   handleSaveAdminMetaConfig,
+  handleUploadMedia,
   processIncomingWhatsAppStatusUpdate,
 } from './metaService.ts';
 import {
@@ -26,9 +28,15 @@ import {
 
 export const apiApp = express();
 
-// Parse JSON bodies
-apiApp.use(express.json());
-apiApp.use(express.urlencoded({ extended: true }));
+// Parse JSON bodies with support for media file uploads (up to 60MB)
+apiApp.use(express.json({ limit: '60mb' }));
+apiApp.use(express.urlencoded({ extended: true, limit: '60mb' }));
+
+// Serve uploaded media files publicly from /uploads
+apiApp.use('/uploads', express.static(path.join(process.cwd(), 'public', 'uploads')));
+
+// Media Upload from PC / Device
+apiApp.post('/api/media/upload', handleUploadMedia);
 
 // Meta Cloud API Routes
 apiApp.get('/api/meta/status', handleGetMetaStatus);

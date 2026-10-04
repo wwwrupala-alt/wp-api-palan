@@ -36,6 +36,7 @@ import {
   subscribeBotFlows,
   saveBotFlow,
   toggleBotFlow,
+  setFlowAsFinalVersion,
   deleteBotFlow,
 } from '../lib/services.ts';
 import { BotFlowSimulator } from '../components/BotFlowSimulator.tsx';
@@ -113,7 +114,29 @@ export const AutomationsPage: React.FC = () => {
     if (canvasModalFlow?.id === flow.id) {
       setCanvasModalFlow(flow);
     }
-    toast.showSuccess('Chatbot Flow Deployed', `Flow "${flow.name}" saved and active.`);
+    toast.showSuccess(
+      flow.isFinal ? 'Final Version Saved & Live' : 'Chatbot Flow Deployed',
+      `Flow "${flow.name}" updated in-place. All new incoming messages will use this version.`
+    );
+  };
+
+  // Set or toggle a flow as the designated Final Version
+  const handleSetFinalVersion = async (flow: BotFlow) => {
+    if (!organization?.id) return;
+    const newStatus = !flow.isFinal;
+    // Optimistically update
+    setBotFlows((prev) =>
+      prev.map((f) =>
+        f.id === flow.id
+          ? { ...f, isFinal: newStatus, version: newStatus ? (f.version || 'v1.0 (Final)') : undefined, enabled: newStatus ? true : f.enabled }
+          : f
+      )
+    );
+    await setFlowAsFinalVersion(organization.id, flow.id, newStatus);
+    toast.showSuccess(
+      newStatus ? 'Marked as Final Version' : 'Final Status Removed',
+      `"${flow.name}" is ${newStatus ? 'now the active Final Version. All future updates will apply directly here.' : 'no longer marked as final.'}`
+    );
   };
 
   // Toggle Flow Active/Paused
@@ -304,14 +327,26 @@ export const AutomationsPage: React.FC = () => {
               {displayedFlows.map((flow) => (
                 <div
                   key={flow.id}
-                  className="p-5 rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-xs hover:shadow-md transition-shadow flex flex-col justify-between space-y-4"
+                  className={`p-5 rounded-3xl border transition-all flex flex-col justify-between space-y-4 ${
+                    flow.isFinal
+                      ? 'border-emerald-500 ring-2 ring-emerald-500/30 bg-emerald-50/15 dark:bg-emerald-950/20 shadow-md'
+                      : 'border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-xs hover:shadow-md'
+                  }`}
                 >
                   <div className="space-y-3">
                     {/* Flow Header */}
                     <div className="flex items-start justify-between gap-2">
                       <div className="space-y-1">
-                        <h4 className="font-bold text-sm text-neutral-900 dark:text-white flex items-center space-x-2">
-                          <span>{flow.name}</span>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h4 className="font-bold text-sm text-neutral-900 dark:text-white">
+                            {flow.name}
+                          </h4>
+                          {flow.isFinal && (
+                            <span className="text-[10px] bg-emerald-600 text-white px-2 py-0.5 rounded-full font-black flex items-center space-x-1 shadow-xs">
+                              <span>⭐ FINAL VERSION</span>
+                              <span className="opacity-90 font-mono">({flow.version || 'v1.0'})</span>
+                            </span>
+                          )}
                           {flow.enabled ? (
                             <span className="text-[10px] bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 px-1.5 py-0.5 rounded-full font-bold">
                               ACTIVE
@@ -321,7 +356,7 @@ export const AutomationsPage: React.FC = () => {
                               PAUSED
                             </span>
                           )}
-                        </h4>
+                        </div>
                         {flow.description && (
                           <p className="text-xs text-neutral-500 line-clamp-2">{flow.description}</p>
                         )}
@@ -330,7 +365,7 @@ export const AutomationsPage: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => handleToggleFlow(flow)}
-                        className="cursor-pointer text-neutral-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors"
+                        className="cursor-pointer text-neutral-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors shrink-0"
                         title={flow.enabled ? 'Pause Flow' : 'Activate Flow'}
                       >
                         {flow.enabled ? (
@@ -421,6 +456,21 @@ export const AutomationsPage: React.FC = () => {
                       >
                         <Play className="w-3.5 h-3.5 fill-current" />
                         <span>Test in Phone</span>
+                      </button>
+
+                      {/* Set / Toggle Final Version */}
+                      <button
+                        type="button"
+                        onClick={() => handleSetFinalVersion(flow)}
+                        className={`px-2.5 py-1.5 rounded-xl font-semibold flex items-center space-x-1 transition-colors cursor-pointer text-xs ${
+                          flow.isFinal
+                            ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700'
+                            : 'bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 text-neutral-600 dark:text-neutral-300'
+                        }`}
+                        title={flow.isFinal ? 'Currently designated as Final Version' : 'Set as the Final Version'}
+                      >
+                        <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                        <span>{flow.isFinal ? 'Final' : 'Make Final'}</span>
                       </button>
                     </div>
 

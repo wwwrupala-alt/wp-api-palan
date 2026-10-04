@@ -22,10 +22,14 @@ import {
   ShieldCheck,
   RefreshCw,
   Zap,
+  UploadCloud,
+  HardDrive,
+  Link as LinkIcon,
+  Trash2,
 } from 'lucide-react';
 import type { Template, Contact, ContactGroup, WhatsAppAccount } from '../types/index.ts';
 import { useToast } from '../context/ToastContext.tsx';
-import { createCampaign, launchCampaign } from '../lib/services.ts';
+import { createCampaign, launchCampaign, uploadMediaFile } from '../lib/services.ts';
 
 interface CreateCampaignModalProps {
   isOpen: boolean;
@@ -65,6 +69,21 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
   // Dynamic variables & media
   const [templateVariables, setTemplateVariables] = useState<Record<string, string>>({});
   const [campaignMediaUrl, setCampaignMediaUrl] = useState('');
+
+  // Campaign media PC upload state
+  const [campaignMediaSourceMode, setCampaignMediaSourceMode] = useState<'upload' | 'url'>('upload');
+  const [uploadedCampaignMedia, setUploadedCampaignMedia] = useState<{
+    filename: string;
+    originalName: string;
+    url: string;
+    fullUrl: string;
+    size: number;
+    contentType: string;
+  } | null>(null);
+  const [isUploadingCampaignMedia, setIsUploadingCampaignMedia] = useState(false);
+  const [uploadCampaignError, setUploadCampaignError] = useState<string | null>(null);
+  const campaignFileInputRef = React.useRef<HTMLInputElement | null>(null);
+  const [isDraggingCampaign, setIsDraggingCampaign] = useState(false);
 
   // Test send state
   const [testPhone, setTestPhone] = useState('');
@@ -177,6 +196,35 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
   }, [bodyText, requiredVariables, templateVariables]);
 
   if (!isOpen) return null;
+
+  const handleCampaignFileSelected = async (file: File) => {
+    if (!file) return;
+    const format = String(headerComponent?.format || '').toUpperCase();
+    if (format === 'IMAGE' && !file.type.startsWith('image/')) {
+      setUploadCampaignError('Please select a valid image file (JPG, PNG, WEBP).');
+      return;
+    }
+    if (format === 'VIDEO' && !file.type.startsWith('video/')) {
+      setUploadCampaignError('Please select a valid video file (MP4, 3GP).');
+      return;
+    }
+    if (format === 'DOCUMENT' && file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+      setUploadCampaignError('Please select a valid PDF document.');
+      return;
+    }
+
+    setUploadCampaignError(null);
+    setIsUploadingCampaignMedia(true);
+    try {
+      const res = await uploadMediaFile(file, activeAccount?.customToken);
+      setUploadedCampaignMedia(res);
+      setCampaignMediaUrl(res.url);
+    } catch (err: any) {
+      setUploadCampaignError(err.message || 'Failed to upload media from PC.');
+    } finally {
+      setIsUploadingCampaignMedia(false);
+    }
+  };
 
   // Send Test Message
   const handleSendTestMessage = async () => {
@@ -466,29 +514,193 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
                 </select>
               )}
 
-              {/* Header Media Link Input if template requires it */}
+              {/* Header Media: Direct PC / Device Upload or URL */}
               {hasHeaderMedia && (
-                <div className="p-3 rounded-2xl bg-neutral-50 dark:bg-neutral-800/60 border border-neutral-200 dark:border-neutral-700 space-y-1.5 animate-fadeIn">
-                  <label className="block text-xs font-semibold text-neutral-700 dark:text-neutral-300 flex items-center space-x-1.5">
-                    {headerComponent?.format === 'VIDEO' ? (
-                      <Video className="w-3.5 h-3.5 text-emerald-500" />
-                    ) : (
-                      <ImageIcon className="w-3.5 h-3.5 text-emerald-500" />
-                    )}
-                    <span>
-                      Template Header Media URL ({headerComponent?.format}) <span className="text-red-500">*</span>
-                    </span>
-                  </label>
-                  <input
-                    type="url"
-                    placeholder="https://example.com/banner.jpg or https://example.com/video.mp4"
-                    value={campaignMediaUrl}
-                    onChange={(e) => setCampaignMediaUrl(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 text-xs text-neutral-900 dark:text-white font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
-                  />
-                  <p className="text-[10px] text-neutral-500">
-                    Direct public link to the image, video, or PDF document for this broadcast header.
-                  </p>
+                <div className="p-3.5 rounded-2xl bg-neutral-50 dark:bg-neutral-800/60 border border-neutral-200 dark:border-neutral-700 space-y-3 animate-fadeIn">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <label className="text-xs font-semibold text-neutral-700 dark:text-neutral-300 flex items-center space-x-1.5">
+                      {headerComponent?.format === 'VIDEO' ? (
+                        <Video className="w-3.5 h-3.5 text-emerald-500" />
+                      ) : headerComponent?.format === 'DOCUMENT' ? (
+                        <FileText className="w-3.5 h-3.5 text-emerald-500" />
+                      ) : (
+                        <ImageIcon className="w-3.5 h-3.5 text-emerald-500" />
+                      )}
+                      <span>
+                        Broadcast Header Media ({headerComponent?.format}) <span className="text-red-500">*</span>
+                      </span>
+                    </label>
+
+                    <div className="inline-flex items-center space-x-1 p-0.5 bg-neutral-200/80 dark:bg-neutral-900 rounded-xl text-xs font-semibold self-start sm:self-auto">
+                      <button
+                        type="button"
+                        onClick={() => setCampaignMediaSourceMode('upload')}
+                        className={`px-2.5 py-1 rounded-lg transition-all flex items-center space-x-1 cursor-pointer ${
+                          campaignMediaSourceMode === 'upload'
+                            ? 'bg-emerald-600 text-white shadow-xs'
+                            : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white'
+                        }`}
+                      >
+                        <HardDrive className="w-3 h-3" />
+                        <span>💻 Upload from PC</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCampaignMediaSourceMode('url')}
+                        className={`px-2.5 py-1 rounded-lg transition-all flex items-center space-x-1 cursor-pointer ${
+                          campaignMediaSourceMode === 'url'
+                            ? 'bg-emerald-600 text-white shadow-xs'
+                            : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white'
+                        }`}
+                      >
+                        <LinkIcon className="w-3 h-3" />
+                        <span>🔗 URL</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Mode A: Upload from PC / Device */}
+                  {campaignMediaSourceMode === 'upload' && (
+                    <div className="space-y-2">
+                      <input
+                        ref={campaignFileInputRef}
+                        type="file"
+                        className="hidden"
+                        accept={
+                          headerComponent?.format === 'IMAGE'
+                            ? 'image/jpeg,image/png,image/webp'
+                            : headerComponent?.format === 'VIDEO'
+                            ? 'video/mp4,video/3gpp'
+                            : 'application/pdf,.pdf'
+                        }
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) handleCampaignFileSelected(file);
+                        }}
+                      />
+
+                      {uploadedCampaignMedia ? (
+                        <div className="p-3 rounded-xl border border-emerald-500/40 bg-emerald-50/50 dark:bg-emerald-950/20 flex items-center justify-between gap-3">
+                          <div className="flex items-center space-x-3 overflow-hidden">
+                            {headerComponent?.format === 'IMAGE' && (
+                              <img
+                                src={uploadedCampaignMedia.url}
+                                alt="Banner"
+                                className="w-12 h-12 rounded-lg object-cover border border-emerald-300 dark:border-emerald-700 shrink-0"
+                              />
+                            )}
+                            {headerComponent?.format === 'VIDEO' && (
+                              <div className="w-12 h-12 rounded-lg bg-neutral-900 text-white flex items-center justify-center shrink-0">
+                                <Video className="w-6 h-6 text-emerald-400" />
+                              </div>
+                            )}
+                            {headerComponent?.format === 'DOCUMENT' && (
+                              <div className="w-12 h-12 rounded-lg bg-red-50 dark:bg-red-950/40 text-red-500 flex items-center justify-center shrink-0 border border-red-200 dark:border-red-800">
+                                <FileText className="w-6 h-6" />
+                              </div>
+                            )}
+                            <div className="min-w-0">
+                              <p className="text-xs font-bold text-neutral-900 dark:text-white truncate">
+                                {uploadedCampaignMedia.originalName}
+                              </p>
+                              <div className="flex items-center space-x-2 text-[10px] text-neutral-500 dark:text-neutral-400">
+                                <span>{(uploadedCampaignMedia.size / 1024).toFixed(1)} KB</span>
+                                <span>&bull;</span>
+                                <span className="text-emerald-600 dark:text-emerald-400 font-semibold flex items-center space-x-0.5">
+                                  <CheckCircle2 className="w-3 h-3" />
+                                  <span>Ready to Broadcast</span>
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center space-x-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => campaignFileInputRef.current?.click()}
+                              className="px-2 py-1 rounded-lg text-xs font-medium text-emerald-700 dark:text-emerald-300 bg-white dark:bg-neutral-800 hover:bg-neutral-100 border border-neutral-200 dark:border-neutral-700 cursor-pointer"
+                            >
+                              Replace
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setUploadedCampaignMedia(null);
+                                setCampaignMediaUrl('');
+                              }}
+                              className="p-1 rounded-lg text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30 cursor-pointer"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div
+                          onDragOver={(e) => {
+                            e.preventDefault();
+                            setIsDraggingCampaign(true);
+                          }}
+                          onDragLeave={() => setIsDraggingCampaign(false)}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            setIsDraggingCampaign(false);
+                            const file = e.dataTransfer.files?.[0];
+                            if (file) handleCampaignFileSelected(file);
+                          }}
+                          onClick={() => campaignFileInputRef.current?.click()}
+                          className={`p-5 rounded-2xl border-2 border-dashed transition-all cursor-pointer flex flex-col items-center justify-center space-y-1.5 text-center ${
+                            isDraggingCampaign
+                              ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30'
+                              : 'border-neutral-300 dark:border-neutral-700 hover:border-emerald-500 hover:bg-white dark:hover:bg-neutral-800'
+                          }`}
+                        >
+                          {isUploadingCampaignMedia ? (
+                            <div className="flex flex-col items-center space-y-2 text-emerald-600">
+                              <Loader2 className="w-6 h-6 animate-spin" />
+                              <span className="text-xs font-bold">Uploading from your device...</span>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="w-10 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
+                                <UploadCloud className="w-5 h-5" />
+                              </div>
+                              <p className="text-xs font-bold text-neutral-800 dark:text-neutral-200">
+                                Click or drag &amp; drop {headerComponent?.format?.toLowerCase() || 'file'} from your PC
+                              </p>
+                              <p className="text-[10px] text-neutral-500">
+                                {headerComponent?.format === 'IMAGE' && 'JPG, PNG, WEBP (Max 5MB)'}
+                                {headerComponent?.format === 'VIDEO' && 'MP4, 3GP (Max 16MB)'}
+                                {headerComponent?.format === 'DOCUMENT' && 'PDF Documents (Max 25MB)'}
+                              </p>
+                            </>
+                          )}
+                        </div>
+                      )}
+
+                      {uploadCampaignError && (
+                        <div className="p-2 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300 text-xs flex items-center space-x-2">
+                          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                          <span>{uploadCampaignError}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Mode B: Media URL Link */}
+                  {campaignMediaSourceMode === 'url' && (
+                    <div className="space-y-1">
+                      <input
+                        type="url"
+                        placeholder="https://example.com/banner.jpg or https://example.com/video.mp4"
+                        value={campaignMediaUrl}
+                        onChange={(e) => setCampaignMediaUrl(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 text-xs text-neutral-900 dark:text-white font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                      />
+                      <p className="text-[10px] text-neutral-500">
+                        Direct public URL to the media file for this broadcast header.
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
 

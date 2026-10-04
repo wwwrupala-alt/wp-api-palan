@@ -855,6 +855,20 @@ export async function toggleBotFlow(orgId: string, flowId: string, enabled: bool
   }
 }
 
+export async function setFlowAsFinalVersion(orgId: string, flowId: string, isFinal = true) {
+  const path = `organizations/${orgId}/botFlows/${flowId}`;
+  try {
+    await updateDoc(doc(db, 'organizations', orgId, 'botFlows', flowId), {
+      isFinal,
+      version: isFinal ? 'v1.0 (Final)' : undefined,
+      enabled: isFinal ? true : undefined,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
 export async function deleteBotFlow(orgId: string, flowId: string) {
   const path = `organizations/${orgId}/botFlows/${flowId}`;
   try {
@@ -1460,6 +1474,52 @@ export async function reassignUserToAdmin(userId: string, targetAdminId: string)
   await updateDoc(doc(db, 'users', userId), {
     managedByAdminId: targetAdminId,
     updatedAt: new Date().toISOString(),
+  });
+}
+
+/**
+ * Uploads a file (image, video, document) from user's PC/device to backend
+ */
+export async function uploadMediaFile(
+  file: File,
+  customToken?: string
+): Promise<{
+  success: boolean;
+  filename: string;
+  originalName: string;
+  url: string;
+  fullUrl: string;
+  headerHandle?: string;
+  size: number;
+  contentType: string;
+}> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const base64 = reader.result as string;
+        const res = await fetch('/api/media/upload', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            filename: file.name,
+            base64,
+            contentType: file.type,
+            customToken,
+          }),
+        });
+        const data = await parseJsonResponse(res, 'Failed to upload media file from device.');
+        resolve(data);
+      } catch (err) {
+        reject(err);
+      }
+    };
+    reader.onerror = () => {
+      reject(new Error('Failed to read file from device.'));
+    };
+    reader.readAsDataURL(file);
   });
 }
 

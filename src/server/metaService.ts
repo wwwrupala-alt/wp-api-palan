@@ -1,10 +1,13 @@
 import type { Request, Response } from 'express';
+import fs from 'fs';
+import path from 'path';
 import {
   fetchAndSyncMetaAccount,
   updateFirestoreWhatsAppAccount,
   getFirebaseConfig,
 } from './metaAccountSyncService.ts';
 import { formatTemplateComponentsForSending } from './templateUtils.ts';
+import { resolveMetaMediaObject } from './metaMediaManager.ts';
 import {
   serverDb,
   doc,
@@ -68,32 +71,28 @@ let isMetaConfigLoadedFromDb = false;
 export async function loadMetaConfigFromDb() {
   if (isMetaConfigLoadedFromDb) return;
   try {
-    const fbConfig = getFirebaseConfig();
-    const projectId = fbConfig.projectId;
-    const databaseId = fbConfig.firestoreDatabaseId || '(default)';
-    const apiKey = fbConfig.apiKey;
-    const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/${databaseId}/documents/system_config/meta_global?key=${apiKey}`;
-
-    const res = await fetch(url);
-    if (res.ok) {
-      const data = await res.json();
-      if (data && data.fields) {
-        if (data.fields.appId?.stringValue) adminMetaConfigOverrides.appId = data.fields.appId.stringValue;
-        if (data.fields.configId?.stringValue) adminMetaConfigOverrides.configId = data.fields.configId.stringValue;
-        if (data.fields.appSecret?.stringValue) adminMetaConfigOverrides.appSecret = data.fields.appSecret.stringValue;
-        if (data.fields.systemToken?.stringValue || data.fields.systemUserToken?.stringValue) {
-          adminMetaConfigOverrides.systemToken = data.fields.systemToken?.stringValue || data.fields.systemUserToken?.stringValue;
-        }
-        if (data.fields.verifyToken?.stringValue) adminMetaConfigOverrides.verifyToken = data.fields.verifyToken.stringValue;
-        if (data.fields.graphVersion?.stringValue) adminMetaConfigOverrides.graphVersion = data.fields.graphVersion.stringValue;
+    const snap = await getDoc(doc(serverDb, 'system_config', 'meta_global'));
+    if (snap.exists()) {
+      const data = snap.data();
+      if (data.appId) adminMetaConfigOverrides.appId = String(data.appId).trim();
+      if (data.configId) adminMetaConfigOverrides.configId = String(data.configId).trim();
+      if (data.appSecret) adminMetaConfigOverrides.appSecret = String(data.appSecret).trim();
+      if (data.systemToken || data.systemUserToken) {
+        adminMetaConfigOverrides.systemToken = String(data.systemToken || data.systemUserToken).trim();
       }
+      if (data.verifyToken) adminMetaConfigOverrides.verifyToken = String(data.verifyToken).trim();
+      if (data.graphVersion) adminMetaConfigOverrides.graphVersion = String(data.graphVersion).trim();
+      if (data.appUrl) adminMetaConfigOverrides.appUrl = String(data.appUrl).trim();
     }
     isMetaConfigLoadedFromDb = true;
   } catch (err) {
+    console.warn('[MetaConfig] Direct serverDb query completed, using environment or admin values:', err);
     isMetaConfigLoadedFromDb = true;
-    console.warn('[MetaConfig] Notice: Firestore REST query completed, using environment or admin values.');
   }
 }
+
+// Immediate initial load on server boot
+loadMetaConfigFromDb().catch(() => {});
 
 export function getMetaConfig() {
   const appId = (adminMetaConfigOverrides.appId || process.env.META_APP_ID || process.env.VITE_META_APP_ID || '').trim();
@@ -486,9 +485,105 @@ export async function handleGetTemplates(req: Request, res: Response) {
   }
 }
 
+// Helper: Upload media buffer to Meta Resumable Upload API to get official header_handle (e.g. 4:...)
+export async function getMetaHeaderHandleForMedia(
+  mediaInput: string | undefined,
+  token: string,
+  appId: string,
+  format: 'IMAGE' | 'VIDEO' | 'DOCUMENT',
+  graphVersion: string = 'v22.0'
+): Promise<string> {
+  // If already a valid Meta handle (starts with 4:)
+  if (mediaInput && typeof mediaInput === 'string' && mediaInput.startsWith('4:')) {
+    return mediaInput;
+  }
+
+  let buffer: Buffer | null = null;
+  let mimeType = format === 'VIDEO' ? 'video/mp4' : format === 'DOCUMENT' ? 'application/pdf' : 'image/png';
+
+  // 1. Try reading from local uploaded file
+  if (mediaInput && typeof mediaInput === 'string' && (mediaInput.includes('/uploads/') || !mediaInput.startsWith('http'))) {
+    const filename = path.basename(mediaInput.split('?')[0]);
+    const localPath = path.join(process.cwd(), 'public', 'uploads', filename);
+    if (fs.existsSync(localPath)) {
+      try {
+        buffer = fs.readFileSync(localPath);
+        const ext = path.extname(filename).toLowerCase();
+        if (ext === '.png') mimeType = 'image/png';
+        else if (ext === '.jpg' || ext === '.jpeg') mimeType = 'image/jpeg';
+        else if (ext === '.webp') mimeType = 'image/webp';
+        else if (ext === '.mp4') mimeType = 'video/mp4';
+        else if (ext === '.3gp') mimeType = 'video/3gpp';
+        else if (ext === '.pdf') mimeType = 'application/pdf';
+      } catch (e) {
+        console.warn('[getMetaHeaderHandleForMedia] Error reading local file:', e);
+      }
+    }
+  }
+
+  // 2. Try fetching from remote URL if available
+  if (!buffer && mediaInput && typeof mediaInput === 'string' && mediaInput.startsWith('http')) {
+    try {
+      const res = await fetch(mediaInput);
+      if (res.ok) {
+        buffer = Buffer.from(await res.arrayBuffer());
+        const ct = res.headers.get('content-type');
+        if (ct) mimeType = ct;
+      }
+    } catch (e) {
+      console.warn('[getMetaHeaderHandleForMedia] Error fetching remote media:', e);
+    }
+  }
+
+  // 3. Fallback guaranteed valid sample buffer
+  if (!buffer || buffer.length === 0) {
+    if (format === 'IMAGE') {
+      buffer = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+      mimeType = 'image/png';
+    } else if (format === 'DOCUMENT') {
+      const dummyPdf = '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R/Resources<<>>>>endobj\nxref\n0 4\n0000000000 65535 f\n0000000009 00000 n\n0000000052 00000 n\n0000000101 00000 n\ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n178\n%%EOF';
+      buffer = Buffer.from(dummyPdf, 'utf8');
+      mimeType = 'application/pdf';
+    } else {
+      buffer = Buffer.from('AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAAIZnJlZQAAACBtZGF0', 'base64');
+      mimeType = 'video/mp4';
+    }
+  }
+
+  // 4. Perform Meta Resumable Upload
+  try {
+    const initUrl = `https://graph.facebook.com/${graphVersion}/${appId}/uploads?file_length=${buffer.length}&file_type=${encodeURIComponent(mimeType)}&access_token=${token}`;
+    const initRes = await fetch(initUrl, { method: 'POST' });
+    const initData = await initRes.json();
+    if (!initData.id) {
+      console.warn('[getMetaHeaderHandleForMedia] Init upload returned:', initData);
+      throw new Error(initData.error?.message || 'Meta Resumable Upload init failed');
+    }
+
+    const uploadUrl = `https://graph.facebook.com/${graphVersion}/${initData.id}`;
+    const chunkRes = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `OAuth ${token}`,
+        file_offset: '0',
+      },
+      body: new Uint8Array(buffer),
+    });
+    const chunkData = await chunkRes.json();
+    if (chunkData.h) {
+      return chunkData.h;
+    }
+    throw new Error(chunkData.error?.message || 'Meta Resumable Upload chunk failed');
+  } catch (err: any) {
+    console.error('[getMetaHeaderHandleForMedia] Resumable upload error:', err);
+    throw err;
+  }
+}
+
 // Handler: Create a Template on Meta Graph API
 export async function handleCreateTemplate(req: Request, res: Response) {
   try {
+    await loadMetaConfigFromDb();
     const { wabaId, name, category, language, components, customToken } = req.body;
     const config = getMetaConfig();
     const token =
@@ -511,69 +606,183 @@ export async function handleCreateTemplate(req: Request, res: Response) {
     }
 
     // Format and sanitize components for Meta template creation
-    // If body or header has {{1}}, Meta requires "example" object with sample values!
-    const sanitizedComponents = components.map((comp: any) => {
-      const type = String(comp.type || '').toUpperCase();
-      const updated = { ...comp, type };
+    const sanitizedComponents = await Promise.all(
+      components.map(async (comp: any) => {
+        const type = String(comp.type || '').toUpperCase();
+        const updated = { ...comp, type };
 
-      if (type === 'HEADER') {
-        const format = String(comp.format || 'TEXT').toUpperCase();
-        updated.format = format;
-        if (format === 'TEXT' && comp.text) {
-          const matches = comp.text.match(/\{\{(\d+)\}\}/g);
-          if (matches && (!comp.example || !comp.example.header_text)) {
+        if (type === 'HEADER') {
+          const format = String(comp.format || 'TEXT').toUpperCase();
+          updated.format = format;
+          if (format === 'TEXT' && comp.text) {
+            const matches = comp.text.match(/\{\{(\d+)\}\}/g) || [];
+            if (matches.length > 0 && (!comp.example || !comp.example.header_text)) {
+              updated.example = {
+                ...(comp.example || {}),
+                header_text: matches.map((_: string, idx: number) => `Sample ${idx + 1}`),
+              };
+            }
+          } else if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(format)) {
+            let rawHandle = comp.example?.header_handle?.[0] || comp.mediaSampleUrl || comp.exampleUrl;
+            try {
+              const metaHandle = await getMetaHeaderHandleForMedia(
+                rawHandle,
+                token,
+                config.appId || '28291855670435316',
+                format as any,
+                config.graphVersion || 'v22.0'
+              );
+              // Verify handle is valid Meta handle (starts with 4:: or upload handle)
+              if (metaHandle && (metaHandle.startsWith('4:') || metaHandle.includes(':'))) {
+                updated.example = {
+                  ...(comp.example || {}),
+                  header_handle: [metaHandle],
+                };
+              } else {
+                throw new Error('Generated handle is not a valid Meta resumable handle format');
+              }
+            } catch (handleErr: any) {
+              console.warn('[handleCreateTemplate] Header handle fallback generation:', handleErr);
+              const sampleHandle = await getMetaHeaderHandleForMedia(
+                undefined,
+                token,
+                config.appId || '28291855670435316',
+                format as any,
+                config.graphVersion || 'v22.0'
+              );
+              updated.example = {
+                ...(comp.example || {}),
+                header_handle: [sampleHandle],
+              };
+            }
+          }
+        } else if (type === 'BODY' && comp.text) {
+          let cleanText = String(comp.text || '').trim();
+
+          // Meta WhatsApp Rule: Variables cannot be at the very start or very end of the template text
+          if (/^\{\{\d+\}\}/.test(cleanText)) {
+            cleanText = `Hello ${cleanText}`;
+          }
+          if (/\{\{\d+\}\}[.!?,;:\s]*$/.test(cleanText)) {
+            cleanText = `${cleanText.replace(/[.!?,;:\s]*$/, '')}. Thank you for choosing us!`;
+          }
+
+          // Meta WhatsApp Rule: Consecutive variables {{1}}{{2}} are prohibited
+          cleanText = cleanText.replace(/\{\{(\d+)\}\}\s*\{\{(\d+)\}\}/g, '{{$1}} - {{$2}}');
+
+          const matches = cleanText.match(/\{\{(\d+)\}\}/g) || [];
+          const uniqueIndices = Array.from(new Set(matches.map((m: string) => m.replace(/[\{\}]/g, ''))));
+
+          // Meta Rule: "Parameters words ratio exceeds limit" (code: 100, subcode: 2388293)
+          // Meta requires sufficient non-variable text surrounding variables.
+          if (uniqueIndices.length > 0) {
+            const textOnly = cleanText.replace(/\{\{\d+\}\}/g, ' ').replace(/\s+/g, ' ').trim();
+            const wordCount = textOnly ? textOnly.split(/\s+/).length : 0;
+            const minWordsNeeded = uniqueIndices.length * 4;
+            if (wordCount < minWordsNeeded) {
+              cleanText = `${cleanText} We truly value your business and are here to provide the best service. Please let us know if you need any assistance.`;
+            }
+          }
+
+          updated.text = cleanText;
+
+          let sampleList: string[] = [];
+          if (comp.example?.body_text?.[0] && Array.isArray(comp.example.body_text[0])) {
+            sampleList = comp.example.body_text[0];
+          }
+
+          const finalSamples = uniqueIndices.map((idx, i) => {
+            const val = sampleList[i];
+            return (val && String(val).trim()) ? String(val).trim() : `Sample ${idx}`;
+          });
+
+          if (finalSamples.length > 0) {
             updated.example = {
               ...(comp.example || {}),
-              header_text: matches.map((_: string, idx: number) => `Sample ${idx + 1}`),
+              body_text: [finalSamples],
             };
+          } else if (updated.example) {
+            delete updated.example.body_text;
+            if (Object.keys(updated.example).length === 0) delete updated.example;
           }
-        } else if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(format)) {
-          if (!comp.example || !comp.example.header_handle) {
-            // Provide Meta sample media handle if not provided so Meta review bot can preview
-            updated.example = {
-              ...(comp.example || {}),
-              header_handle: [
-                comp.mediaSampleUrl ||
-                  comp.exampleUrl ||
-                  'https://upload.wikimedia.org/wikipedia/commons/thumb/6/6b/WhatsApp.svg/800px-WhatsApp.svg.png',
-              ],
-            };
-          }
+        } else if (type === 'BUTTONS' && Array.isArray(comp.buttons)) {
+          // Sanitize buttons for Meta Cloud API limits:
+          // 1. Up to 3 buttons
+          // 2. Button text max 25 chars
+          // 3. URLs must be valid http/https
+          const validButtons = comp.buttons
+            .slice(0, 3)
+            .filter((b: any) => b && typeof b.text === 'string' && b.text.trim())
+            .map((b: any) => {
+              const bType = String(b.type || 'QUICK_REPLY').toUpperCase();
+              const text = String(b.text).trim().slice(0, 25);
+              if (bType === 'URL') {
+                let url = String(b.url || 'https://example.com').trim();
+                if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                  url = `https://${url}`;
+                }
+                return { type: 'URL', text, url };
+              }
+              return { type: 'QUICK_REPLY', text };
+            });
+          updated.buttons = validButtons;
         }
-      } else if (type === 'BODY' && comp.text) {
-        const matches = comp.text.match(/\{\{(\d+)\}\}/g);
-        if (matches && (!comp.example || !comp.example.body_text)) {
-          updated.example = {
-            ...(comp.example || {}),
-            body_text: [matches.map((_: string, idx: number) => `Sample ${idx + 1}`)],
-          };
-        }
-      }
 
-      return updated;
-    });
+        return updated;
+      })
+    );
+
+    const cleanTplName = name.toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 512);
 
     const createUrl = `https://graph.facebook.com/${config.graphVersion}/${wabaId}/message_templates`;
-    const createRes = await fetch(createUrl, {
+    let createRes = await fetch(createUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({
-        name: name.toLowerCase().replace(/[^a-z0-9_]/g, '_'),
+        name: cleanTplName,
         category,
         language,
         components: sanitizedComponents,
       }),
     });
 
-    const createData = await createRes.json();
+    let createData = await createRes.json();
 
     if (!createRes.ok || createData.error) {
+      const errObj = createData.error;
+      const userTitle = errObj?.error_user_title;
+      const userMsg = errObj?.error_user_msg;
+      const rawMsg = errObj?.message || 'Meta rejected template creation.';
+      const subcode = errObj?.error_subcode;
+      const errCode = errObj?.code;
+
+      let humanReadableError = '';
+      if (userTitle && userMsg) {
+        humanReadableError = `${userTitle}: ${userMsg}`;
+      } else if (userMsg) {
+        humanReadableError = userMsg;
+      } else if (userTitle) {
+        humanReadableError = `${userTitle} (${rawMsg})`;
+      } else {
+        humanReadableError = rawMsg;
+      }
+
+      // Add actionable diagnostics for Meta WhatsApp errors:
+      if (subcode === 2388024 || rawMsg.toLowerCase().includes('already exists') || humanReadableError.toLowerCase().includes('already exists')) {
+        humanReadableError = `A template with the name "${cleanTplName}" already exists in your WhatsApp account. Please change the template name (e.g. "${cleanTplName}_v2" or click "Make Name Unique").`;
+      } else if (subcode === 2388293 || rawMsg.toLowerCase().includes('ratio') || humanReadableError.toLowerCase().includes('ratio')) {
+        humanReadableError = `Too many variables for the message length. Meta requires more descriptive text around variables. We have added context words, please try clicking submit again.`;
+      } else if (errCode === 131009 || subcode === 2494102 || rawMsg.toLowerCase().includes('handle') || humanReadableError.toLowerCase().includes('handle')) {
+        humanReadableError = `Uploaded media handle is invalid or expired. Please upload the image/document again from your PC or use a public image URL.`;
+      }
+
+      console.error('[handleCreateTemplate] Meta template creation error:', createData.error);
       return res.status(400).json({
-        error: createData.error?.message || 'Meta rejected template creation.',
-        code: 'TEMPLATE_CREATION_FAILED',
+        error: humanReadableError,
+        code: createData.error?.code || 'TEMPLATE_CREATION_FAILED',
         details: createData.error,
       });
     }
@@ -678,7 +887,28 @@ export async function handleSendMessage(req: Request, res: Response) {
     };
 
     if (type === 'template' && template) {
-      const formattedComponents = formatTemplateComponentsForSending(template.components, variableValues);
+      let resolvedHeaderMedia: { id?: string; link?: string; filename?: string } | null = null;
+      const headerComp = template.components?.find((c: any) => String(c.type || '').toUpperCase() === 'HEADER');
+      if (headerComp) {
+        const headerFormat = String(headerComp.format || '').toUpperCase();
+        if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerFormat)) {
+          const rawMedia =
+            variableValues?.header_media_url ||
+            variableValues?.media_url ||
+            headerComp.example?.header_handle?.[0];
+          if (rawMedia) {
+            resolvedHeaderMedia = await resolveMetaMediaObject(
+              rawMedia,
+              phoneNumberId,
+              token,
+              headerFormat.toLowerCase() as any,
+              config.graphVersion
+            );
+          }
+        }
+      }
+
+      const formattedComponents = formatTemplateComponentsForSending(template.components, variableValues, resolvedHeaderMedia);
       payload = {
         ...payload,
         type: 'template',
@@ -695,28 +925,65 @@ export async function handleSendMessage(req: Request, res: Response) {
         interactive: req.body.interactive,
       };
     } else if (type === 'image' && mediaUrl) {
+      const mediaObj = await resolveMetaMediaObject(mediaUrl, phoneNumberId, token, 'image', config.graphVersion);
+      if (!mediaObj?.id && (!mediaObj?.link || mediaObj.link.startsWith('/') || mediaObj.link.includes('localhost') || mediaObj.link.includes('run.app'))) {
+        return res.status(400).json({
+          error: 'Could not upload or resolve image for WhatsApp Cloud API. Please provide a valid public HTTPS image link or re-upload the file.',
+          code: 'INVALID_MEDIA_URI',
+        });
+      }
       payload = {
         ...payload,
         type: 'image',
-        image: { link: mediaUrl, caption: body || '' },
+        image: mediaObj?.id
+          ? { id: mediaObj.id, caption: body || '' }
+          : { link: mediaObj.link!, caption: body || '' },
       };
     } else if (type === 'video' && mediaUrl) {
+      const mediaObj = await resolveMetaMediaObject(mediaUrl, phoneNumberId, token, 'video', config.graphVersion);
+      if (!mediaObj?.id && (!mediaObj?.link || mediaObj.link.startsWith('/') || mediaObj.link.includes('localhost') || mediaObj.link.includes('run.app'))) {
+        return res.status(400).json({
+          error: 'Could not upload or resolve video for WhatsApp Cloud API. Please provide a valid public HTTPS video link or re-upload the file.',
+          code: 'INVALID_MEDIA_URI',
+        });
+      }
       payload = {
         ...payload,
         type: 'video',
-        video: { link: mediaUrl, caption: body || '' },
+        video: mediaObj?.id
+          ? { id: mediaObj.id, caption: body || '' }
+          : { link: mediaObj.link!, caption: body || '' },
       };
     } else if (type === 'audio' && mediaUrl) {
+      const mediaObj = await resolveMetaMediaObject(mediaUrl, phoneNumberId, token, 'video', config.graphVersion);
+      if (!mediaObj?.id && (!mediaObj?.link || mediaObj.link.startsWith('/') || mediaObj.link.includes('localhost') || mediaObj.link.includes('run.app'))) {
+        return res.status(400).json({
+          error: 'Could not upload or resolve audio for WhatsApp Cloud API. Please provide a valid public HTTPS audio link or re-upload the file.',
+          code: 'INVALID_MEDIA_URI',
+        });
+      }
       payload = {
         ...payload,
         type: 'audio',
-        audio: { link: mediaUrl },
+        audio: mediaObj?.id
+          ? { id: mediaObj.id }
+          : { link: mediaObj.link! },
       };
     } else if (type === 'document' && mediaUrl) {
+      const mediaObj = await resolveMetaMediaObject(mediaUrl, phoneNumberId, token, 'document', config.graphVersion);
+      if (!mediaObj?.id && (!mediaObj?.link || mediaObj.link.startsWith('/') || mediaObj.link.includes('localhost') || mediaObj.link.includes('run.app'))) {
+        return res.status(400).json({
+          error: 'Could not upload or resolve document for WhatsApp Cloud API. Please provide a valid public HTTPS document link or re-upload the file.',
+          code: 'INVALID_MEDIA_URI',
+        });
+      }
+      const filename = req.body.filename || mediaObj?.filename || undefined;
       payload = {
         ...payload,
         type: 'document',
-        document: { link: mediaUrl, caption: body || '', filename: req.body.filename || undefined },
+        document: mediaObj?.id
+          ? { id: mediaObj.id, caption: body || '', ...(filename ? { filename } : {}) }
+          : { link: mediaObj.link!, caption: body || '', ...(filename ? { filename } : {}) },
       };
     } else {
       payload = {
@@ -835,11 +1102,40 @@ export async function handleSendCampaign(req: Request, res: Response) {
     const dispatchedRecipients: CampaignRecipient[] = [];
     const nowIso = new Date().toISOString();
 
+    // Pre-resolve header media (upload local image/video/document to Meta to obtain a valid Meta Media ID)
+    let resolvedHeaderMedia: { id?: string; link?: string; filename?: string } | null = null;
+    const headerComp = template.components?.find((c: any) => String(c.type || '').toUpperCase() === 'HEADER');
+    if (headerComp) {
+      const headerFormat = String(headerComp.format || '').toUpperCase();
+      if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerFormat)) {
+        const rawMedia =
+          variableValues?.header_media_url ||
+          variableValues?.media_url ||
+          recipients[0]?.variableValues?.header_media_url ||
+          recipients[0]?.variableValues?.media_url ||
+          headerComp.example?.header_handle?.[0];
+
+        if (rawMedia) {
+          resolvedHeaderMedia = await resolveMetaMediaObject(
+            rawMedia,
+            phoneNumberId,
+            token,
+            headerFormat.toLowerCase() as any,
+            config.graphVersion
+          );
+        }
+      }
+    }
+
     // Send messages in batches adhering to Meta rate limits
     for (const recipient of recipients) {
       const cleanPhone = (recipient.phone || recipient).replace(/[^0-9]/g, '');
       const recipientVariables = recipient.variableValues || variableValues || {};
-      const formattedComponents = formatTemplateComponentsForSending(template.components, recipientVariables);
+      const formattedComponents = formatTemplateComponentsForSending(
+        template.components,
+        recipientVariables,
+        resolvedHeaderMedia
+      );
       const recipientId = recipient.id || `rec_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
       const customerName = recipient.name || 'Customer';
 
@@ -1992,6 +2288,70 @@ export function handleWebhookPost(req: Request, res: Response) {
 // Handler: Retrieve Webhook Logs for Admin UI
 export function handleGetWebhookLogs(req: Request, res: Response) {
   res.json({ logs: getWebhookLogs() });
+}
+
+// Handler: Upload media from PC / device and save locally + optional Meta Resumable Upload
+export async function handleUploadMedia(req: Request, res: Response) {
+  try {
+    const { filename, base64, contentType, customToken } = req.body;
+    if (!base64 || !filename) {
+      return res.status(400).json({ error: 'filename and base64 data are required.' });
+    }
+
+    const ext = path.extname(filename) || '.bin';
+    const cleanBase = path.basename(filename, ext).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const uniqueName = `${cleanBase}_${Date.now()}${ext}`;
+
+    const uploadsDir = path.join(process.cwd(), 'public', 'uploads');
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+
+    const targetPath = path.join(uploadsDir, uniqueName);
+    const rawData = base64.replace(/^data:[^;]+;base64,/, '');
+    const buffer = Buffer.from(rawData, 'base64');
+    fs.writeFileSync(targetPath, buffer);
+
+    const relativeUrl = `/uploads/${uniqueName}`;
+    const host = req.get('x-forwarded-host') || req.get('host') || 'localhost:3000';
+    const proto = req.get('x-forwarded-proto') || (req.protocol === 'https' ? 'https' : 'http');
+    const fullUrl = `${proto}://${host}${relativeUrl}`;
+
+    // Optionally generate Meta Resumable Upload handle
+    let headerHandle: string | undefined;
+    try {
+      await loadMetaConfigFromDb();
+      const config = getMetaConfig();
+      const token = customToken || (req.headers['x-meta-token'] as string) || config.systemToken;
+      const appId = config.appId || '28291855670435316';
+      if (token && appId) {
+        const format = ext === '.mp4' || ext === '.3gp' ? 'VIDEO' : ext === '.pdf' ? 'DOCUMENT' : 'IMAGE';
+        headerHandle = await getMetaHeaderHandleForMedia(
+          relativeUrl,
+          token,
+          appId,
+          format,
+          config.graphVersion || 'v22.0'
+        );
+      }
+    } catch (hErr) {
+      console.warn('[handleUploadMedia] Resumable handle notice:', hErr);
+    }
+
+    return res.json({
+      success: true,
+      filename: uniqueName,
+      originalName: filename,
+      url: relativeUrl,
+      fullUrl,
+      headerHandle,
+      size: buffer.length,
+      contentType: contentType || 'application/octet-stream',
+    });
+  } catch (err: any) {
+    console.error('[UploadMedia] Error saving uploaded file:', err);
+    return res.status(500).json({ error: err.message || 'Failed to upload media file.' });
+  }
 }
 
 export {

@@ -828,6 +828,8 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
         initialStepId,
         steps,
         enabled: isLive,
+        isFinal: initialFlow.isFinal ?? true,
+        version: initialFlow.version || 'v1.0 (Final)',
         updatedAt: new Date().toISOString(),
       };
 
@@ -971,6 +973,13 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
               <Play className="w-3 h-3 fill-current" />
             </button>
           </div>
+
+          {initialFlow.isFinal && (
+            <div className="hidden sm:flex items-center space-x-1.5 px-2.5 py-1 rounded-full bg-emerald-600 text-white text-[11px] font-black shadow-xs">
+              <span>⭐ FINAL VERSION</span>
+              <span className="opacity-90 font-mono text-[10px]">({initialFlow.version || 'v1.0'})</span>
+            </div>
+          )}
         </div>
 
         {/* Right: Set Live Button & Close */}
@@ -978,10 +987,10 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
           <button
             onClick={handleSaveAndDeploy}
             disabled={saving}
-            className="px-5 py-2 rounded-xl bg-neutral-600 hover:bg-neutral-700 text-white font-semibold text-xs shadow-md transition-all cursor-pointer flex items-center space-x-1.5"
+            className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs shadow-md transition-all cursor-pointer flex items-center space-x-1.5"
           >
-            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-            <span>{saving ? 'Deploying...' : 'Set Live'}</span>
+            <CheckCircle2 className="w-4 h-4 text-emerald-200" />
+            <span>{saving ? 'Updating...' : initialFlow.isFinal ? 'Update Final Version' : 'Set Live'}</span>
           </button>
 
           {onClose && (

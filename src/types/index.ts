@@ -301,6 +301,9 @@ export interface BotFlow {
   id: string;
   name: string;
   description?: string;
+  version?: string; // e.g. "v1.0 (Final)"
+  isFinal?: boolean; // indicates this is the designated Final Version
+  versionNotes?: string;
   phoneNumberId?: string; // Specific connected WhatsApp number or undefined / 'all'
   displayPhoneNumber?: string;
   triggerType: 'keyword' | 'welcome' | 'fallback';

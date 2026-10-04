@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   X,
   Smartphone,
@@ -16,8 +16,11 @@ import {
   Plus,
   Trash2,
   Copy,
+  UploadCloud,
+  HardDrive,
 } from 'lucide-react';
 import type { Template, TemplateComponent } from '../types/index.ts';
+import { uploadMediaFile } from '../lib/services.ts';
 
 export interface InteractiveButtonItem {
   type: 'QUICK_REPLY' | 'URL';
@@ -37,6 +40,7 @@ interface TemplateBuilderModalProps {
   creating: boolean;
   createError: string | null;
   initialTemplate?: Template | null;
+  customToken?: string;
 }
 
 export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
@@ -46,17 +50,32 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
   creating,
   createError,
   initialTemplate,
+  customToken,
 }) => {
-  const [tplName, setTplName] = useState('order_update_notification');
+  const [tplName, setTplName] = useState(() => `order_notice_${Date.now().toString().slice(-4)}`);
   const [tplCategory, setTplCategory] = useState<'UTILITY' | 'MARKETING' | 'AUTHENTICATION'>('UTILITY');
   const [tplLang, setTplLang] = useState('en_US');
 
   // Header State
   const [headerType, setHeaderType] = useState<'NONE' | 'TEXT' | 'IMAGE' | 'VIDEO' | 'DOCUMENT'>('NONE');
   const [headerText, setHeaderText] = useState('');
-  const [headerMediaSampleUrl, setHeaderMediaSampleUrl] = useState(
-    'https://images.unsplash.com/photo-1579203438237-49dcf6133f6a?w=800&auto=format&fit=crop&q=80'
-  );
+  const [headerMediaSampleUrl, setHeaderMediaSampleUrl] = useState('');
+
+  // PC / Device File Upload State
+  const [mediaSourceMode, setMediaSourceMode] = useState<'upload' | 'url'>('upload');
+  const [uploadedMedia, setUploadedMedia] = useState<{
+    filename: string;
+    originalName: string;
+    url: string;
+    fullUrl: string;
+    headerHandle?: string;
+    size: number;
+    contentType: string;
+  } | null>(null);
+  const [isUploadingMedia, setIsUploadingMedia] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
 
   // Body State
   const [bodyText, setBodyText] = useState(
@@ -77,14 +96,51 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
     { type: 'URL', text: 'Track Order', url: 'https://example.com/track' },
   ]);
 
+  // Full reset helper to guarantee no media or form state leaks to subsequent templates
+  const resetBuilderForm = () => {
+    setTplName(`order_notice_${Date.now().toString().slice(-4)}`);
+    setTplCategory('UTILITY');
+    setTplLang('en_US');
+    setHeaderType('NONE');
+    setHeaderText('');
+    setHeaderMediaSampleUrl('');
+    setUploadedMedia(null);
+    setIsUploadingMedia(false);
+    setUploadError(null);
+    setMediaSourceMode('upload');
+    setBodyText(
+      'Hello {{1}}, your order #{{2}} is confirmed and ready for dispatch. Thank you for shopping with us!'
+    );
+    setBodyVariables({
+      '1': 'Rahul Sharma',
+      '2': 'ORD-9842',
+    });
+    setFooterText('');
+    setButtons([{ type: 'URL', text: 'Track Order', url: 'https://example.com/track' }]);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
   // Synchronize state when modal opens or initialTemplate changes (Clone Mode support)
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      resetBuilderForm();
+      return;
+    }
 
     if (initialTemplate) {
+      // Clean uploaded media first so old files never leak into clone
+      setUploadedMedia(null);
+      setIsUploadingMedia(false);
+      setUploadError(null);
+      setMediaSourceMode('upload');
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+
       // 1. Name: Meta requires lowercase letters, numbers, and underscores only
       const baseClean = initialTemplate.name.toLowerCase().replace(/[^a-z0-9_]/g, '_');
-      // If already ends with _copy or _copy_1, append next suffix or random 3 digits to avoid collision
       const clonedName = `${baseClean}_copy`.slice(0, 512);
       setTplName(clonedName);
       setTplCategory(initialTemplate.category || 'UTILITY');
@@ -96,33 +152,28 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
         if (headerComp.format === 'TEXT') {
           setHeaderType('TEXT');
           setHeaderText(headerComp.text || '');
+          setHeaderMediaSampleUrl('');
         } else if (headerComp.format === 'IMAGE') {
           setHeaderType('IMAGE');
           setHeaderText('');
-          setHeaderMediaSampleUrl(
-            headerComp.example?.header_handle?.[0] ||
-              'https://images.unsplash.com/photo-1579203438237-49dcf6133f6a?w=800&auto=format&fit=crop&q=80'
-          );
+          setHeaderMediaSampleUrl(headerComp.example?.header_handle?.[0] || '');
         } else if (headerComp.format === 'VIDEO') {
           setHeaderType('VIDEO');
           setHeaderText('');
-          setHeaderMediaSampleUrl(
-            headerComp.example?.header_handle?.[0] || 'https://www.w3schools.com/html/mov_bbb.mp4'
-          );
+          setHeaderMediaSampleUrl(headerComp.example?.header_handle?.[0] || '');
         } else if (headerComp.format === 'DOCUMENT') {
           setHeaderType('DOCUMENT');
           setHeaderText('');
-          setHeaderMediaSampleUrl(
-            headerComp.example?.header_handle?.[0] ||
-              'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf'
-          );
+          setHeaderMediaSampleUrl(headerComp.example?.header_handle?.[0] || '');
         } else {
           setHeaderType('NONE');
           setHeaderText('');
+          setHeaderMediaSampleUrl('');
         }
       } else {
         setHeaderType('NONE');
         setHeaderText('');
+        setHeaderMediaSampleUrl('');
       }
 
       // 3. Body
@@ -163,26 +214,22 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
         setButtons([]);
       }
     } else {
-      // Default / Fresh Template Mode
-      setTplName('order_update_notification');
-      setTplCategory('UTILITY');
-      setTplLang('en_US');
-      setHeaderType('NONE');
-      setHeaderText('');
-      setHeaderMediaSampleUrl(
-        'https://images.unsplash.com/photo-1579203438237-49dcf6133f6a?w=800&auto=format&fit=crop&q=80'
-      );
-      setBodyText(
-        'Hello {{1}}, your order #{{2}} is confirmed and ready for dispatch. Thank you for shopping with us!'
-      );
-      setBodyVariables({
-        '1': 'Rahul Sharma',
-        '2': 'ORD-9842',
-      });
-      setFooterText('');
-      setButtons([{ type: 'URL', text: 'Track Order', url: 'https://example.com/track' }]);
+      // Fresh Template Mode: Complete clean reset so previous media never persists
+      resetBuilderForm();
     }
   }, [isOpen, initialTemplate]);
+
+  // Clean switcher when user clicks Header Type buttons
+  const handleSelectHeaderType = (type: 'NONE' | 'TEXT' | 'IMAGE' | 'VIDEO' | 'DOCUMENT') => {
+    setHeaderType(type);
+    // Always wipe uploaded media and sample url so previous media never stays selected
+    setUploadedMedia(null);
+    setUploadError(null);
+    setHeaderMediaSampleUrl('');
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
 
   // Detect {{1}}, {{2}} variables in bodyText
   useEffect(() => {
@@ -231,6 +278,36 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
     );
   };
 
+  // Upload handler for PC / device file selection
+  const handleFileSelected = async (file: File) => {
+    if (!file) return;
+
+    if (headerType === 'IMAGE' && !file.type.startsWith('image/')) {
+      setUploadError('Please select a valid image file (JPG, PNG, WEBP).');
+      return;
+    }
+    if (headerType === 'VIDEO' && !file.type.startsWith('video/')) {
+      setUploadError('Please select a valid video file (MP4, 3GP).');
+      return;
+    }
+    if (headerType === 'DOCUMENT' && file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+      setUploadError('Please select a valid PDF document.');
+      return;
+    }
+
+    setUploadError(null);
+    setIsUploadingMedia(true);
+    try {
+      const res = await uploadMediaFile(file, customToken);
+      setUploadedMedia(res);
+      setHeaderMediaSampleUrl(res.url);
+    } catch (err: any) {
+      setUploadError(err.message || 'Failed to upload file from your device.');
+    } finally {
+      setIsUploadingMedia(false);
+    }
+  };
+
   // Compute live rendered preview text by replacing {{1}}, {{2}} with sample values
   const getRenderedBodyPreview = () => {
     let result = bodyText;
@@ -259,7 +336,8 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
         format: 'IMAGE',
         example: {
           header_handle: [
-            headerMediaSampleUrl.trim() ||
+            uploadedMedia?.headerHandle ||
+              headerMediaSampleUrl.trim() ||
               'https://images.unsplash.com/photo-1579203438237-49dcf6133f6a?w=800&auto=format&fit=crop&q=80',
           ],
         },
@@ -269,7 +347,11 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
         type: 'HEADER',
         format: 'VIDEO',
         example: {
-          header_handle: [headerMediaSampleUrl.trim() || 'https://www.w3schools.com/html/mov_bbb.mp4'],
+          header_handle: [
+            uploadedMedia?.headerHandle ||
+              headerMediaSampleUrl.trim() ||
+              'https://www.w3schools.com/html/mov_bbb.mp4',
+          ],
         },
       });
     } else if (headerType === 'DOCUMENT') {
@@ -278,7 +360,8 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
         format: 'DOCUMENT',
         example: {
           header_handle: [
-            headerMediaSampleUrl.trim() ||
+            uploadedMedia?.headerHandle ||
+              headerMediaSampleUrl.trim() ||
               'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf',
           ],
         },
@@ -286,13 +369,22 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
     }
 
     // 2. Body
-    const matches = bodyText.match(/\{\{(\d+)\}\}/g) || [];
+    let cleanBodyText = bodyText.trim();
+    // Meta Rule: Variables cannot be at the very start or end
+    if (/^\{\{\d+\}\}/.test(cleanBodyText)) {
+      cleanBodyText = `Hello ${cleanBodyText}`;
+    }
+    if (/\{\{\d+\}\}[.!?,;:\s]*$/.test(cleanBodyText)) {
+      cleanBodyText = `${cleanBodyText.replace(/[.!?,;:\s]*$/, '')}. Thank you for choosing us!`;
+    }
+
+    const matches = cleanBodyText.match(/\{\{(\d+)\}\}/g) || [];
     const orderedIndices = Array.from(new Set(matches.map((m) => m.replace(/[\{\}]/g, ''))));
     const sampleValues = orderedIndices.map((idx) => bodyVariables[idx] || `Value ${idx}`);
 
     const bodyComp: TemplateComponent = {
       type: 'BODY',
-      text: bodyText.trim(),
+      text: cleanBodyText,
     };
 
     if (sampleValues.length > 0) {
@@ -342,6 +434,14 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
       language: tplLang,
       components,
     });
+
+    // Reset all form and media state upon successful submission so next template starts clean
+    resetBuilderForm();
+  };
+
+  const handleModalClose = () => {
+    resetBuilderForm();
+    onClose();
   };
 
   const detectedVarKeys = Object.keys(bodyVariables);
@@ -374,8 +474,8 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
             </div>
           </div>
           <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
+            onClick={handleModalClose}
+            className="p-1.5 rounded-lg text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -398,33 +498,70 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
             )}
 
             {createError && (
-              <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300 flex items-start space-x-2">
-                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                <span className="leading-relaxed">{createError}</span>
+              <div className="p-4 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-rose-800 dark:text-rose-200 space-y-2.5 animate-fadeIn">
+                <div className="flex items-start space-x-2.5">
+                  <AlertTriangle className="w-5 h-5 shrink-0 text-rose-600 dark:text-rose-400 mt-0.5" />
+                  <div className="space-y-1 flex-1">
+                    <p className="font-bold text-xs">Meta Template Creation Notice (Parameter Validation):</p>
+                    <p className="text-xs leading-relaxed">{createError}</p>
+                  </div>
+                </div>
+
+                {/* Helpful One-Click Fixes for Invalid Parameter */}
+                <div className="pt-2 border-t border-rose-200/80 dark:border-rose-900/60 flex flex-wrap items-center gap-2 text-[11px]">
+                  <span className="font-semibold text-rose-700 dark:text-rose-300">Quick Fix:</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const base = tplName.replace(/(_v\d+|_copy|_new|_\d+)$/, '');
+                      setTplName(`${base}_${Date.now().toString().slice(-4)}`);
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-semibold transition-all cursor-pointer shadow-xs"
+                  >
+                    ⚡ Make Template Name Unique
+                  </button>
+                  <span className="text-[10.5px] text-rose-600/80 dark:text-rose-400/80">
+                    (Agar name already exist hai to naya unique name set ho jayega)
+                  </span>
+                </div>
               </div>
             )}
 
             {/* Template Info Card */}
             <div className="p-4 rounded-2xl bg-neutral-50/70 dark:bg-neutral-800/40 border border-neutral-200/80 dark:border-neutral-800 space-y-3.5">
-              <div className="flex items-center space-x-2 text-xs font-semibold text-neutral-700 dark:text-neutral-300">
+              <div className="flex items-center justify-between text-xs font-semibold text-neutral-700 dark:text-neutral-300">
                 <span>1. Meta Configuration</span>
+                <span className="text-[10.5px] text-neutral-500 font-normal">Must be unique per WhatsApp Account</span>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="sm:col-span-2">
-                  <label className="block font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
-                    Template Name <span className="text-red-500">*</span>
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block font-semibold text-neutral-700 dark:text-neutral-300">
+                      Template Name <span className="text-red-500">*</span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const base = tplName.replace(/(_v\d+|_copy|_new|_\d+)$/, '') || 'custom_notice';
+                        setTplName(`${base}_${Date.now().toString().slice(-4)}`);
+                      }}
+                      className="text-[10.5px] font-semibold text-emerald-600 dark:text-emerald-400 hover:underline flex items-center space-x-1 cursor-pointer"
+                    >
+                      <Sparkles className="w-3 h-3" />
+                      <span>Make Unique</span>
+                    </button>
+                  </div>
                   <input
                     type="text"
                     required
-                    placeholder="order_update_notification"
+                    placeholder="order_notice_1234"
                     value={tplName}
                     onChange={(e) => setTplName(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'))}
                     className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white font-mono text-xs focus:ring-2 focus:ring-emerald-500/20"
                   />
                   <p className="text-[10px] text-neutral-400 mt-1">
-                    Lowercase, numbers, and underscores only. Avoid generic names like &quot;test&quot; or &quot;abc&quot;.
+                    Lowercase, numbers, and underscores only. Meta requires a unique name for each template.
                   </p>
                 </div>
 
@@ -485,8 +622,8 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
                     <button
                       key={item.id}
                       type="button"
-                      onClick={() => setHeaderType(item.id as any)}
-                      className={`p-2.5 rounded-xl border flex flex-col items-center justify-center space-y-1 transition-all ${
+                      onClick={() => handleSelectHeaderType(item.id as any)}
+                      className={`p-2.5 rounded-xl border flex flex-col items-center justify-center space-y-1 transition-all cursor-pointer ${
                         isSelected
                           ? 'border-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 font-semibold'
                           : 'border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-600 dark:text-neutral-400 hover:border-neutral-300'
@@ -515,20 +652,195 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
               )}
 
               {['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerType) && (
-                <div className="space-y-1.5">
-                  <label className="block font-semibold text-neutral-700 dark:text-neutral-300">
-                    Sample Media URL (Required by Meta for Review)
-                  </label>
-                  <input
-                    type="url"
-                    placeholder={`https://example.com/sample.${headerType === 'DOCUMENT' ? 'pdf' : headerType === 'VIDEO' ? 'mp4' : 'jpg'}`}
-                    value={headerMediaSampleUrl}
-                    onChange={(e) => setHeaderMediaSampleUrl(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white font-mono text-[11px]"
-                  />
-                  <p className="text-[10px] text-neutral-400">
-                    Meta reviewers inspect this sample media during approval. When broadcasting, you can send any image link!
-                  </p>
+                <div className="space-y-3 p-3.5 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 shadow-xs">
+                  {/* Mode switcher tabs: Upload from PC / Device vs Paste URL */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <label className="block font-bold text-xs text-neutral-800 dark:text-neutral-200">
+                      Header Media ({headerType}) <span className="text-red-500">*</span>
+                    </label>
+                    <div className="inline-flex items-center space-x-1 p-1 bg-neutral-100 dark:bg-neutral-800 rounded-xl text-xs font-semibold self-start sm:self-auto">
+                      <button
+                        type="button"
+                        onClick={() => setMediaSourceMode('upload')}
+                        className={`px-3 py-1.5 rounded-lg transition-all flex items-center space-x-1.5 cursor-pointer ${
+                          mediaSourceMode === 'upload'
+                            ? 'bg-emerald-600 text-white shadow-xs'
+                            : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white'
+                        }`}
+                      >
+                        <HardDrive className="w-3.5 h-3.5" />
+                        <span>💻 Upload from PC / Device</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setMediaSourceMode('url')}
+                        className={`px-3 py-1.5 rounded-lg transition-all flex items-center space-x-1.5 cursor-pointer ${
+                          mediaSourceMode === 'url'
+                            ? 'bg-emerald-600 text-white shadow-xs'
+                            : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white'
+                        }`}
+                      >
+                        <Link className="w-3.5 h-3.5" />
+                        <span>🔗 Media Link (URL)</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Option A: Direct PC / Device Upload */}
+                  {mediaSourceMode === 'upload' && (
+                    <div className="space-y-2">
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        className="hidden"
+                        accept={
+                          headerType === 'IMAGE'
+                            ? 'image/jpeg,image/png,image/webp'
+                            : headerType === 'VIDEO'
+                            ? 'video/mp4,video/3gpp'
+                            : 'application/pdf,.pdf'
+                        }
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) handleFileSelected(file);
+                        }}
+                      />
+
+                      {/* Dropzone or Uploaded File Card */}
+                      {uploadedMedia ? (
+                        <div className="p-3 rounded-xl border border-emerald-500/40 bg-emerald-50/40 dark:bg-emerald-950/20 flex items-center justify-between gap-3">
+                          <div className="flex items-center space-x-3 overflow-hidden">
+                            {headerType === 'IMAGE' && (
+                              <img
+                                src={uploadedMedia.url}
+                                alt="Uploaded"
+                                className="w-12 h-12 rounded-lg object-cover border border-emerald-300 dark:border-emerald-700 shrink-0"
+                              />
+                            )}
+                            {headerType === 'VIDEO' && (
+                              <div className="w-12 h-12 rounded-lg bg-neutral-900 text-white flex items-center justify-center shrink-0">
+                                <Video className="w-6 h-6 text-emerald-400" />
+                              </div>
+                            )}
+                            {headerType === 'DOCUMENT' && (
+                              <div className="w-12 h-12 rounded-lg bg-red-50 dark:bg-red-950/40 text-red-500 flex items-center justify-center shrink-0 border border-red-200 dark:border-red-800">
+                                <FileText className="w-6 h-6" />
+                              </div>
+                            )}
+                            <div className="min-w-0">
+                              <p className="text-xs font-bold text-neutral-900 dark:text-white truncate">
+                                {uploadedMedia.originalName}
+                              </p>
+                              <div className="flex items-center space-x-2 text-[10px] text-neutral-500 dark:text-neutral-400">
+                                <span>{(uploadedMedia.size / 1024).toFixed(1)} KB</span>
+                                <span>&bull;</span>
+                                <span className="text-emerald-600 dark:text-emerald-400 font-semibold flex items-center space-x-0.5">
+                                  <CheckCircle2 className="w-3 h-3" />
+                                  <span>Uploaded from PC (Ready for Meta)</span>
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center space-x-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => fileInputRef.current?.click()}
+                              className="px-2.5 py-1.5 rounded-lg text-xs font-medium text-emerald-700 dark:text-emerald-300 bg-white dark:bg-neutral-800 hover:bg-neutral-100 dark:hover:bg-neutral-700 border border-neutral-200 dark:border-neutral-700 transition-colors cursor-pointer"
+                            >
+                              Replace File
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setUploadedMedia(null);
+                                setHeaderMediaSampleUrl('');
+                              }}
+                              className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition-colors cursor-pointer"
+                              title="Remove uploaded file"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div
+                          onDragOver={(e) => {
+                            e.preventDefault();
+                            setIsDragging(true);
+                          }}
+                          onDragLeave={() => setIsDragging(false)}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            setIsDragging(false);
+                            const file = e.dataTransfer.files?.[0];
+                            if (file) handleFileSelected(file);
+                          }}
+                          onClick={() => fileInputRef.current?.click()}
+                          className={`p-6 rounded-2xl border-2 border-dashed transition-all cursor-pointer flex flex-col items-center justify-center space-y-2 text-center ${
+                            isDragging
+                              ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30'
+                              : 'border-neutral-300 dark:border-neutral-700 hover:border-emerald-500 hover:bg-neutral-50 dark:hover:bg-neutral-800/40'
+                          }`}
+                        >
+                          {isUploadingMedia ? (
+                            <div className="flex flex-col items-center space-y-2 text-emerald-600">
+                              <Loader2 className="w-8 h-8 animate-spin" />
+                              <span className="text-xs font-bold">Uploading file from your computer...</span>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="w-12 h-12 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shadow-xs">
+                                <UploadCloud className="w-6 h-6" />
+                              </div>
+                              <div className="space-y-0.5">
+                                <p className="text-xs font-bold text-neutral-800 dark:text-neutral-200">
+                                  Click to upload or drag &amp; drop file from your computer
+                                </p>
+                                <p className="text-[11px] text-neutral-500">
+                                  {headerType === 'IMAGE' && 'Supported: JPG, PNG, WEBP (Max 5MB)'}
+                                  {headerType === 'VIDEO' && 'Supported: MP4, 3GP (Max 16MB)'}
+                                  {headerType === 'DOCUMENT' && 'Supported: PDF Documents (Max 25MB)'}
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-xs cursor-pointer"
+                              >
+                                Select File from PC / Device
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      )}
+
+                      {uploadError && (
+                        <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300 text-xs flex items-center space-x-2">
+                          <AlertTriangle className="w-4 h-4 shrink-0" />
+                          <span>{uploadError}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Option B: Media Link (URL) */}
+                  {mediaSourceMode === 'url' && (
+                    <div className="space-y-1.5">
+                      <label className="block font-semibold text-neutral-700 dark:text-neutral-300 text-xs">
+                        Public Media Link (URL)
+                      </label>
+                      <input
+                        type="url"
+                        placeholder={`https://example.com/sample.${headerType === 'DOCUMENT' ? 'pdf' : headerType === 'VIDEO' ? 'mp4' : 'jpg'}`}
+                        value={headerMediaSampleUrl}
+                        onChange={(e) => setHeaderMediaSampleUrl(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white font-mono text-[11px] focus:ring-2 focus:ring-emerald-500/20"
+                      />
+                      <p className="text-[10px] text-neutral-400">
+                        Paste a direct URL to any sample image, video, or PDF document for Meta review.
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -560,13 +872,16 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
                   <div className="space-x-1.5">
                     <button
                       type="button"
-                      onClick={() => setBodyText((prev) => `${prev} {{${detectedVarKeys.length + 1}}}`)}
+                      onClick={() => setBodyText((prev) => `${prev.trim()} {{${detectedVarKeys.length + 1}}} - Thank you.`)}
                       className="text-emerald-600 dark:text-emerald-400 hover:underline font-semibold cursor-pointer"
                     >
                       + Insert Variable
                     </button>
                   </div>
                 </div>
+                <p className="text-[10px] text-neutral-500 dark:text-neutral-400 mt-1">
+                  💡 <strong>Meta WhatsApp Rule:</strong> Variables cannot be at the very beginning or end of the message text.
+                </p>
               </div>
 
               {/* Dynamic Variables Inputs for Approval & Live Preview */}
@@ -805,8 +1120,12 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
                       <div className="p-2 rounded-xl bg-neutral-100 dark:bg-neutral-800/90 border border-neutral-200 dark:border-neutral-700 flex items-center space-x-2">
                         <FileText className="w-6 h-6 text-red-500" />
                         <div className="flex-1 truncate">
-                          <p className="text-[10px] font-semibold truncate">Sample_Document.pdf</p>
-                          <p className="text-[8px] text-neutral-500">PDF Document</p>
+                          <p className="text-[10px] font-semibold truncate">
+                            {uploadedMedia?.originalName || 'Sample_Document.pdf'}
+                          </p>
+                          <p className="text-[8px] text-neutral-500">
+                            {uploadedMedia ? `${(uploadedMedia.size / 1024).toFixed(1)} KB • PDF Document` : 'PDF Document'}
+                          </p>
                         </div>
                       </div>
                     )}
