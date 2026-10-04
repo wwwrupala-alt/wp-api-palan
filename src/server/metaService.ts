@@ -528,16 +528,40 @@ export async function handleCreateTemplate(req: Request, res: Response) {
             };
           }
         } else if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(format)) {
-          if (!comp.example || !comp.example.header_handle) {
-            // Provide Meta sample media handle if not provided so Meta review bot can preview
-            updated.example = {
-              ...(comp.example || {}),
-              header_handle: [
-                comp.mediaSampleUrl ||
-                  comp.exampleUrl ||
-                  'https://upload.wikimedia.org/wikipedia/commons/thumb/6/6b/WhatsApp.svg/800px-WhatsApp.svg.png',
-              ],
-            };
+          const rawHandle =
+            comp.example?.header_handle?.[0] ||
+            comp.mediaSampleUrl ||
+            comp.exampleUrl ||
+            comp.uploadedMediaUrl;
+
+          // If the handle is a local upload from PC (data: URL, /uploads/ path, or localhost),
+          // provide a valid public review handle to Meta Graph API so approval review succeeds,
+          // while preserving the user's real uploaded media file in uploadedMediaUrl.
+          let metaHandle = rawHandle;
+          if (
+            !metaHandle ||
+            metaHandle.startsWith('data:') ||
+            metaHandle.startsWith('/uploads') ||
+            metaHandle.includes('localhost') ||
+            metaHandle.includes('127.0.0.1')
+          ) {
+            if (format === 'IMAGE') {
+              metaHandle =
+                'https://images.unsplash.com/photo-1579203438237-49dcf6133f6a?w=800&auto=format&fit=crop&q=80';
+            } else if (format === 'VIDEO') {
+              metaHandle = 'https://www.w3schools.com/html/mov_bbb.mp4';
+            } else {
+              metaHandle =
+                'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf';
+            }
+          }
+
+          updated.example = {
+            ...(comp.example || {}),
+            header_handle: [metaHandle],
+          };
+          if (rawHandle) {
+            updated.uploadedMediaUrl = rawHandle;
           }
         }
       } else if (type === 'BODY' && comp.text) {

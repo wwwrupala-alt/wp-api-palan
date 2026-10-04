@@ -1125,10 +1125,10 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
                   />
                   {/* Mid-point Label Chip directly on the Wire */}
                   <foreignObject
-                    x={midX - 75}
-                    y={midY - 13}
-                    width={150}
-                    height={26}
+                    x={midX - 100}
+                    y={midY - 16}
+                    width={200}
+                    height={32}
                     className="overflow-visible pointer-events-auto"
                   >
                     <div
@@ -1136,21 +1136,27 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
                         e.stopPropagation();
                         handleDeleteConnection(conn);
                       }}
-                      className={`flex items-center justify-between px-2 py-0.5 rounded-full border shadow-md text-[9px] font-bold transition-all cursor-pointer backdrop-blur-md ${
+                      className={`flex items-center justify-between px-2.5 py-1 rounded-full border-2 shadow-lg text-[9.5px] font-bold transition-all cursor-pointer backdrop-blur-md ${
                         isHighlighted
-                          ? 'scale-110 ring-2 ring-emerald-500 bg-white dark:bg-neutral-900'
+                          ? 'scale-110 ring-4 ring-emerald-500/50 bg-white dark:bg-neutral-900'
                           : 'bg-white/95 dark:bg-neutral-900/95 hover:scale-105'
                       }`}
                       style={{
                         borderColor: palette.stroke,
                         color: palette.stroke,
                       }}
-                      title={`Wire: "${button?.title || sourceNode?.title}" ➔ "${targetNode?.title}". Click × to disconnect.`}
+                      title={`Wire: Button "${button?.title || sourceNode?.title}" ➔ Step "${targetNode?.title}". Click × to disconnect.`}
                     >
-                      <span className="truncate max-w-[100px] select-none">
-                        {button?.title || 'Next'} ➔ {targetNode?.title}
+                      <span className="truncate max-w-[150px] select-none flex items-center space-x-1">
+                        <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: palette.stroke }} />
+                        <span className="truncate">
+                          {button?.title ? `"${button.title}"` : sourceNode?.title} ➔ {targetNode?.title}
+                        </span>
                       </span>
-                      <span className="w-3.5 h-3.5 ml-1 rounded-full bg-rose-500/10 text-rose-600 hover:bg-rose-500 hover:text-white flex items-center justify-center text-[10px] shrink-0 font-black">
+                      <span
+                        className="w-4 h-4 ml-1 rounded-full bg-rose-500/15 text-rose-600 hover:bg-rose-500 hover:text-white flex items-center justify-center text-[10px] shrink-0 font-black transition-colors"
+                        title="Disconnect wire"
+                      >
                         ×
                       </span>
                     </div>
