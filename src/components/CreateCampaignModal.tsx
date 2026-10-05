@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   X,
   Send,
@@ -27,7 +27,7 @@ import {
   Link as LinkIcon,
   Trash2,
 } from 'lucide-react';
-import type { Template, Contact, ContactGroup, WhatsAppAccount } from '../types/index.ts';
+import type { Campaign, Template, Contact, ContactGroup, WhatsAppAccount } from '../types/index.ts';
 import { useToast } from '../context/ToastContext.tsx';
 import { createCampaign, launchCampaign, uploadMediaFile } from '../lib/services.ts';
 
@@ -40,6 +40,7 @@ interface CreateCampaignModalProps {
   contacts: Contact[];
   groups: ContactGroup[];
   onSuccess?: () => void;
+  initialCloneCampaign?: Campaign | null;
 }
 
 export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
@@ -51,6 +52,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
   contacts,
   groups,
   onSuccess,
+  initialCloneCampaign,
 }) => {
   const toast = useToast();
 
@@ -70,6 +72,70 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
   const [templateVariables, setTemplateVariables] = useState<Record<string, string>>({});
   const [campaignMediaUrl, setCampaignMediaUrl] = useState('');
   const [campaignMediaPreviewUrl, setCampaignMediaPreviewUrl] = useState('');
+
+  // Pre-fill state when cloning an existing campaign (Re-Campaign flow)
+  useEffect(() => {
+    if (!isOpen) return;
+
+    if (initialCloneCampaign) {
+      setCampName(`${initialCloneCampaign.name} (Copy)`);
+
+      // Template selection matching by ID, meta ID, or name
+      const matchingTpl = templates.find(
+        (t) =>
+          t.id === initialCloneCampaign.templateId ||
+          t.metaTemplateId === initialCloneCampaign.templateId ||
+          t.name.toLowerCase() === (initialCloneCampaign.templateName || '').toLowerCase()
+      );
+      setSelectedTemplateId(matchingTpl ? matchingTpl.id : initialCloneCampaign.templateId || '');
+
+      // Pre-fill variables
+      const clonedVars: Record<string, string> = {};
+      if (initialCloneCampaign.variableValues) {
+        Object.entries(initialCloneCampaign.variableValues).forEach(([k, v]) => {
+          if (k.startsWith('body_')) {
+            clonedVars[k.replace('body_', '')] = String(v);
+          } else if (/^\d+$/.test(k)) {
+            clonedVars[k] = String(v);
+          }
+        });
+      }
+      setTemplateVariables(clonedVars);
+
+      // Pre-fill media attachment
+      const media =
+        initialCloneCampaign.headerMediaUrl ||
+        initialCloneCampaign.variableValues?.header_media_url ||
+        initialCloneCampaign.variableValues?.headerMediaUrl ||
+        '';
+      if (media) {
+        setCampaignMediaUrl(media);
+        setCampaignMediaPreviewUrl(media);
+        setCampaignMediaSourceMode('url');
+      } else {
+        setCampaignMediaUrl('');
+        setCampaignMediaPreviewUrl('');
+      }
+
+      // Default to manual paste mode so user can immediately input new phone numbers
+      setAudienceMode('manual');
+      setManualNumbersText('');
+      setErrorMsg(null);
+    } else {
+      // Default new campaign reset
+      setCampName('');
+      if (!selectedTemplateId && templates.length > 0) {
+        const approved = templates.filter((t) => t.status === 'APPROVED');
+        if (approved.length > 0) setSelectedTemplateId(approved[0].id);
+      }
+      setTemplateVariables({});
+      setCampaignMediaUrl('');
+      setCampaignMediaPreviewUrl('');
+      setUploadedCampaignMedia(null);
+      setManualNumbersText('');
+      setErrorMsg(null);
+    }
+  }, [isOpen, initialCloneCampaign, templates]);
 
   // Campaign media PC upload state
   const [campaignMediaSourceMode, setCampaignMediaSourceMode] = useState<'upload' | 'url'>('upload');
@@ -319,20 +385,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
     setErrorMsg(null);
 
     try {
-      // 1. Create campaign document
-      const campaignPayload = {
-        name: campName.trim() || `${selectedTemplate.name} Broadcast`,
-        whatsAppAccountId: activeAccount.id,
-        templateId: selectedTemplate.id,
-        templateName: selectedTemplate.name,
-        ...(audienceMode !== 'manual' && selectedGroupId !== 'all' ? { groupId: selectedGroupId } : {}),
-        recipientCount: totalTargetRecipients.length,
-      };
-
-      const campaignId = await createCampaign(organizationId, campaignPayload);
-      if (!campaignId) throw new Error('Failed to create campaign record in database.');
-
-      // 2. Prepare variables
+      // 1. Prepare variables
       const campaignVariables: Record<string, string> = {};
       requiredVariables.forEach((k) => {
         campaignVariables[`body_${k}`] = templateVariables[k] || `Customer`;
@@ -340,6 +393,23 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
       if (campaignMediaUrl.trim()) {
         campaignVariables.header_media_url = campaignMediaUrl.trim();
       }
+
+      // 2. Create campaign document with template metadata & dynamic variables
+      const campaignPayload = {
+        name: campName.trim() || `${selectedTemplate.name} Broadcast`,
+        whatsAppAccountId: activeAccount.id,
+        templateId: selectedTemplate.id,
+        templateName: selectedTemplate.name,
+        templateCategory: selectedTemplate.category,
+        template: selectedTemplate,
+        headerMediaUrl: campaignMediaUrl.trim() || undefined,
+        variableValues: campaignVariables,
+        ...(audienceMode !== 'manual' && selectedGroupId !== 'all' ? { groupId: selectedGroupId } : {}),
+        recipientCount: totalTargetRecipients.length,
+      };
+
+      const campaignId = await createCampaign(organizationId, campaignPayload);
+      if (!campaignId) throw new Error('Failed to create campaign record in database.');
 
       // 3. Dispatch via backend Meta API
       await launchCampaign(
@@ -453,6 +523,25 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
             </button>
           </div>
         </div>
+
+        {initialCloneCampaign && (
+          <div className="mx-4 sm:mx-6 mt-3 p-3 rounded-2xl bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800/80 flex items-center justify-between text-xs text-purple-900 dark:text-purple-200 shrink-0 animate-fadeIn">
+            <div className="flex items-center space-x-2.5">
+              <span className="w-7 h-7 rounded-xl bg-purple-600 text-white flex items-center justify-center shrink-0 text-xs font-bold shadow-xs">
+                🔁
+              </span>
+              <div>
+                <p className="font-bold text-xs">Re-Campaign Clone Active</p>
+                <p className="text-[11px] text-purple-700 dark:text-purple-300">
+                  Template, variable values, and media attachment were cloned from <strong>"{initialCloneCampaign.name}"</strong>. Only change/paste your new recipient numbers below!
+                </p>
+              </div>
+            </div>
+            <span className="hidden sm:inline-block px-2.5 py-1 rounded-lg bg-purple-200/60 dark:bg-purple-900/60 text-purple-900 dark:text-purple-100 font-semibold text-[10px] uppercase tracking-wider shrink-0">
+              Details Cloned
+            </span>
+          </div>
+        )}
 
         {errorMsg && (
           <div className="mx-4 sm:mx-6 mt-3 p-3 rounded-2xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/40 text-xs text-red-700 dark:text-red-300 flex items-center space-x-2 shrink-0">

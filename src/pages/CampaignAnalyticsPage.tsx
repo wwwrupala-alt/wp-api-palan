@@ -4,6 +4,7 @@ import {
   Send,
   CheckCircle2,
   CheckCheck,
+  Check,
   AlertTriangle,
   Clock,
   MessageSquare,
@@ -15,6 +16,8 @@ import {
   ExternalLink,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   TrendingUp,
   X,
   FileSpreadsheet,
@@ -24,6 +27,12 @@ import {
   Sparkles,
   Layers,
   ArrowRight,
+  Smartphone,
+  Eye,
+  Variable,
+  UserCheck,
+  Image as ImageIcon,
+  FileText,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -31,13 +40,16 @@ import { useToast } from '../context/ToastContext.tsx';
 import {
   subscribeCampaigns,
   subscribeCampaignRecipients,
+  subscribeTemplates,
   fetchCampaignAnalyticsApi,
 } from '../lib/services.ts';
+import { MiniTemplatePhonePreview } from '../components/MiniTemplatePhonePreview.tsx';
 import type {
   Campaign,
   CampaignRecipient,
   CampaignStats,
   MessageStatus,
+  Template,
 } from '../types/index.ts';
 
 interface CampaignAnalyticsPageProps {
@@ -65,9 +77,27 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(15);
 
-  // Modal for Message Detail Timeline
+  // Modal for Message Detail & Timeline
   const [selectedRecipientForModal, setSelectedRecipientForModal] = useState<CampaignRecipient | null>(null);
+  const [modalActiveTab, setModalActiveTab] = useState<'preview' | 'timeline'>('preview');
   const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  // Template subscription & dynamic variable preview state
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [previewRecipientId, setPreviewRecipientId] = useState<string>('default');
+  const [highlightVariables, setHighlightVariables] = useState<boolean>(true);
+  const [isPreviewSectionCollapsed, setIsPreviewSectionCollapsed] = useState<boolean>(false);
+
+  // Load Templates in real-time
+  useEffect(() => {
+    if (!organization?.id) return;
+    const unsub = subscribeTemplates(
+      organization.id,
+      (data) => setTemplates(data),
+      (err) => console.warn('Error loading templates in analytics:', err)
+    );
+    return () => unsub();
+  }, [organization?.id]);
 
   // Load Campaigns
   useEffect(() => {
@@ -95,6 +125,167 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
   const currentCampaign = useMemo(() => {
     return campaigns.find((c) => c.id === selectedCampaignId) || null;
   }, [campaigns, selectedCampaignId]);
+
+  // Resolved Campaign Template from campaign document or subscribed templates collection
+  const campaignTemplate = useMemo<Template | null>(() => {
+    if (currentCampaign?.template) return currentCampaign.template;
+    if (!currentCampaign) return null;
+    const match =
+      templates.find(
+        (t) =>
+          t.id === currentCampaign.templateId ||
+          t.metaTemplateId === currentCampaign.templateId ||
+          t.name.toLowerCase() === (currentCampaign.templateName || '').toLowerCase()
+      ) || null;
+    return match;
+  }, [currentCampaign, templates]);
+
+  // Guaranteed fallback template structure so the preview is never empty
+  const effectiveTemplate = useMemo<Template>(() => {
+    if (campaignTemplate && campaignTemplate.components && campaignTemplate.components.length > 0) {
+      return campaignTemplate;
+    }
+    return {
+      id: currentCampaign?.templateId || 'tpl_auto',
+      name: currentCampaign?.templateName || 'WhatsApp Broadcast',
+      language: 'en_US',
+      category: (currentCampaign?.templateCategory as any) || 'MARKETING',
+      status: 'APPROVED',
+      whatsAppAccountId: currentCampaign?.whatsAppAccountId || '',
+      components: [
+        ...(currentCampaign?.headerMediaUrl
+          ? [
+              {
+                type: 'HEADER' as const,
+                format: 'IMAGE' as const,
+                example: { header_handle: [currentCampaign.headerMediaUrl] },
+              },
+            ]
+          : []),
+        {
+          type: 'BODY' as const,
+          text: 'Hello {{1}},\nThank you for choosing us!',
+          example: { body_text: [['Customer', 'Details']] },
+        },
+      ],
+      createdAt: currentCampaign?.createdAt || new Date().toISOString(),
+      updatedAt: currentCampaign?.createdAt || new Date().toISOString(),
+    };
+  }, [campaignTemplate, currentCampaign]);
+
+  // Selected recipient for preview
+  const activePreviewRecipient = useMemo(() => {
+    if (previewRecipientId === 'default') return null;
+    return recipients.find((r) => r.id === previewRecipientId) || null;
+  }, [previewRecipientId, recipients]);
+
+  // Effective Media URL for Header
+  const effectiveHeaderMediaUrl = useMemo(() => {
+    return (
+      currentCampaign?.headerMediaUrl ||
+      currentCampaign?.variableValues?.header_media_url ||
+      currentCampaign?.variableValues?.headerMediaUrl ||
+      ''
+    );
+  }, [currentCampaign]);
+
+  // Effective Variables for Main Dashboard Preview (merging campaign & recipient variables)
+  const effectivePreviewVariables = useMemo(() => {
+    const vars: Record<string, string> = {
+      ...(currentCampaign?.variableValues || {}),
+    };
+    if (activePreviewRecipient) {
+      if (activePreviewRecipient.customerName) {
+        vars.body_1 = activePreviewRecipient.customerName;
+        vars['1'] = activePreviewRecipient.customerName;
+      }
+      if (activePreviewRecipient.variableValues) {
+        Object.assign(vars, activePreviewRecipient.variableValues);
+      }
+    }
+    return vars;
+  }, [currentCampaign?.variableValues, activePreviewRecipient]);
+
+  // Variable Breakdown List for the Interactive Inspector
+  const variableBreakdown = useMemo(() => {
+    const list: Array<{
+      type: 'header' | 'body' | 'media';
+      token: string;
+      label: string;
+      value: string;
+      source: string;
+    }> = [];
+
+    const headerComp = effectiveTemplate.components?.find((c) => c.type === 'HEADER');
+    const bodyComp = effectiveTemplate.components?.find((c) => c.type === 'BODY');
+
+    if (headerComp?.format === 'IMAGE' || headerComp?.format === 'VIDEO' || headerComp?.format === 'DOCUMENT') {
+      list.push({
+        type: 'media',
+        token: `Header (${headerComp.format})`,
+        label: `${headerComp.format} Attachment`,
+        value: effectiveHeaderMediaUrl || headerComp.example?.header_handle?.[0] || 'Default Template Media',
+        source: effectiveHeaderMediaUrl ? 'Campaign Upload' : 'Template Default',
+      });
+    }
+
+    if (headerComp?.text) {
+      const headerMatches = Array.from(headerComp.text.matchAll(/\{\{(\d+)\}\}/g));
+      headerMatches.forEach((m) => {
+        const p1 = m[1];
+        const val =
+          effectivePreviewVariables[`header_${p1}`] ||
+          effectivePreviewVariables[p1] ||
+          `Param ${p1}`;
+        list.push({
+          type: 'header',
+          token: `{{${p1}}} (Header)`,
+          label: `Header Param ${p1}`,
+          value: val,
+          source: effectivePreviewVariables[`header_${p1}`] ? 'Campaign Config' : 'Sample',
+        });
+      });
+    }
+
+    if (bodyComp?.text) {
+      const bodyMatches = Array.from(bodyComp.text.matchAll(/\{\{(\d+)\}\}/g));
+      const sampleList = bodyComp.example?.body_text?.[0] || [];
+      const defaultLabels: Record<string, string> = {
+        '1': 'Customer Name / Salutation',
+        '2': 'Order Number / Offer Code',
+        '3': 'Delivery Date / Event Details',
+        '4': 'Discount / Promo Amount',
+      };
+
+      bodyMatches.forEach((m) => {
+        const p1 = m[1];
+        const idx = parseInt(p1, 10) - 1;
+        let val =
+          effectivePreviewVariables[`body_${p1}`] ||
+          effectivePreviewVariables[p1] ||
+          effectivePreviewVariables[`{{${p1}}}`];
+
+        let source = 'Campaign Variable';
+        if (p1 === '1' && activePreviewRecipient?.customerName) {
+          val = activePreviewRecipient.customerName;
+          source = `Personalized for ${activePreviewRecipient.customerName}`;
+        } else if (!val) {
+          val = sampleList[idx] || `Value for {{${p1}}}`;
+          source = 'Sample Placeholder';
+        }
+
+        list.push({
+          type: 'body',
+          token: `{{${p1}}}`,
+          label: defaultLabels[p1] || `Body Variable ${p1}`,
+          value: val,
+          source,
+        });
+      });
+    }
+
+    return list;
+  }, [effectiveTemplate, effectivePreviewVariables, effectiveHeaderMediaUrl, activePreviewRecipient]);
 
   // Subscribe to real-time recipient records for selected campaign
   useEffect(() => {
@@ -622,7 +813,296 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
             </div>
           </div>
 
-          {/* Section 3: Delivery & Read Analytics Visualization (Item 4 & 11) */}
+          {/* Section 3: Live WhatsApp Mobile Message Preview & Variable Values Inspector */}
+          <div className="rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-xs overflow-hidden">
+            {/* Header Bar */}
+            <div className="p-4 sm:p-5 border-b border-neutral-200 dark:border-neutral-800 bg-gradient-to-r from-emerald-50/50 via-teal-50/30 to-purple-50/30 dark:from-emerald-950/20 dark:via-teal-950/10 dark:to-purple-950/10 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-xs shrink-0">
+                  <Smartphone className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center space-x-2">
+                    <h3 className="text-base font-bold text-neutral-900 dark:text-white">
+                      Live WhatsApp Mobile Message Preview
+                    </h3>
+                    <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20">
+                      <Sparkles className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                      <span>Variables Populated</span>
+                    </span>
+                  </div>
+                  <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">
+                    Authentic smartphone handset view of the broadcast message with your customized variable values and media attachment.
+                  </p>
+                </div>
+              </div>
+
+              {/* Top Controls */}
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setHighlightVariables((prev) => !prev)}
+                  title="Toggle highlight on personalized variables"
+                  className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
+                    highlightVariables
+                      ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                      : 'bg-white dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 border-neutral-300 dark:border-neutral-700 hover:bg-neutral-50 dark:hover:bg-neutral-700'
+                  }`}
+                >
+                  <Variable className="w-3.5 h-3.5" />
+                  <span>Highlight Variables: {highlightVariables ? 'ON' : 'OFF'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsPreviewSectionCollapsed((prev) => !prev)}
+                  className="p-2 rounded-xl border border-neutral-200 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-500 transition-colors cursor-pointer"
+                  title={isPreviewSectionCollapsed ? 'Expand Preview' : 'Collapse Preview'}
+                >
+                  {isPreviewSectionCollapsed ? (
+                    <ChevronDown className="w-4 h-4" />
+                  ) : (
+                    <ChevronUp className="w-4 h-4" />
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Collapsible Content */}
+            {!isPreviewSectionCollapsed && (
+              <div className="p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                {/* Left Column: Authentic Mobile Phone Preview */}
+                <div className="lg:col-span-5 flex flex-col items-center justify-center p-2 sm:p-4 rounded-2xl bg-neutral-50/60 dark:bg-neutral-950/40 border border-neutral-200/80 dark:border-neutral-800/80">
+                  <div className="mb-2 text-center">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-neutral-400 dark:text-neutral-500 flex items-center justify-center space-x-1">
+                      <Smartphone className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Handset Screen Display</span>
+                    </span>
+                    {activePreviewRecipient && (
+                      <p className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 mt-0.5">
+                        Personalized for: {activePreviewRecipient.customerName} ({activePreviewRecipient.phoneNumber})
+                      </p>
+                    )}
+                  </div>
+
+                  <MiniTemplatePhonePreview
+                    template={effectiveTemplate}
+                    businessName={activeAccount?.verifiedName || 'CloudWABA Official'}
+                    customVariables={effectivePreviewVariables}
+                    customMediaUrl={effectiveHeaderMediaUrl}
+                    recipientName={activePreviewRecipient?.customerName}
+                    deliveryStatus={activePreviewRecipient?.currentStatus || 'read'}
+                    messageTimestamp={
+                      activePreviewRecipient?.sentAt ||
+                      currentCampaign?.startedAt ||
+                      currentCampaign?.createdAt
+                    }
+                    size="large"
+                    highlightVariables={highlightVariables}
+                  />
+
+                  <p className="text-[10px] text-neutral-400 mt-3 text-center max-w-[280px]">
+                    Verified with WhatsApp Cloud API specs. Substituted variables are highlighted in emerald.
+                  </p>
+                </div>
+
+                {/* Right Column: Audience Switcher & Variable Values Inspector */}
+                <div className="lg:col-span-7 space-y-4">
+                  {/* Recipient Audience Preview Selector */}
+                  <div className="p-4 rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-2xs space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <UserCheck className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                        <span className="text-xs font-bold text-neutral-900 dark:text-white uppercase tracking-wider">
+                          Preview As Recipient
+                        </span>
+                      </div>
+                      <span className="text-[11px] font-medium text-neutral-500">
+                        {recipients.length} total recipients
+                      </span>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                      <select
+                        aria-label="Select Recipient for Preview"
+                        value={previewRecipientId}
+                        onChange={(e) => setPreviewRecipientId(e.target.value)}
+                        className="flex-1 px-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-neutral-50/50 dark:bg-neutral-800 text-xs text-neutral-900 dark:text-white font-medium focus:ring-2 focus:ring-purple-500 focus:outline-hidden cursor-pointer"
+                      >
+                        <option value="default">
+                          ⭐️ Default Campaign Settings ({Object.keys(currentCampaign?.variableValues || {}).length} variables configured)
+                        </option>
+                        {recipients.map((r) => (
+                          <option key={r.id} value={r.id}>
+                            👤 {r.customerName || 'Customer'} • {r.phoneNumber} ({r.currentStatus.toUpperCase()})
+                          </option>
+                        ))}
+                      </select>
+
+                      {previewRecipientId !== 'default' && (
+                        <button
+                          type="button"
+                          onClick={() => setPreviewRecipientId('default')}
+                          className="px-3 py-2 rounded-xl text-xs font-semibold bg-neutral-100 hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-300 transition-colors cursor-pointer shrink-0"
+                        >
+                          Reset to Default
+                        </button>
+                      )}
+                    </div>
+
+                    <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                      Switching the recipient previews how customer personal parameters (like{' '}
+                      <code className="text-purple-600 dark:text-purple-400 font-mono font-bold">
+                        {'{{1}}'}
+                      </code>{' '}
+                      for Name) dynamically merge into the WhatsApp payload.
+                    </p>
+                  </div>
+
+                  {/* Variables Breakdown Table */}
+                  <div className="p-4 sm:p-5 rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-2xs space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <Variable className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                        <h4 className="text-xs font-bold text-neutral-900 dark:text-white uppercase tracking-wider">
+                          Variables & Merged Values in this Message
+                        </h4>
+                      </div>
+                      <span className="text-[10px] font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800/60">
+                        {variableBreakdown.length} Param{variableBreakdown.length !== 1 ? 's' : ''} Active
+                      </span>
+                    </div>
+
+                    {variableBreakdown.length === 0 ? (
+                      <div className="py-6 text-center text-xs text-neutral-400">
+                        This template uses fixed text with no dynamic variables.
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left border-collapse text-xs">
+                          <thead>
+                            <tr className="border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-800/30 text-[10px] text-neutral-400 uppercase tracking-wider font-semibold">
+                              <th className="py-2.5 px-3">Variable Token</th>
+                              <th className="py-2.5 px-3">Field / Meaning</th>
+                              <th className="py-2.5 px-3">Value Rendered in Message</th>
+                              <th className="py-2.5 px-3 text-right">Data Source</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-neutral-100 dark:divide-neutral-800">
+                            {variableBreakdown.map((item, idx) => (
+                              <tr
+                                key={idx}
+                                className="hover:bg-neutral-50/60 dark:hover:bg-neutral-800/40 transition-colors"
+                              >
+                                <td className="py-2.5 px-3 font-mono font-bold text-purple-700 dark:text-purple-400">
+                                  {item.token}
+                                </td>
+                                <td className="py-2.5 px-3 font-medium text-neutral-700 dark:text-neutral-300">
+                                  {item.label}
+                                </td>
+                                <td className="py-2.5 px-3">
+                                  {item.type === 'media' && item.value.startsWith('http') ? (
+                                    <div className="flex items-center space-x-2">
+                                      <img
+                                        src={item.value}
+                                        alt="Thumbnail"
+                                        className="w-7 h-7 rounded-md object-cover border border-neutral-200 dark:border-neutral-700"
+                                      />
+                                      <span className="font-mono text-[11px] text-neutral-600 dark:text-neutral-300 truncate max-w-[140px]">
+                                        {item.value}
+                                      </span>
+                                    </div>
+                                  ) : item.type === 'media' && item.value.startsWith('/') ? (
+                                    <div className="flex items-center space-x-2">
+                                      <img
+                                        src={item.value}
+                                        alt="Local attachment"
+                                        className="w-7 h-7 rounded-md object-cover border border-neutral-200 dark:border-neutral-700"
+                                      />
+                                      <span className="font-mono text-[11px] text-neutral-600 dark:text-neutral-300 truncate max-w-[140px]">
+                                        {item.value}
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <span className="inline-block px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 font-semibold border border-emerald-200 dark:border-emerald-800/50">
+                                      {item.value}
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="py-2.5 px-3 text-right">
+                                  <span className="text-[10px] font-medium text-neutral-500">
+                                    {item.source}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Template Meta & Quick Action Card */}
+                  <div className="p-4 rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-800/30 flex flex-wrap items-center justify-between gap-3 text-xs">
+                    <div className="flex flex-wrap items-center gap-4">
+                      <div>
+                        <span className="block text-[10px] uppercase font-bold text-neutral-400">
+                          Template
+                        </span>
+                        <span className="font-mono font-semibold text-neutral-900 dark:text-neutral-200">
+                          {effectiveTemplate.name}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="block text-[10px] uppercase font-bold text-neutral-400">
+                          Category
+                        </span>
+                        <span className="font-semibold text-neutral-700 dark:text-neutral-300">
+                          {effectiveTemplate.category}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="block text-[10px] uppercase font-bold text-neutral-400">
+                          Language
+                        </span>
+                        <span className="font-mono text-neutral-700 dark:text-neutral-300">
+                          {effectiveTemplate.language}
+                        </span>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const bodyComp = effectiveTemplate.components?.find((c) => c.type === 'BODY');
+                        let text = bodyComp?.text || '';
+                        const sampleList = bodyComp?.example?.body_text?.[0] || [];
+                        text = text.replace(/\{\{(\d+)\}\}/g, (match, p1) => {
+                          const idx = parseInt(p1, 10) - 1;
+                          if (p1 === '1' && activePreviewRecipient?.customerName) {
+                            return activePreviewRecipient.customerName;
+                          }
+                          const val =
+                            effectivePreviewVariables[`body_${p1}`] ||
+                            effectivePreviewVariables[p1] ||
+                            effectivePreviewVariables[`{{${p1}}}`];
+                          return val || sampleList[idx] || match;
+                        });
+                        copyToClipboard(text, 'preview_msg_body');
+                        toast.showSuccess('Message Text Copied', 'Copied message body with merged variable values.');
+                      }}
+                      className="inline-flex items-center space-x-1.5 px-3.5 py-2 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs font-semibold text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 transition-colors cursor-pointer shadow-2xs"
+                    >
+                      <Copy className="w-3.5 h-3.5 text-neutral-500" />
+                      <span>Copy Substituted Message Text</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Section 4: Delivery & Read Analytics Visualization (Item 4 & 11) */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
             {/* Delivery Funnel Progress (7 cols) */}
             <div className="lg:col-span-7 p-5 rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-xs space-y-4">
@@ -972,13 +1452,33 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
 
                         {/* Actions */}
                         <td className="py-3.5 px-4 text-right">
-                          <button
-                            onClick={() => setSelectedRecipientForModal(r)}
-                            className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-[11px] font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-50 dark:hover:bg-neutral-700 transition-colors cursor-pointer"
-                          >
-                            <span>Timeline</span>
-                            <ArrowRight className="w-3 h-3 text-neutral-400" />
-                          </button>
+                          <div className="flex items-center justify-end space-x-1.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedRecipientForModal(r);
+                                setModalActiveTab('preview');
+                              }}
+                              title="Preview WhatsApp Message for this customer"
+                              className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border border-purple-200 dark:border-purple-800/80 bg-purple-50 dark:bg-purple-950/40 text-[11px] font-semibold text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/60 transition-colors cursor-pointer"
+                            >
+                              <Smartphone className="w-3 h-3 text-purple-600 dark:text-purple-400" />
+                              <span>Preview</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedRecipientForModal(r);
+                                setModalActiveTab('timeline');
+                              }}
+                              title="View Delivery Timeline"
+                              className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-[11px] font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-50 dark:hover:bg-neutral-700 transition-colors cursor-pointer"
+                            >
+                              <span>Timeline</span>
+                              <ArrowRight className="w-3 h-3 text-neutral-400" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -1021,174 +1521,364 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
         </>
       )}
 
-      {/* Section 5: Message Details & Chronological Timeline Modal (Item 7) */}
+      {/* Section 6: Message Details & Chronological Timeline Modal (Dual-Tab: Mobile Preview + Timeline) */}
       {selectedRecipientForModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fadeIn">
-          <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl max-w-lg w-full overflow-hidden shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-xs animate-fadeIn">
+          <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-3xl max-w-3xl w-full overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
             {/* Header */}
-            <div className="p-4 sm:p-5 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
-              <div>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-purple-600 dark:text-purple-400">
-                  Message Tracking Details
-                </span>
-                <h3 className="text-base font-bold text-neutral-900 dark:text-white">
-                  {selectedRecipientForModal.customerName}
-                </h3>
-                <p className="text-xs font-mono text-neutral-500">
-                  {selectedRecipientForModal.phoneNumber}
-                </p>
+            <div className="p-4 sm:p-5 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between shrink-0 bg-neutral-50/50 dark:bg-neutral-800/30">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-2xl bg-purple-600/10 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0">
+                  <Smartphone className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center space-x-2">
+                    <h3 className="text-base font-bold text-neutral-900 dark:text-white">
+                      {selectedRecipientForModal.customerName || 'Recipient Message'}
+                    </h3>
+                    <span
+                      className={`inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                        selectedRecipientForModal.currentStatus === 'read'
+                          ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400 border border-emerald-200'
+                          : selectedRecipientForModal.currentStatus === 'delivered'
+                          ? 'bg-purple-50 text-purple-700 dark:bg-purple-950/40 dark:text-purple-400 border border-purple-200'
+                          : selectedRecipientForModal.currentStatus === 'sent'
+                          ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400 border border-blue-200'
+                          : selectedRecipientForModal.currentStatus === 'failed'
+                          ? 'bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-400 border border-red-200'
+                          : 'bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300'
+                      }`}
+                    >
+                      {selectedRecipientForModal.currentStatus}
+                    </span>
+                  </div>
+                  <p className="text-xs font-mono text-neutral-500 mt-0.5">
+                    {selectedRecipientForModal.phoneNumber}
+                  </p>
+                </div>
               </div>
+
               <button
+                type="button"
                 onClick={() => setSelectedRecipientForModal(null)}
-                className="p-1.5 rounded-lg text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
+                className="p-1.5 rounded-xl text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
+            {/* Modal Navigation Tabs: Mobile Message Preview vs Webhook Audit */}
+            <div className="px-5 border-b border-neutral-200 dark:border-neutral-800 flex items-center space-x-2 bg-white dark:bg-neutral-900 shrink-0">
+              <button
+                type="button"
+                onClick={() => setModalActiveTab('preview')}
+                className={`py-3 px-3 text-xs font-bold flex items-center space-x-2 border-b-2 transition-colors cursor-pointer ${
+                  modalActiveTab === 'preview'
+                    ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
+                    : 'border-transparent text-neutral-500 hover:text-neutral-900 dark:hover:text-white'
+                }`}
+              >
+                <Smartphone className="w-4 h-4" />
+                <span>Mobile Message Preview</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setModalActiveTab('timeline')}
+                className={`py-3 px-3 text-xs font-bold flex items-center space-x-2 border-b-2 transition-colors cursor-pointer ${
+                  modalActiveTab === 'timeline'
+                    ? 'border-purple-600 text-purple-600 dark:text-purple-400'
+                    : 'border-transparent text-neutral-500 hover:text-neutral-900 dark:hover:text-white'
+                }`}
+              >
+                <Clock className="w-4 h-4" />
+                <span>Webhook Delivery Audit ({selectedRecipientForModal.timeline?.length || 0})</span>
+              </button>
+            </div>
+
             {/* Modal Body */}
-            <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
-              {/* WhatsApp ID Bar */}
-              <div className="p-3 rounded-xl bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 space-y-1">
-                <span className="text-[10px] font-semibold text-neutral-400 uppercase tracking-wider block">
-                  Official WhatsApp Message ID (WAMID)
-                </span>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-mono text-neutral-900 dark:text-neutral-100 select-all break-all">
-                    {selectedRecipientForModal.whatsappMessageId || 'Pending Assignment'}
-                  </span>
-                  {selectedRecipientForModal.whatsappMessageId && (
-                    <button
-                      onClick={() =>
-                        copyToClipboard(
-                          selectedRecipientForModal.whatsappMessageId!,
-                          'modal_wamid'
-                        )
+            <div className="p-4 sm:p-6 overflow-y-auto flex-1 space-y-4">
+              {modalActiveTab === 'preview' ? (
+                /* TAB 1: Real Mobile Phone Preview with Recipient Variables */
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
+                  {/* Left Column: Phone Mockup */}
+                  <div className="md:col-span-6 flex flex-col items-center justify-center p-3 rounded-2xl bg-neutral-50 dark:bg-neutral-950/50 border border-neutral-200/80 dark:border-neutral-800">
+                    <MiniTemplatePhonePreview
+                      template={effectiveTemplate}
+                      businessName={activeAccount?.verifiedName || 'CloudWABA Official'}
+                      recipientName={selectedRecipientForModal.customerName}
+                      customVariables={{
+                        ...(currentCampaign?.variableValues || {}),
+                        ...(selectedRecipientForModal.variableValues || {}),
+                        body_1: selectedRecipientForModal.customerName,
+                      }}
+                      customMediaUrl={effectiveHeaderMediaUrl}
+                      deliveryStatus={selectedRecipientForModal.currentStatus}
+                      messageTimestamp={
+                        selectedRecipientForModal.sentAt || selectedRecipientForModal.createdAt
                       }
-                      className="ml-2 text-neutral-400 hover:text-neutral-600"
-                    >
-                      <Copy className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </div>
-              </div>
+                      size="large"
+                      highlightVariables={true}
+                    />
+                  </div>
 
-              {/* Status Flow Progression: QUEUED -> SENT -> DELIVERED -> READ */}
-              <div className="space-y-1.5">
-                <span className="text-xs font-bold text-neutral-700 dark:text-neutral-300">
-                  WhatsApp Status Progression
-                </span>
-                <div className="grid grid-cols-4 gap-1.5 text-center text-[10px] font-bold">
-                  {['queued', 'sent', 'delivered', 'read'].map((step, idx) => {
-                    const stepOrder: Record<string, number> = {
-                      queued: 0,
-                      sent: 1,
-                      delivered: 2,
-                      read: 3,
-                    };
-                    const currentRank = stepOrder[selectedRecipientForModal.currentStatus] ?? -1;
-                    const thisRank = stepOrder[step];
-                    const isPassed = currentRank >= thisRank;
-                    const isCurrent = selectedRecipientForModal.currentStatus === step;
-
-                    return (
-                      <div
-                        key={step}
-                        className={`p-2 rounded-xl border ${
-                          isCurrent
-                            ? 'bg-purple-600 text-white border-purple-600'
-                            : isPassed
-                            ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400 border-emerald-300 dark:border-emerald-800'
-                            : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-400 border-neutral-200 dark:border-neutral-700'
-                        }`}
-                      >
-                        <span className="uppercase">{step}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Chronological Audit Timeline (Item 7) */}
-              <div className="space-y-2">
-                <span className="text-xs font-bold text-neutral-700 dark:text-neutral-300 block">
-                  Event Timeline (Actual Webhook Timestamps)
-                </span>
-
-                <div className="relative pl-6 space-y-4 before:absolute before:left-2 before:top-2 before:bottom-2 before:w-0.5 before:bg-neutral-200 dark:before:bg-neutral-800">
-                  {selectedRecipientForModal.timeline && selectedRecipientForModal.timeline.length > 0 ? (
-                    selectedRecipientForModal.timeline.map((event, idx) => (
-                      <div key={idx} className="relative space-y-0.5">
-                        <span
-                          className={`absolute -left-[23px] top-1 w-3.5 h-3.5 rounded-full border-2 border-white dark:border-neutral-900 ${
-                            event.status === 'read'
-                              ? 'bg-emerald-500'
-                              : event.status === 'delivered'
-                              ? 'bg-purple-600'
-                              : event.status === 'sent'
-                              ? 'bg-blue-500'
-                              : event.status === 'failed'
-                              ? 'bg-red-500'
-                              : event.status === 'replied'
-                              ? 'bg-amber-500'
-                              : 'bg-neutral-400'
-                          }`}
-                        />
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="font-bold text-neutral-900 dark:text-white">
-                            {formatTime(event.timestamp)} —{' '}
-                            {event.status === 'read'
-                              ? 'Read'
-                              : event.status === 'delivered'
-                              ? 'Delivered'
-                              : event.status === 'sent'
-                              ? 'Message Sent'
-                              : event.status === 'replied'
-                              ? 'Customer Replied'
-                              : event.status.toUpperCase()}
-                          </span>
-                          <span className="text-[10px] text-neutral-400 font-mono">
-                            {new Date(event.timestamp).toLocaleDateString()}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-neutral-500">{event.description}</p>
-                        {event.details && (
-                          <pre className="text-[10px] font-mono p-2 rounded bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300 overflow-x-auto">
-                            {event.details}
-                          </pre>
+                  {/* Right Column: Customer Variable Details & Delivery Confirmation */}
+                  <div className="md:col-span-6 space-y-3.5">
+                    {/* WAMID Card */}
+                    <div className="p-3.5 rounded-2xl bg-neutral-50 dark:bg-neutral-800/60 border border-neutral-200 dark:border-neutral-700 space-y-1">
+                      <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider block">
+                        Official WhatsApp Message ID (WAMID)
+                      </span>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-mono text-neutral-900 dark:text-neutral-100 select-all break-all font-semibold">
+                          {selectedRecipientForModal.whatsappMessageId || 'Pending Assignment'}
+                        </span>
+                        {selectedRecipientForModal.whatsappMessageId && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              copyToClipboard(
+                                selectedRecipientForModal.whatsappMessageId!,
+                                'modal_wamid'
+                              )
+                            }
+                            className="ml-2 text-neutral-400 hover:text-neutral-600 p-1"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                          </button>
                         )}
                       </div>
-                    ))
-                  ) : (
-                    <div className="text-xs text-neutral-400 italic">
-                      No explicit event steps recorded yet.
+                    </div>
+
+                    {/* Delivery Timestamps */}
+                    <div className="p-3.5 rounded-2xl bg-white dark:bg-neutral-800/40 border border-neutral-200 dark:border-neutral-700/80 space-y-2">
+                      <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider block">
+                        Delivery Milestones
+                      </span>
+                      <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                        <div className="p-2 rounded-xl bg-blue-50/50 dark:bg-blue-950/20 border border-blue-100 dark:border-blue-900/30">
+                          <span className="text-[10px] text-blue-600 dark:text-blue-400 font-semibold block">
+                            Sent
+                          </span>
+                          <span className="font-mono text-neutral-800 dark:text-neutral-200 font-bold text-[11px]">
+                            {formatTime(selectedRecipientForModal.sentAt)}
+                          </span>
+                        </div>
+
+                        <div className="p-2 rounded-xl bg-purple-50/50 dark:bg-purple-950/20 border border-purple-100 dark:border-purple-900/30">
+                          <span className="text-[10px] text-purple-600 dark:text-purple-400 font-semibold block">
+                            Delivered
+                          </span>
+                          <span className="font-mono text-neutral-800 dark:text-neutral-200 font-bold text-[11px]">
+                            {formatTime(selectedRecipientForModal.deliveredAt)}
+                          </span>
+                        </div>
+
+                        <div className="p-2 rounded-xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/30">
+                          <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold block">
+                            Read
+                          </span>
+                          <span className="font-mono text-neutral-800 dark:text-neutral-200 font-bold text-[11px]">
+                            {formatTime(selectedRecipientForModal.readAt)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Variables Merged for this Customer */}
+                    <div className="p-3.5 rounded-2xl bg-white dark:bg-neutral-800/40 border border-neutral-200 dark:border-neutral-700/80 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider">
+                          Variables Injected For This Recipient
+                        </span>
+                        <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
+                          Personalized
+                        </span>
+                      </div>
+
+                      <div className="space-y-1.5 text-xs">
+                        <div className="p-2 rounded-xl bg-neutral-50 dark:bg-neutral-800 flex items-center justify-between">
+                          <span className="font-mono font-bold text-purple-700 dark:text-purple-400">
+                            {'{{1}}'} Customer Name
+                          </span>
+                          <span className="font-semibold text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-800/50">
+                            {selectedRecipientForModal.customerName}
+                          </span>
+                        </div>
+
+                        {currentCampaign?.variableValues &&
+                          Object.entries(currentCampaign.variableValues)
+                            .filter(([k]) => k !== 'body_1' && k !== '1' && k !== 'header_media_url')
+                            .map(([k, v], idx) => (
+                              <div
+                                key={idx}
+                                className="p-2 rounded-xl bg-neutral-50 dark:bg-neutral-800 flex items-center justify-between"
+                              >
+                                <span className="font-mono font-bold text-purple-700 dark:text-purple-400">
+                                  {`{{${k.replace('body_', '')}}}`}
+                                </span>
+                                <span className="font-semibold text-neutral-800 dark:text-neutral-200">
+                                  {String(v)}
+                                </span>
+                              </div>
+                            ))}
+
+                        {effectiveHeaderMediaUrl && (
+                          <div className="p-2 rounded-xl bg-neutral-50 dark:bg-neutral-800 flex items-center justify-between">
+                            <span className="font-mono font-bold text-neutral-600 dark:text-neutral-400 text-[11px]">
+                              Header Media
+                            </span>
+                            <span className="text-[11px] font-mono text-neutral-500 truncate max-w-[150px]">
+                              {effectiveHeaderMediaUrl}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Failure details if applicable */}
+                    {selectedRecipientForModal.failureReason && (
+                      <div className="p-3.5 rounded-2xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/40 text-xs text-red-800 dark:text-red-300 space-y-1">
+                        <p className="font-semibold flex items-center space-x-1.5">
+                          <AlertTriangle className="w-4 h-4 text-red-600 dark:text-red-400" />
+                          <span>WhatsApp Delivery Failure Notice</span>
+                        </p>
+                        <p className="text-[11px] font-mono">
+                          {selectedRecipientForModal.failureCode
+                            ? `Error Code [${selectedRecipientForModal.failureCode}]: `
+                            : ''}
+                          {selectedRecipientForModal.failureReason}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                /* TAB 2: Chronological Webhook Audit Timeline */
+                <div className="space-y-4">
+                  {/* Status Flow Progression: QUEUED -> SENT -> DELIVERED -> READ */}
+                  <div className="space-y-1.5">
+                    <span className="text-xs font-bold text-neutral-700 dark:text-neutral-300">
+                      WhatsApp Status Progression
+                    </span>
+                    <div className="grid grid-cols-4 gap-1.5 text-center text-[10px] font-bold">
+                      {['queued', 'sent', 'delivered', 'read'].map((step) => {
+                        const stepOrder: Record<string, number> = {
+                          queued: 0,
+                          sent: 1,
+                          delivered: 2,
+                          read: 3,
+                        };
+                        const currentRank = stepOrder[selectedRecipientForModal.currentStatus] ?? -1;
+                        const thisRank = stepOrder[step];
+                        const isPassed = currentRank >= thisRank;
+                        const isCurrent = selectedRecipientForModal.currentStatus === step;
+
+                        return (
+                          <div
+                            key={step}
+                            className={`p-2.5 rounded-xl border ${
+                              isCurrent
+                                ? 'bg-purple-600 text-white border-purple-600 shadow-xs'
+                                : isPassed
+                                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400 border-emerald-300 dark:border-emerald-800'
+                                : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-400 border-neutral-200 dark:border-neutral-700'
+                            }`}
+                          >
+                            <span className="uppercase">{step}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Chronological Audit Timeline */}
+                  <div className="space-y-2 pt-2">
+                    <span className="text-xs font-bold text-neutral-700 dark:text-neutral-300 block">
+                      Webhook Event Timeline (Official Meta Callbacks)
+                    </span>
+
+                    <div className="relative pl-6 space-y-4 before:absolute before:left-2 before:top-2 before:bottom-2 before:w-0.5 before:bg-neutral-200 dark:before:bg-neutral-800">
+                      {selectedRecipientForModal.timeline &&
+                      selectedRecipientForModal.timeline.length > 0 ? (
+                        selectedRecipientForModal.timeline.map((event, idx) => (
+                          <div key={idx} className="relative space-y-0.5">
+                            <span
+                              className={`absolute -left-[23px] top-1 w-3.5 h-3.5 rounded-full border-2 border-white dark:border-neutral-900 ${
+                                event.status === 'read'
+                                  ? 'bg-emerald-500'
+                                  : event.status === 'delivered'
+                                  ? 'bg-purple-600'
+                                  : event.status === 'sent'
+                                  ? 'bg-blue-500'
+                                  : event.status === 'failed'
+                                  ? 'bg-red-500'
+                                  : event.status === 'replied'
+                                  ? 'bg-amber-500'
+                                  : 'bg-neutral-400'
+                              }`}
+                            />
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="font-bold text-neutral-900 dark:text-white">
+                                {formatTime(event.timestamp)} —{' '}
+                                {event.status === 'read'
+                                  ? 'Read'
+                                  : event.status === 'delivered'
+                                  ? 'Delivered'
+                                  : event.status === 'sent'
+                                  ? 'Message Sent'
+                                  : event.status === 'replied'
+                                  ? 'Customer Replied'
+                                  : event.status.toUpperCase()}
+                              </span>
+                              <span className="text-[10px] text-neutral-400 font-mono">
+                                {new Date(event.timestamp).toLocaleDateString()}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-neutral-500">{event.description}</p>
+                            {event.details && (
+                              <pre className="text-[10px] font-mono p-2 rounded-xl bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300 overflow-x-auto">
+                                {event.details}
+                              </pre>
+                            )}
+                          </div>
+                        ))
+                      ) : (
+                        <div className="text-xs text-neutral-400 italic">
+                          No explicit event steps recorded yet.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Failure Error Info */}
+                  {selectedRecipientForModal.failureReason && (
+                    <div className="p-3.5 rounded-2xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/40 text-xs text-red-800 dark:text-red-300 space-y-1">
+                      <p className="font-semibold flex items-center space-x-1.5">
+                        <AlertTriangle className="w-4 h-4 text-red-600 dark:text-red-400" />
+                        <span>WhatsApp Failure Details</span>
+                      </p>
+                      <p className="text-[11px] font-mono">
+                        {selectedRecipientForModal.failureCode
+                          ? `Error Code: [${selectedRecipientForModal.failureCode}] `
+                          : ''}
+                        {selectedRecipientForModal.failureReason}
+                      </p>
                     </div>
                   )}
-                </div>
-              </div>
-
-              {/* Failure Error Info if applicable */}
-              {selectedRecipientForModal.failureReason && (
-                <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/40 text-xs text-red-800 dark:text-red-300 space-y-1">
-                  <p className="font-semibold flex items-center space-x-1.5">
-                    <AlertTriangle className="w-4 h-4 text-red-600 dark:text-red-400" />
-                    <span>WhatsApp Failure Details</span>
-                  </p>
-                  <p className="text-[11px] font-mono">
-                    {selectedRecipientForModal.failureCode
-                      ? `Error Code: [${selectedRecipientForModal.failureCode}] `
-                      : ''}
-                    {selectedRecipientForModal.failureReason}
-                  </p>
                 </div>
               )}
             </div>
 
             {/* Modal Footer */}
-            <div className="p-4 border-t border-neutral-200 dark:border-neutral-800 flex justify-end">
+            <div className="p-4 border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-between shrink-0 bg-neutral-50/50 dark:bg-neutral-800/30">
+              <span className="text-[11px] text-neutral-400">
+                Verified Meta WhatsApp Cloud API Record
+              </span>
               <button
+                type="button"
                 onClick={() => setSelectedRecipientForModal(null)}
-                className="px-4 py-2 rounded-xl bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 text-xs font-semibold hover:opacity-90 transition-opacity cursor-pointer"
+                className="px-4 py-2 rounded-xl bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 text-xs font-semibold hover:opacity-90 transition-opacity cursor-pointer shadow-xs"
               >
                 Close
               </button>

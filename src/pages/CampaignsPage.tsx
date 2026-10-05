@@ -16,6 +16,12 @@ import {
   Clock,
   AlertCircle,
   Users,
+  Eye,
+  Copy,
+  Repeat,
+  Smartphone,
+  Sparkles,
+  Variable,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -30,6 +36,7 @@ import {
 } from '../lib/services.ts';
 import type { Campaign, Template, Contact, ContactGroup } from '../types/index.ts';
 import { CreateCampaignModal } from '../components/CreateCampaignModal.tsx';
+import { MiniTemplatePhonePreview } from '../components/MiniTemplatePhonePreview.tsx';
 
 interface CampaignsPageProps {
   onViewAnalytics?: (campaignId: string) => void;
@@ -58,6 +65,129 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({ onViewAnalytics })
 
   // New Advance Campaign Modal
   const [isModalOpen, setIsModalOpen] = useState(false);
+
+  // Campaign Preview Modal State (User Request: View Icon -> Mobile View with variables & media)
+  const [previewCampaign, setPreviewCampaign] = useState<Campaign | null>(null);
+
+  // Clone Campaign Target State (User Request: Clone Icon -> Re-campaign with same details, only change numbers)
+  const [cloneCampaignTarget, setCloneCampaignTarget] = useState<Campaign | null>(null);
+
+  // Resolved template for the campaign preview modal
+  const previewTemplate = useMemo<Template | null>(() => {
+    if (!previewCampaign) return null;
+    if (previewCampaign.template && previewCampaign.template.components && previewCampaign.template.components.length > 0) {
+      return previewCampaign.template;
+    }
+    const match = templates.find(
+      (t) =>
+        t.id === previewCampaign.templateId ||
+        t.metaTemplateId === previewCampaign.templateId ||
+        t.name.toLowerCase() === (previewCampaign.templateName || '').toLowerCase()
+    );
+    if (match) return match;
+
+    // Fallback template
+    return {
+      id: previewCampaign.templateId || 'tpl_auto',
+      name: previewCampaign.templateName || 'WhatsApp Message',
+      language: 'en_US',
+      category: (previewCampaign.templateCategory as any) || 'MARKETING',
+      status: 'APPROVED',
+      whatsAppAccountId: previewCampaign.whatsAppAccountId || '',
+      components: [
+        ...(previewCampaign.headerMediaUrl
+          ? [
+              {
+                type: 'HEADER' as const,
+                format: 'IMAGE' as const,
+                example: { header_handle: [previewCampaign.headerMediaUrl] },
+              },
+            ]
+          : []),
+        {
+          type: 'BODY' as const,
+          text: 'Hello {{1}},\nThank you for choosing us!',
+          example: { body_text: [['Customer', 'Details']] },
+        },
+      ],
+      createdAt: previewCampaign.createdAt || new Date().toISOString(),
+      updatedAt: previewCampaign.createdAt || new Date().toISOString(),
+    } as Template;
+  }, [previewCampaign, templates]);
+
+  // Variables list for preview modal breakdown
+  const previewVariablesList = useMemo(() => {
+    if (!previewCampaign || !previewTemplate) return [];
+    const list: Array<{
+      token: string;
+      label: string;
+      value: string;
+      type: 'header' | 'body' | 'media';
+    }> = [];
+
+    const headerComp = previewTemplate.components?.find((c) => c.type === 'HEADER');
+    const bodyComp = previewTemplate.components?.find((c) => c.type === 'BODY');
+    const vars = previewCampaign.variableValues || {};
+    const media =
+      previewCampaign.headerMediaUrl ||
+      vars.header_media_url ||
+      vars.headerMediaUrl ||
+      '';
+
+    if (headerComp?.format === 'IMAGE' || headerComp?.format === 'VIDEO' || headerComp?.format === 'DOCUMENT') {
+      list.push({
+        token: `Header (${headerComp.format})`,
+        label: `${headerComp.format} Attachment`,
+        value: media || headerComp.example?.header_handle?.[0] || 'Default Media',
+        type: 'media',
+      });
+    }
+
+    if (headerComp?.text) {
+      const headerMatches = Array.from(headerComp.text.matchAll(/\{\{(\d+)\}\}/g));
+      headerMatches.forEach((m) => {
+        const p1 = m[1];
+        const val = vars[`header_${p1}`] || vars[p1] || `Param ${p1}`;
+        list.push({
+          token: `{{${p1}}} (Header)`,
+          label: `Header Param ${p1}`,
+          value: val,
+          type: 'header',
+        });
+      });
+    }
+
+    if (bodyComp?.text) {
+      const bodyMatches = Array.from(bodyComp.text.matchAll(/\{\{(\d+)\}\}/g));
+      const sampleList = bodyComp.example?.body_text?.[0] || [];
+      const defaultLabels: Record<string, string> = {
+        '1': 'Customer Name / Salutation',
+        '2': 'Order Number / Offer Code',
+        '3': 'Delivery Date / Event Details',
+        '4': 'Discount / Promo Amount',
+      };
+
+      bodyMatches.forEach((m) => {
+        const p1 = m[1];
+        const idx = parseInt(p1, 10) - 1;
+        const val =
+          vars[`body_${p1}`] ||
+          vars[p1] ||
+          vars[`{{${p1}}}`] ||
+          sampleList[idx] ||
+          `Param {{${p1}}}`;
+
+        list.push({
+          token: `{{${p1}}}`,
+          label: defaultLabels[p1] || `Body Variable ${p1}`,
+          value: val,
+          type: 'body',
+        });
+      });
+    }
+
+    return list;
+  }, [previewCampaign, previewTemplate]);
 
   useEffect(() => {
     if (!organization?.id) return;
@@ -443,9 +573,43 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({ onViewAnalytics })
                       </td>
                       <td className="py-3.5 px-4 text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end space-x-1.5">
+                          {/* 1. View Mobile Preview Button (User Request: View Icon -> Mobile View with variables & media) */}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setPreviewCampaign(c);
+                            }}
+                            title="View WhatsApp Mobile Handset Preview"
+                            className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border border-emerald-200 dark:border-emerald-800/80 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 font-semibold text-[11px] transition-colors cursor-pointer"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>View</span>
+                          </button>
+
+                          {/* 2. Clone / Re-Campaign Button (User Request: Clone Icon -> Re-campaign, only change numbers) */}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setCloneCampaignTarget(c);
+                              setIsModalOpen(true);
+                            }}
+                            title="Clone & Re-Campaign (Keeps template, variables & media, only change numbers)"
+                            className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border border-blue-200 dark:border-blue-800/80 bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/60 font-semibold text-[11px] transition-colors cursor-pointer"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                            <span>Clone</span>
+                          </button>
+
+                          {/* 3. Track (Analytics) */}
                           {onViewAnalytics && (
                             <button
-                              onClick={() => onViewAnalytics(c.id)}
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onViewAnalytics(c.id);
+                              }}
                               title="View Analytics & Delivery"
                               className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border border-purple-200 dark:border-purple-800/80 bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/60 font-semibold text-[11px] transition-colors cursor-pointer"
                             >
@@ -453,8 +617,14 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({ onViewAnalytics })
                               <span>Track</span>
                             </button>
                           )}
+
+                          {/* 4. Delete */}
                           <button
-                            onClick={() => setSingleDeleteCampaign(c)}
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSingleDeleteCampaign(c);
+                            }}
                             title="Delete this campaign"
                             className="p-1.5 rounded-lg border border-neutral-200 dark:border-neutral-700 hover:border-red-300 dark:hover:border-red-800 hover:bg-red-50 dark:hover:bg-red-950/40 text-neutral-500 hover:text-red-600 dark:hover:text-red-400 transition-colors cursor-pointer"
                           >
@@ -593,18 +763,215 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({ onViewAnalytics })
         </div>
       )}
 
+      {/* Campaign Mobile Message Preview Modal (User Request 1: View Icon -> Mobile View with variables & media) */}
+      {previewCampaign && previewTemplate && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-xs animate-fadeIn">
+          <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-3xl max-w-3xl w-full overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
+            {/* Header */}
+            <div className="p-4 sm:p-5 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between bg-neutral-50/60 dark:bg-neutral-800/30 shrink-0">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-xs shrink-0">
+                  <Smartphone className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center space-x-2">
+                    <h3 className="text-base font-bold text-neutral-900 dark:text-white">
+                      {previewCampaign.name}
+                    </h3>
+                    <span
+                      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                        previewCampaign.status === 'completed'
+                          ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400 border border-emerald-200'
+                          : previewCampaign.status === 'sending'
+                          ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400 border border-blue-200 animate-pulse'
+                          : 'bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300'
+                      }`}
+                    >
+                      {previewCampaign.status}
+                    </span>
+                  </div>
+                  <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">
+                    Template: <strong className="text-neutral-700 dark:text-neutral-300 font-mono">{previewTemplate.name}</strong> ({previewTemplate.category})
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setPreviewCampaign(null)}
+                className="p-1.5 rounded-xl text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-4 sm:p-6 overflow-y-auto flex-1 grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
+              {/* Left Column: Authentic Handset Mockup */}
+              <div className="md:col-span-6 flex flex-col items-center justify-center p-3 rounded-2xl bg-neutral-50 dark:bg-neutral-950/50 border border-neutral-200/80 dark:border-neutral-800">
+                <MiniTemplatePhonePreview
+                  template={previewTemplate}
+                  businessName={activeAccount?.verifiedName || 'Official Business'}
+                  customVariables={previewCampaign.variableValues}
+                  customMediaUrl={previewCampaign.headerMediaUrl || previewCampaign.variableValues?.header_media_url}
+                  messageTimestamp={previewCampaign.startedAt || previewCampaign.createdAt}
+                  deliveryStatus="read"
+                  size="large"
+                  highlightVariables={true}
+                />
+                <p className="text-[10px] text-neutral-400 mt-3 text-center">
+                  Live simulated preview with exact media & variables used in this campaign.
+                </p>
+              </div>
+
+              {/* Right Column: Campaign Variable Details & Clone Action */}
+              <div className="md:col-span-6 space-y-4">
+                {/* Campaign Quick Stats */}
+                <div className="p-4 rounded-2xl bg-neutral-50/60 dark:bg-neutral-800/40 border border-neutral-200 dark:border-neutral-700/80 space-y-2">
+                  <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider block">
+                    Campaign Summary
+                  </span>
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <span className="text-neutral-400 text-[10px] block">Audience Size</span>
+                      <span className="font-bold text-neutral-900 dark:text-white">
+                        {previewCampaign.recipientCount} Recipients
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-neutral-400 text-[10px] block">Created On</span>
+                      <span className="font-medium text-neutral-700 dark:text-neutral-300">
+                        {new Date(previewCampaign.createdAt).toLocaleDateString()}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Variables Used Table */}
+                <div className="p-4 rounded-2xl bg-white dark:bg-neutral-800/40 border border-neutral-200 dark:border-neutral-700/80 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider">
+                      Variables & Media In This Campaign
+                    </span>
+                    <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-full border border-emerald-200">
+                      {previewVariablesList.length} Items
+                    </span>
+                  </div>
+
+                  {previewVariablesList.length === 0 ? (
+                    <p className="text-xs text-neutral-400 py-3 text-center">
+                      Fixed text template with no dynamic variables.
+                    </p>
+                  ) : (
+                    <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                      {previewVariablesList.map((item, idx) => (
+                        <div
+                          key={idx}
+                          className="p-2 rounded-xl bg-neutral-50 dark:bg-neutral-800 flex items-center justify-between text-xs"
+                        >
+                          <div>
+                            <span className="font-mono font-bold text-purple-700 dark:text-purple-400 text-[11px] block">
+                              {item.token}
+                            </span>
+                            <span className="text-[10px] text-neutral-500">{item.label}</span>
+                          </div>
+
+                          <div className="text-right max-w-[160px] truncate">
+                            {item.type === 'media' && item.value.startsWith('/') ? (
+                              <span className="font-mono text-[11px] text-emerald-700 dark:text-emerald-300 truncate block">
+                                {item.value}
+                              </span>
+                            ) : (
+                              <span className="font-semibold text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-800/50">
+                                {item.value}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Clone / Re-Campaign CTA button inside modal */}
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-blue-50 to-purple-50 dark:from-blue-950/30 dark:to-purple-950/30 border border-blue-200 dark:border-blue-800/60 space-y-2">
+                  <div className="flex items-center space-x-2 text-blue-900 dark:text-blue-200 font-bold text-xs">
+                    <Repeat className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                    <span>Re-launch / Clone Campaign</span>
+                  </div>
+                  <p className="text-[11px] text-neutral-600 dark:text-neutral-400">
+                    Template, variable values, and media attachment will stay identical. You only need to change/paste new recipient numbers!
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const target = previewCampaign;
+                      setPreviewCampaign(null);
+                      setCloneCampaignTarget(target);
+                      setIsModalOpen(true);
+                    }}
+                    className="w-full py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-xs flex items-center justify-center space-x-2 transition-colors cursor-pointer"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>Clone & Re-Campaign Now</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-between shrink-0 bg-neutral-50/60 dark:bg-neutral-800/30">
+              <button
+                type="button"
+                onClick={() => {
+                  const bodyComp = previewTemplate.components?.find((c) => c.type === 'BODY');
+                  let text = bodyComp?.text || '';
+                  if (previewCampaign.variableValues) {
+                    text = text.replace(/\{\{(\d+)\}\}/g, (match, p1) => {
+                      const val =
+                        previewCampaign.variableValues?.[`body_${p1}`] ||
+                        previewCampaign.variableValues?.[p1] ||
+                        previewCampaign.variableValues?.[`{{${p1}}}`];
+                      return val || match;
+                    });
+                  }
+                  navigator.clipboard.writeText(text);
+                  toast.showSuccess('Message Copied', 'Copied message text with campaign variable values.');
+                }}
+                className="inline-flex items-center space-x-1.5 px-3 py-2 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs font-semibold text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 transition-colors cursor-pointer"
+              >
+                <Copy className="w-3.5 h-3.5 text-neutral-500" />
+                <span>Copy Message Body</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setPreviewCampaign(null)}
+                className="px-4 py-2 rounded-xl bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 text-xs font-semibold hover:opacity-90 transition-opacity cursor-pointer shadow-xs"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Advance Broadcast Campaign Modal with Side WhatsApp Preview & Manual Number Paste */}
       {organization?.id && (
         <CreateCampaignModal
           isOpen={isModalOpen}
-          onClose={() => setIsModalOpen(false)}
+          onClose={() => {
+            setIsModalOpen(false);
+            setCloneCampaignTarget(null);
+          }}
           organizationId={organization.id}
           activeAccount={activeAccount}
           templates={templates}
           contacts={contacts}
           groups={groups}
+          initialCloneCampaign={cloneCampaignTarget}
           onSuccess={() => {
-            // Refreshes upon campaign dispatch
+            setCloneCampaignTarget(null);
           }}
         />
       )}
