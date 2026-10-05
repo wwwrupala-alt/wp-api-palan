@@ -7,7 +7,11 @@ import {
   getFirebaseConfig,
 } from './metaAccountSyncService.ts';
 import { formatTemplateComponentsForSending } from './templateUtils.ts';
-import { resolveMetaMediaObject } from './metaMediaManager.ts';
+import {
+  resolveMetaMediaObject,
+  getUploadsWritableDir,
+  inMemoryMediaBufferCache,
+} from './metaMediaManager.ts';
 import {
   serverDb,
   doc,
@@ -501,22 +505,35 @@ export async function getMetaHeaderHandleForMedia(
   let buffer: Buffer | null = null;
   let mimeType = format === 'VIDEO' ? 'video/mp4' : format === 'DOCUMENT' ? 'application/pdf' : 'image/png';
 
-  // 1. Try reading from local uploaded file
+  // 1. Try reading from memory cache or local uploaded file
   if (mediaInput && typeof mediaInput === 'string' && (mediaInput.includes('/uploads/') || !mediaInput.startsWith('http'))) {
     const filename = path.basename(mediaInput.split('?')[0]);
-    const localPath = path.join(process.cwd(), 'public', 'uploads', filename);
-    if (fs.existsSync(localPath)) {
-      try {
-        buffer = fs.readFileSync(localPath);
-        const ext = path.extname(filename).toLowerCase();
-        if (ext === '.png') mimeType = 'image/png';
-        else if (ext === '.jpg' || ext === '.jpeg') mimeType = 'image/jpeg';
-        else if (ext === '.webp') mimeType = 'image/webp';
-        else if (ext === '.mp4') mimeType = 'video/mp4';
-        else if (ext === '.3gp') mimeType = 'video/3gpp';
-        else if (ext === '.pdf') mimeType = 'application/pdf';
-      } catch (e) {
-        console.warn('[getMetaHeaderHandleForMedia] Error reading local file:', e);
+    const memCached = inMemoryMediaBufferCache.get(filename) || inMemoryMediaBufferCache.get(mediaInput);
+    if (memCached) {
+      buffer = memCached.buffer;
+      mimeType = memCached.mimeType;
+    } else {
+      const possiblePaths = [
+        path.join(process.cwd(), 'public', 'uploads', filename),
+        path.join(process.cwd(), filename),
+        path.join(getUploadsWritableDir(), filename),
+      ];
+      for (const p of possiblePaths) {
+        if (fs.existsSync(p)) {
+          try {
+            buffer = fs.readFileSync(p);
+            const ext = path.extname(filename).toLowerCase();
+            if (ext === '.png') mimeType = 'image/png';
+            else if (ext === '.jpg' || ext === '.jpeg') mimeType = 'image/jpeg';
+            else if (ext === '.webp') mimeType = 'image/webp';
+            else if (ext === '.mp4') mimeType = 'video/mp4';
+            else if (ext === '.3gp') mimeType = 'video/3gpp';
+            else if (ext === '.pdf') mimeType = 'application/pdf';
+            break;
+          } catch (e) {
+            console.warn('[getMetaHeaderHandleForMedia] Error reading local file:', e);
+          }
+        }
       }
     }
   }
@@ -2302,15 +2319,32 @@ export async function handleUploadMedia(req: Request, res: Response) {
     const cleanBase = path.basename(filename, ext).replace(/[^a-zA-Z0-9_-]/g, '_');
     const uniqueName = `${cleanBase}_${Date.now()}${ext}`;
 
-    const uploadsDir = path.join(process.cwd(), 'public', 'uploads');
-    if (!fs.existsSync(uploadsDir)) {
-      fs.mkdirSync(uploadsDir, { recursive: true });
-    }
-
-    const targetPath = path.join(uploadsDir, uniqueName);
     const rawData = base64.replace(/^data:[^;]+;base64,/, '');
     const buffer = Buffer.from(rawData, 'base64');
-    fs.writeFileSync(targetPath, buffer);
+    const mimeType = contentType || (ext === '.mp4' || ext === '.3gp' ? 'video/mp4' : ext === '.pdf' ? 'application/pdf' : 'image/png');
+
+    // 1. Always cache in memory so serverless / read-only filesystems (/var/task) never fail
+    inMemoryMediaBufferCache.set(uniqueName, {
+      buffer,
+      mimeType,
+      originalName: filename,
+      filename: uniqueName,
+    });
+    inMemoryMediaBufferCache.set(`/uploads/${uniqueName}`, {
+      buffer,
+      mimeType,
+      originalName: filename,
+      filename: uniqueName,
+    });
+
+    // 2. Best-effort write to disk (fallback to os.tmpdir() if public/uploads is read-only)
+    try {
+      const writableDir = getUploadsWritableDir();
+      const targetPath = path.join(writableDir, uniqueName);
+      fs.writeFileSync(targetPath, buffer);
+    } catch (fsErr) {
+      console.warn('[UploadMedia] Disk write notice (in-memory buffer cached):', fsErr);
+    }
 
     const relativeUrl = `/uploads/${uniqueName}`;
     const host = req.get('x-forwarded-host') || req.get('host') || 'localhost:3000';

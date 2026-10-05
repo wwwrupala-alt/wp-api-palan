@@ -1,5 +1,8 @@
 import express from 'express';
 import path from 'path';
+import os from 'os';
+import fs from 'fs';
+import { inMemoryMediaBufferCache } from './metaMediaManager.ts';
 import {
   handleGetMetaStatus,
   handleEmbeddedSignupExchange,
@@ -32,7 +35,25 @@ export const apiApp = express();
 apiApp.use(express.json({ limit: '60mb' }));
 apiApp.use(express.urlencoded({ extended: true, limit: '60mb' }));
 
-// Serve uploaded media files publicly from /uploads
+// Serve uploaded media files publicly from /uploads (supports memory cache, tmpdir, and static disk)
+apiApp.get('/uploads/:filename', (req, res, next) => {
+  const filename = req.params.filename;
+  // 1. Check in-memory media buffer cache
+  const memCached = inMemoryMediaBufferCache.get(filename);
+  if (memCached) {
+    res.setHeader('Content-Type', memCached.mimeType || 'application/octet-stream');
+    return res.send(memCached.buffer);
+  }
+
+  // 2. Check os.tmpdir()/cloudwaba_uploads
+  const tmpPath = path.join(os.tmpdir(), 'cloudwaba_uploads', filename);
+  if (fs.existsSync(tmpPath)) {
+    return res.sendFile(tmpPath);
+  }
+
+  // 3. Fallback to standard static serving
+  next();
+});
 apiApp.use('/uploads', express.static(path.join(process.cwd(), 'public', 'uploads')));
 
 // Media Upload from PC / Device

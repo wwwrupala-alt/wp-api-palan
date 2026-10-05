@@ -1,14 +1,56 @@
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 
 // In-memory cache to avoid re-uploading the same file during a broadcast campaign
 const metaMediaIdCache = new Map<string, string>();
 
+export interface InMemoryMediaFile {
+  buffer: Buffer;
+  mimeType: string;
+  originalName: string;
+  filename: string;
+}
+
+// In-memory media store so files are accessible even on read-only serverless filesystems (/var/task)
+export const inMemoryMediaBufferCache = new Map<string, InMemoryMediaFile>();
+
 /**
- * Resolves any media reference (local file in public/uploads, numeric Meta Media ID,
+ * Returns a guaranteed writable directory for uploaded media.
+ * Prefers 'public/uploads' in standard Node environments,
+ * and gracefully falls back to os.tmpdir() (/tmp/cloudwaba_uploads) in serverless / read-only filesystems.
+ */
+export function getUploadsWritableDir(): string {
+  // 1. Try public/uploads
+  const primaryDir = path.join(process.cwd(), 'public', 'uploads');
+  try {
+    if (!fs.existsSync(primaryDir)) {
+      fs.mkdirSync(primaryDir, { recursive: true });
+    }
+    // Verify write permissions
+    const testFile = path.join(primaryDir, `.test_${Date.now()}`);
+    fs.writeFileSync(testFile, 'ok');
+    fs.unlinkSync(testFile);
+    return primaryDir;
+  } catch {
+    // 2. Fallback to os.tmpdir() which is always writable in Vercel, AWS Lambda, Google Cloud Run
+    const fallbackDir = path.join(os.tmpdir(), 'cloudwaba_uploads');
+    try {
+      if (!fs.existsSync(fallbackDir)) {
+        fs.mkdirSync(fallbackDir, { recursive: true });
+      }
+      return fallbackDir;
+    } catch {
+      return os.tmpdir();
+    }
+  }
+}
+
+/**
+ * Resolves any media reference (local file in public/uploads or /tmp, in-memory buffer, numeric Meta Media ID,
  * internal scontent.whatsapp.net example URL, or remote public URL)
  * into a Meta-compliant payload for template parameters or direct media messages:
- * - Either { id: "<META_MEDIA_ID>" } (for local files, scontent URLs, or uploaded media)
+ * - Either { id: "<META_MEDIA_ID>" } (for local files, in-memory buffers, scontent URLs, or uploaded media)
  * - Or { link: "<PUBLIC_HTTPS_URL>" } (for public external URLs)
  */
 export async function resolveMetaMediaObject(
@@ -50,7 +92,7 @@ export async function resolveMetaMediaObject(
         const ext = mimeType.includes('png') ? '.png' : mimeType.includes('jpeg') || mimeType.includes('jpg') ? '.jpg' : '.bin';
         const uploadFileName = `header_media_${Date.now()}${ext}`;
 
-        const blob = new Blob([buffer], { type: mimeType });
+        const blob = new Blob([new Uint8Array(buffer)], { type: mimeType });
         const formData = new FormData();
         formData.append('messaging_product', 'whatsapp');
         formData.append('type', mimeType);
@@ -77,7 +119,7 @@ export async function resolveMetaMediaObject(
     }
   }
 
-  // 3. If it's a remote public HTTPS/HTTP URL (and not localhost, not 127.0.0.1, and not our Google Cloud Run dev preview domain)
+  // 3. If it's a remote public HTTPS/HTTP URL (and not localhost, not 127.0.0.1, and not our preview domain)
   const isInternalPreviewDomain =
     trimmed.includes('run.app') ||
     trimmed.includes('localhost') ||
@@ -104,16 +146,56 @@ export async function resolveMetaMediaObject(
     }
   }
 
-  // Find file on disk
-  const cleanSubPath = localRelative.replace(/^\//, '');
-  let filePath = path.join(process.cwd(), 'public', cleanSubPath);
-  if (!fs.existsSync(filePath)) {
-    filePath = path.join(process.cwd(), cleanSubPath);
+  const baseFilename = path.basename(localRelative);
+
+  // Check In-Memory Cache first (vital for serverless / read-only environments)
+  const memCached =
+    inMemoryMediaBufferCache.get(baseFilename) ||
+    inMemoryMediaBufferCache.get(localRelative) ||
+    inMemoryMediaBufferCache.get(trimmed);
+
+  let fileBuffer: Buffer | null = null;
+  let mimeType = 'application/octet-stream';
+  let originalFileName = baseFilename;
+
+  if (memCached) {
+    fileBuffer = memCached.buffer;
+    mimeType = memCached.mimeType;
+    originalFileName = memCached.originalName || baseFilename;
+  } else {
+    // Search disk locations: public/uploads, root, os.tmpdir()/cloudwaba_uploads, os.tmpdir()
+    const cleanSubPath = localRelative.replace(/^\//, '');
+    const possiblePaths = [
+      path.join(process.cwd(), 'public', cleanSubPath),
+      path.join(process.cwd(), cleanSubPath),
+      path.join(os.tmpdir(), 'cloudwaba_uploads', baseFilename),
+      path.join(os.tmpdir(), baseFilename),
+    ];
+
+    let foundPath: string | null = null;
+    for (const p of possiblePaths) {
+      if (fs.existsSync(p)) {
+        foundPath = p;
+        break;
+      }
+    }
+
+    if (foundPath) {
+      const ext = path.extname(foundPath).toLowerCase();
+      if (ext === '.png') mimeType = 'image/png';
+      else if (ext === '.jpg' || ext === '.jpeg') mimeType = 'image/jpeg';
+      else if (ext === '.webp') mimeType = 'image/webp';
+      else if (ext === '.mp4') mimeType = 'video/mp4';
+      else if (ext === '.3gp') mimeType = 'video/3gpp';
+      else if (ext === '.pdf') mimeType = 'application/pdf';
+
+      fileBuffer = fs.readFileSync(foundPath);
+      originalFileName = path.basename(foundPath);
+    }
   }
 
-  if (!fs.existsSync(filePath)) {
-    console.warn(`[resolveMetaMediaObject] Local media file not found on disk at: ${filePath}`);
-    // If it's an external public URL, we can attempt link fallback
+  if (!fileBuffer) {
+    console.warn(`[resolveMetaMediaObject] Local media file not found on disk or memory for: ${mediaRef}`);
     if (trimmed.startsWith('https://') && !isInternalPreviewDomain) {
       return { link: trimmed };
     }
@@ -121,19 +203,7 @@ export async function resolveMetaMediaObject(
   }
 
   try {
-    const ext = path.extname(filePath).toLowerCase();
-    let mimeType = 'application/octet-stream';
-    if (ext === '.png') mimeType = 'image/png';
-    else if (ext === '.jpg' || ext === '.jpeg') mimeType = 'image/jpeg';
-    else if (ext === '.webp') mimeType = 'image/webp';
-    else if (ext === '.mp4') mimeType = 'video/mp4';
-    else if (ext === '.3gp') mimeType = 'video/3gpp';
-    else if (ext === '.pdf') mimeType = 'application/pdf';
-
-    const fileBuffer = fs.readFileSync(filePath);
-    const blob = new Blob([fileBuffer], { type: mimeType });
-    const originalFileName = path.basename(filePath);
-
+    const blob = new Blob([new Uint8Array(fileBuffer)], { type: mimeType });
     const formData = new FormData();
     formData.append('messaging_product', 'whatsapp');
     formData.append('type', mimeType);
