@@ -1478,6 +1478,72 @@ export async function reassignUserToAdmin(userId: string, targetAdminId: string)
 }
 
 /**
+ * Compresses oversized images client-side before upload to prevent HTTP 413 (Payload Too Large)
+ * and ensure fast delivery within Meta WhatsApp Cloud API guidelines (max 5MB).
+ */
+export async function compressImageIfNeeded(file: File): Promise<File> {
+  // Only compress images that are larger than 600KB
+  if (!file.type.startsWith('image/') || file.size <= 600 * 1024) {
+    return file;
+  }
+  if (file.type.includes('gif') || file.type.includes('svg')) {
+    return file;
+  }
+
+  return new Promise((resolve) => {
+    try {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const maxDim = 1600;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          return resolve(file);
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) return resolve(file);
+            const compressedFile = new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), {
+              type: 'image/jpeg',
+              lastModified: Date.now(),
+            });
+            resolve(compressedFile);
+          },
+          'image/jpeg',
+          0.85
+        );
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        resolve(file);
+      };
+      img.src = url;
+    } catch {
+      resolve(file);
+    }
+  });
+}
+
+/**
  * Uploads a file (image, video, document) from user's PC/device to backend
  */
 export async function uploadMediaFile(
@@ -1493,6 +1559,9 @@ export async function uploadMediaFile(
   size: number;
   contentType: string;
 }> {
+  // Auto-compress large images client-side to prevent 413 Payload Too Large
+  const processedFile = await compressImageIfNeeded(file);
+
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = async () => {
@@ -1504,9 +1573,9 @@ export async function uploadMediaFile(
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            filename: file.name,
+            filename: processedFile.name,
             base64,
-            contentType: file.type,
+            contentType: processedFile.type,
             customToken,
           }),
         });
@@ -1519,7 +1588,7 @@ export async function uploadMediaFile(
     reader.onerror = () => {
       reject(new Error('Failed to read file from device.'));
     };
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(processedFile);
   });
 }
 

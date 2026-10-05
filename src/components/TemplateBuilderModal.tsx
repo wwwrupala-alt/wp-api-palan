@@ -297,6 +297,19 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
 
     setUploadError(null);
     setIsUploadingMedia(true);
+
+    // Instant local preview in template phone chassis
+    const localPreviewUrl = URL.createObjectURL(file);
+    setHeaderMediaSampleUrl(localPreviewUrl);
+    setUploadedMedia({
+      filename: file.name,
+      originalName: file.name,
+      url: localPreviewUrl,
+      fullUrl: localPreviewUrl,
+      size: file.size,
+      contentType: file.type,
+    });
+
     try {
       const res = await uploadMediaFile(file, customToken);
       setUploadedMedia(res);

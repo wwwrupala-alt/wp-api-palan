@@ -69,6 +69,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
   // Dynamic variables & media
   const [templateVariables, setTemplateVariables] = useState<Record<string, string>>({});
   const [campaignMediaUrl, setCampaignMediaUrl] = useState('');
+  const [campaignMediaPreviewUrl, setCampaignMediaPreviewUrl] = useState('');
 
   // Campaign media PC upload state
   const [campaignMediaSourceMode, setCampaignMediaSourceMode] = useState<'upload' | 'url'>('upload');
@@ -215,6 +216,19 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
 
     setUploadCampaignError(null);
     setIsUploadingCampaignMedia(true);
+
+    // Instant local preview in phone chassis (0ms latency)
+    const localPreviewUrl = URL.createObjectURL(file);
+    setCampaignMediaPreviewUrl(localPreviewUrl);
+    setUploadedCampaignMedia({
+      filename: file.name,
+      originalName: file.name,
+      url: localPreviewUrl,
+      fullUrl: localPreviewUrl,
+      size: file.size,
+      contentType: file.type,
+    });
+
     try {
       const res = await uploadMediaFile(file, activeAccount?.customToken);
       setUploadedCampaignMedia(res);
@@ -584,7 +598,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
                           <div className="flex items-center space-x-3 overflow-hidden">
                             {headerComponent?.format === 'IMAGE' && (
                               <img
-                                src={uploadedCampaignMedia.url}
+                                src={campaignMediaPreviewUrl || uploadedCampaignMedia.url}
                                 alt="Banner"
                                 className="w-12 h-12 rounded-lg object-cover border border-emerald-300 dark:border-emerald-700 shrink-0"
                               />
@@ -627,6 +641,9 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
                               onClick={() => {
                                 setUploadedCampaignMedia(null);
                                 setCampaignMediaUrl('');
+                                setCampaignMediaPreviewUrl('');
+                                setUploadCampaignError(null);
+                                if (campaignFileInputRef.current) campaignFileInputRef.current.value = '';
                               }}
                               className="p-1 rounded-lg text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30 cursor-pointer"
                             >
@@ -980,14 +997,11 @@ Rahul: 919974428034
                       {headerComponent && (
                         <div className="rounded-xl overflow-hidden bg-neutral-100 dark:bg-neutral-800/80">
                           {headerComponent.format === 'IMAGE' && (
-                            campaignMediaUrl ? (
+                            (campaignMediaPreviewUrl || campaignMediaUrl) ? (
                               <img
-                                src={campaignMediaUrl}
+                                src={campaignMediaPreviewUrl || campaignMediaUrl}
                                 alt="Header preview"
-                                className="w-full h-24 object-cover rounded-xl"
-                                onError={(e) => {
-                                  (e.target as HTMLElement).style.display = 'none';
-                                }}
+                                className="w-full h-28 object-cover rounded-xl"
                               />
                             ) : (
                               <div className="h-20 flex flex-col items-center justify-center text-neutral-400 space-y-1">
