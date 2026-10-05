@@ -219,16 +219,40 @@ export const WhatsAppAccountsPage: React.FC<WhatsAppAccountsPageProps> = ({
 
                 <div className="grid grid-cols-2 gap-2 py-3 border-y border-neutral-100 dark:border-neutral-800 text-xs">
                   <div>
-                    <span className="text-[10px] uppercase font-semibold text-neutral-400 block">Phone Number ID</span>
-                    <span className="font-mono text-neutral-800 dark:text-neutral-200 truncate block">
-                      {acc.phoneNumberId}
-                    </span>
+                    <span className="text-[10px] uppercase font-semibold text-neutral-400 block mb-0.5">Phone Number ID</span>
+                    <div className="flex items-center space-x-1.5 font-mono text-neutral-800 dark:text-neutral-200">
+                      <span className="truncate select-all">{acc.phoneNumberId}</span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigator.clipboard.writeText(acc.phoneNumberId);
+                          toast.showSuccess('Copied', 'Phone Number ID copied to clipboard');
+                        }}
+                        className="text-neutral-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors p-0.5 cursor-pointer shrink-0"
+                        title="Copy Phone Number ID"
+                      >
+                        <Copy className="w-3 h-3" />
+                      </button>
+                    </div>
                   </div>
                   <div>
-                    <span className="text-[10px] uppercase font-semibold text-neutral-400 block">WABA ID</span>
-                    <span className="font-mono text-neutral-800 dark:text-neutral-200 truncate block">
-                      {acc.wabaId}
-                    </span>
+                    <span className="text-[10px] uppercase font-semibold text-neutral-400 block mb-0.5">WABA ID</span>
+                    <div className="flex items-center space-x-1.5 font-mono text-neutral-800 dark:text-neutral-200">
+                      <span className="truncate select-all">{acc.wabaId}</span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigator.clipboard.writeText(acc.wabaId);
+                          toast.showSuccess('Copied', 'WABA ID copied to clipboard');
+                        }}
+                        className="text-neutral-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors p-0.5 cursor-pointer shrink-0"
+                        title="Copy WABA ID"
+                      >
+                        <Copy className="w-3 h-3" />
+                      </button>
+                    </div>
                   </div>
                   <div>
                     <span className="text-[10px] uppercase font-semibold text-neutral-400 block">Webhook Status</span>

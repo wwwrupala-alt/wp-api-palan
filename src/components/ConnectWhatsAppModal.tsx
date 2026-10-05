@@ -22,6 +22,7 @@ import {
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useToast } from '../context/ToastContext.tsx';
+import { MaskedIdDisplay } from './MaskedIdDisplay.tsx';
 
 interface ConnectWhatsAppModalProps {
   isOpen: boolean;
@@ -306,9 +307,9 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
                     Phone Number ID <span className="text-red-500">*</span>
                   </label>
                   <input
-                    type="text"
+                    type="password"
                     required
-                    placeholder="e.g. 104839281728392"
+                    placeholder="••••••••••••"
                     value={phoneNumberId}
                     onChange={(e) => setPhoneNumberId(e.target.value)}
                     className="w-full px-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white placeholder-neutral-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 font-mono text-xs"
@@ -323,9 +324,9 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
                     WhatsApp Business Account (WABA) ID <span className="text-red-500">*</span>
                   </label>
                   <input
-                    type="text"
+                    type="password"
                     required
-                    placeholder="e.g. 193829104829103"
+                    placeholder="••••••••••••"
                     value={wabaId}
                     onChange={(e) => setWabaId(e.target.value)}
                     className="w-full px-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white placeholder-neutral-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 font-mono text-xs"
@@ -551,8 +552,22 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
                     <span>Meta Embedded Signup Ready ({embeddedMode === 'coexistence' ? 'Coexistence Mode' : 'Standard'})</span>
                   </div>
                   <div className="text-[11px] space-y-1 font-mono text-neutral-700 dark:text-neutral-300 bg-white/70 dark:bg-neutral-900/60 p-2.5 rounded-xl border border-emerald-200/60 dark:border-emerald-900/40">
-                    <div>App ID: <strong>{metaStatus?.appId}</strong></div>
-                    <div>Config ID: <strong>{metaStatus?.configId}</strong></div>
+                    <div className="flex items-center justify-between py-0.5">
+                      <span className="text-neutral-500 font-sans">App ID:</span>
+                      <MaskedIdDisplay
+                        value={metaStatus?.appId}
+                        label="Meta App ID"
+                        digitsToShow={1}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between py-0.5">
+                      <span className="text-neutral-500 font-sans">Config ID:</span>
+                      <MaskedIdDisplay
+                        value={metaStatus?.configId}
+                        label="Configuration ID"
+                        digitsToShow={1}
+                      />
+                    </div>
                     <div>
                       sessionInfoVersion: <strong className="text-emerald-700 dark:text-emerald-400">"3"</strong>
                     </div>

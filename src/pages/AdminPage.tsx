@@ -56,6 +56,7 @@ import {
   subscribeGlobalMetaConfig,
 } from '../lib/services.ts';
 import type { WebhookLog, UserProfile, UserSubscription, Organization } from '../types/index.ts';
+import { MaskedIdDisplay } from '../components/MaskedIdDisplay.tsx';
 
 export const AdminPage: React.FC = () => {
   const { userProfile, organization, currentUser, refreshProfile } = useAuth();
@@ -920,10 +921,16 @@ export const AdminPage: React.FC = () => {
                                     {/* Meta App Config Status for this Admin */}
                                     <div className="flex items-center space-x-1">
                                       {isMetaConfigured ? (
-                                        <span className="inline-flex items-center space-x-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-800">
+                                        <div className="inline-flex items-center space-x-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-800">
                                           <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" />
-                                          <span>Meta App Configured (App: {metaConfig?.appId})</span>
-                                        </span>
+                                          <span>Meta App Configured (App:</span>
+                                          <MaskedIdDisplay
+                                            value={metaConfig?.appId}
+                                            label="Meta App ID"
+                                            digitsToShow={1}
+                                          />
+                                          <span>)</span>
+                                        </div>
                                       ) : (
                                         <span className="inline-flex items-center space-x-1 text-[11px] text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 px-2 py-0.5 rounded-md border border-amber-200 dark:border-amber-800">
                                           <AlertCircle className="w-3 h-3 text-amber-600 shrink-0" />
@@ -1547,10 +1554,38 @@ export const AdminPage: React.FC = () => {
                     <p className="font-semibold">
                       Embedded Signup Setup Ready! (Dono Details Filled)
                     </p>
-                    <p className="text-[11px] text-emerald-700 dark:text-emerald-400 mt-0.5">
-                      Config ID: <span className="font-mono font-bold">{metaConfigIdInput.trim()}</span> | App ID: <span className="font-mono font-bold">{metaAppIdInput.trim()}</span>
-                      {metaAppSecretInput.trim() ? ' | App Secret: (Saved)' : ' | App Secret: (Optional - direct connect token bhi chalega)'}
-                    </p>
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-emerald-700 dark:text-emerald-400 mt-0.5">
+                      <div className="flex items-center space-x-1">
+                        <span>Config ID:</span>
+                        <MaskedIdDisplay
+                          value={metaConfigIdInput.trim()}
+                          label="Configuration ID"
+                          digitsToShow={1}
+                          badgeClassName="font-mono font-bold text-emerald-900 dark:text-emerald-200"
+                        />
+                      </div>
+                      <span>|</span>
+                      <div className="flex items-center space-x-1">
+                        <span>App ID:</span>
+                        <MaskedIdDisplay
+                          value={metaAppIdInput.trim()}
+                          label="Meta App ID"
+                          digitsToShow={1}
+                          badgeClassName="font-mono font-bold text-emerald-900 dark:text-emerald-200"
+                        />
+                      </div>
+                      {metaAppSecretInput.trim() ? (
+                        <>
+                          <span>|</span>
+                          <span>App Secret: (Saved)</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>|</span>
+                          <span>App Secret: (Optional - direct connect token bhi chalega)</span>
+                        </>
+                      )}
+                    </div>
                   </div>
                 </div>
               ) : (
@@ -1570,13 +1605,13 @@ export const AdminPage: React.FC = () => {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
                 {/* 1. Configuration ID */}
                 <div className="space-y-1">
-                  <label className="font-semibold text-neutral-800 dark:text-neutral-200 flex items-center justify-between">
+                  <label className="font-semibold text-neutral-800 dark:text-neutral-200 block">
                     <span>Facebook Login for Business: Configuration ID <span className="text-red-500">*</span></span>
                   </label>
                   <input
-                    type="text"
+                    type="password"
                     required
-                    placeholder="Enter Facebook Login Configuration ID"
+                    placeholder="••••••••••••"
                     value={metaConfigIdInput}
                     onChange={(e) => setMetaConfigIdInput(e.target.value)}
                     className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 text-xs font-mono text-neutral-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
@@ -1588,13 +1623,13 @@ export const AdminPage: React.FC = () => {
 
                 {/* 2. Meta App ID */}
                 <div className="space-y-1">
-                  <label className="font-semibold text-neutral-800 dark:text-neutral-200 flex items-center justify-between">
+                  <label className="font-semibold text-neutral-800 dark:text-neutral-200 block">
                     <span>Meta App ID <span className="text-red-500">*</span></span>
                   </label>
                   <input
-                    type="text"
+                    type="password"
                     required
-                    placeholder="Enter Meta App ID from Developer Dashboard"
+                    placeholder="••••••••••••"
                     value={metaAppIdInput}
                     onChange={(e) => setMetaAppIdInput(e.target.value)}
                     className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 text-xs font-mono text-neutral-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
@@ -1654,12 +1689,12 @@ export const AdminPage: React.FC = () => {
 
                 {/* 5. Default WABA ID */}
                 <div className="space-y-1 md:col-span-2">
-                  <label className="font-semibold text-neutral-800 dark:text-neutral-200 flex items-center justify-between">
+                  <label className="font-semibold text-neutral-800 dark:text-neutral-200 block">
                     <span>WhatsApp Business Account ID (WABA ID) (Optional)</span>
                   </label>
                   <input
-                    type="text"
-                    placeholder="e.g. 10928374829102"
+                    type="password"
+                    placeholder="••••••••••••"
                     value={metaWabaIdInput}
                     onChange={(e) => setMetaWabaIdInput(e.target.value)}
                     className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 text-xs font-mono text-neutral-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
