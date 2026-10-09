@@ -4,6 +4,7 @@ import {
   setDoc,
   updateDoc,
   deleteDoc,
+  deleteField,
   onSnapshot,
   query,
   orderBy,
@@ -1464,6 +1465,18 @@ export async function saveOrganizationMetaConfig(
     } catch {
       // server sync best-effort
     }
+  }
+}
+
+/**
+ * Clears custom tenant Meta App config to revert back to Master platform default
+ */
+export async function clearOrganizationMetaConfig(orgId: string): Promise<void> {
+  if (orgId) {
+    await updateDoc(doc(db, 'organizations', orgId), {
+      metaAppConfig: deleteField(),
+      updatedAt: new Date().toISOString(),
+    });
   }
 }
 

@@ -142,10 +142,53 @@ export async function handleSaveAdminMetaConfig(req: Request, res: Response) {
   }
 }
 
-// Handler: Check Meta Configuration status
+// Multi-tenant resolution: Returns custom organization Meta credentials if saved, otherwise falls back to Master default
+export async function getEffectiveMetaConfig(organizationId?: string) {
+  const globalConfig = getMetaConfig();
+  if (!organizationId) {
+    return { ...globalConfig, isCustomTenantApp: false };
+  }
+
+  try {
+    const orgSnap = await getDoc(doc(serverDb, 'organizations', organizationId));
+    if (orgSnap.exists()) {
+      const orgData = orgSnap.data();
+      const custom = orgData?.metaAppConfig;
+      // If organization has custom appId and (configId or appSecret or systemUserToken)
+      if (custom && custom.appId && (custom.configId || custom.appSecret || custom.systemUserToken)) {
+        return {
+          appId: String(custom.appId || globalConfig.appId).trim(),
+          appSecret: String(custom.appSecret || globalConfig.appSecret).trim(),
+          configId: String(custom.configId || globalConfig.configId).trim(),
+          verifyToken: String(custom.verifyToken || globalConfig.verifyToken).trim(),
+          systemToken: String(custom.systemUserToken || custom.systemToken || globalConfig.systemToken).trim(),
+          graphVersion: String(custom.graphVersion || globalConfig.graphVersion).trim(),
+          appUrl: String(custom.appUrl || globalConfig.appUrl).trim(),
+          isConfigured: Boolean(
+            (custom.appId || globalConfig.appId) &&
+            (custom.configId || globalConfig.configId)
+          ),
+          isCustomTenantApp: true,
+          organizationName: orgData.name || organizationId,
+        };
+      }
+    }
+  } catch (err) {
+    console.warn('[MetaConfig] Error fetching tenant metaAppConfig:', err);
+  }
+
+  return { ...globalConfig, isCustomTenantApp: false };
+}
+
+// Handler: Check Meta Configuration status (supports per-tenant custom Meta App or Master default)
 export async function handleGetMetaStatus(req: Request, res: Response) {
   await loadMetaConfigFromDb();
-  const config = getMetaConfig();
+  const orgId =
+    (req.query.organizationId as string) ||
+    (req.headers['x-organization-id'] as string) ||
+    (req.query.orgId as string);
+
+  const config = await getEffectiveMetaConfig(orgId);
   res.json({
     isConfigured: config.isConfigured,
     appIdSet: Boolean(config.appId),
@@ -157,14 +200,16 @@ export async function handleGetMetaStatus(req: Request, res: Response) {
     webhookUrl: `${config.appUrl}/api/meta/webhook`,
     webhookVerifyToken: config.verifyToken,
     graphVersion: config.graphVersion,
+    isCustomTenantApp: config.isCustomTenantApp || false,
+    organizationId: orgId || null,
   });
 }
 
-// Handler: Meta Embedded Signup Code Exchange
+// Handler: Meta Embedded Signup Code Exchange (uses Admin's dedicated Meta App or Master default)
 export async function handleEmbeddedSignupExchange(req: Request, res: Response) {
   try {
     const { code, wabaId: passedWabaId, phoneNumberId: passedPhoneNumberId, organizationId } = req.body;
-    const config = getMetaConfig();
+    const config = await getEffectiveMetaConfig(organizationId);
 
     if (!config.appId || !config.appSecret) {
       return res.status(400).json({
@@ -897,6 +942,32 @@ export async function handleSendMessage(req: Request, res: Response) {
 
     const cleanPhone = recipientPhone.replace(/[^0-9]/g, '');
 
+    // Validate Tenant Subscription on the Cloud Server (immune to client PC clock manipulation)
+    const orgId = (req.headers['x-organization-id'] as string) || (req.body.organizationId as string);
+    if (orgId && orgId !== 'org_master_platform') {
+      try {
+        const orgSnap = await getDoc(doc(serverDb, 'organizations', orgId));
+        if (orgSnap.exists()) {
+          const orgData = orgSnap.data();
+          if (orgData.status === 'suspended') {
+            return res.status(403).json({
+              error: 'This tenant workspace is suspended by Master Admin.',
+              code: 'WORKSPACE_SUSPENDED',
+            });
+          }
+          const expiresAt = orgData.subscription?.expiresAt;
+          if (expiresAt && !isNaN(new Date(expiresAt).getTime()) && new Date(expiresAt).getTime() < Date.now()) {
+            return res.status(403).json({
+              error: `Subscription expired on ${new Date(expiresAt).toLocaleDateString()}. Outbound messages are blocked.`,
+              code: 'SUBSCRIPTION_EXPIRED',
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('[handleSendMessage] Org subscription check warning:', err);
+      }
+    }
+
     let payload: Record<string, unknown> = {
       messaging_product: 'whatsapp',
       recipient_type: 'individual',
@@ -1111,6 +1182,32 @@ export async function handleSendCampaign(req: Request, res: Response) {
         error: 'Meta system user access token is required to execute broadcast campaigns. Please connect account with token or set META_SYSTEM_USER_ACCESS_TOKEN.',
         code: 'TOKEN_REQUIRED',
       });
+    }
+
+    // Validate Tenant Subscription on the Cloud Server (immune to client PC clock manipulation)
+    const orgId = (req.headers['x-organization-id'] as string) || organizationId;
+    if (orgId && orgId !== 'org_master_platform') {
+      try {
+        const orgSnap = await getDoc(doc(serverDb, 'organizations', orgId));
+        if (orgSnap.exists()) {
+          const orgData = orgSnap.data();
+          if (orgData.status === 'suspended') {
+            return res.status(403).json({
+              error: 'This tenant workspace is suspended by Master Admin.',
+              code: 'WORKSPACE_SUSPENDED',
+            });
+          }
+          const expiresAt = orgData.subscription?.expiresAt;
+          if (expiresAt && !isNaN(new Date(expiresAt).getTime()) && new Date(expiresAt).getTime() < Date.now()) {
+            return res.status(403).json({
+              error: `Subscription expired on ${new Date(expiresAt).toLocaleDateString()}. Campaign broadcast is blocked.`,
+              code: 'SUBSCRIPTION_EXPIRED',
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('[handleSendCampaign] Org subscription check warning:', err);
+      }
     }
 
     let sentCount = 0;

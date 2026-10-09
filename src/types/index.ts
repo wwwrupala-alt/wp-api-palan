@@ -1,15 +1,68 @@
-export type UserRole = 'master_admin' | 'owner' | 'admin' | 'agent' | 'sub_admin';
+export type UserRole = 'master_admin' | 'admin' | 'user' | 'owner' | 'sub_admin';
+
+export interface SaaSPlan {
+  id: string;
+  name: string;
+  description: string;
+  price: number;
+  currency: string;
+  validityDays: number;
+  maxWhatsAppNumbers: number;
+  maxUsers: number;
+  maxContacts: number;
+  maxTemplates: number;
+  maxCampaigns: number;
+  maxMessages: number;
+  features: {
+    whatsapp_connection: boolean;
+    templates: boolean;
+    campaigns: boolean;
+    broadcast: boolean;
+    contacts: boolean;
+    analytics: boolean;
+    automations: boolean;
+    api_access: boolean;
+    coexistence_mode: boolean;
+    export_data: boolean;
+  };
+  status: 'active' | 'inactive';
+}
+
+export interface AuditLog {
+  id: string;
+  timestamp: string;
+  actorId: string;
+  actorName: string;
+  actorRole: UserRole;
+  action: string;
+  targetId?: string;
+  targetType?: string;
+  organizationId?: string;
+  details: string;
+  ip?: string;
+  userAgent?: string;
+  category?: 'auth' | 'template' | 'campaign' | 'security' | 'user' | 'system';
+  status?: 'success' | 'failure' | 'warning' | 'info';
+  metadata?: Record<string, any>;
+}
 
 export interface UserSubscription {
+  planId?: string;
   planName?: string;
+  price?: number;
+  currency?: string;
   maxWhatsAppNumbers?: number;
   maxMonthlyBroadcasts?: number;
   maxContacts?: number;
+  maxUsers?: number;
   maxTeamMembers?: number;
   customBranding?: boolean;
+  startDate?: string;
   expiresAt?: string;
-  status?: 'active' | 'expired' | 'suspended' | string;
+  validityDays?: number;
+  status?: 'active' | 'expiring_soon' | 'expired' | 'suspended' | string;
   coexistenceAllowed?: boolean;
+  features?: Record<string, boolean>;
   notes?: string;
 }
 
@@ -31,6 +84,7 @@ export interface UserProfile {
   role: UserRole;
   phone?: string;
   loginPassword?: string;
+  displayPassword?: string;
   managedByAdminId?: string;
   subscription?: UserSubscription;
   organizationId: string;

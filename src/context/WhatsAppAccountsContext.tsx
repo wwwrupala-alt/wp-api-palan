@@ -94,15 +94,34 @@ declare global {
 const WhatsAppAccountsContext = createContext<WhatsAppAccountsContextType | undefined>(undefined);
 
 export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { organization, currentUser } = useAuth();
+  const { organization, currentUser, userProfile } = useAuth();
   const [accounts, setAccounts] = useState<WhatsAppAccount[]>([]);
   const [activeAccount, setActiveAccount] = useState<WhatsAppAccount | null>(null);
   const [loading, setLoading] = useState(true);
   const [metaStatus, setMetaStatus] = useState<MetaConfigStatus | null>(null);
 
+  // Fallback-resilient organization resolver
+  const getEffectiveOrgId = (): string => {
+    return (
+      organization?.id ||
+      userProfile?.organizationId ||
+      (currentUser?.uid === 'master_admin_root'
+        ? 'org_master_platform'
+        : currentUser?.uid
+        ? `org_${currentUser.uid}`
+        : 'org_default')
+    );
+  };
+
   const fetchMetaStatus = async () => {
     try {
-      const res = await fetch('/api/meta/status');
+      const effectiveOrgId = getEffectiveOrgId();
+      const url = effectiveOrgId
+        ? `/api/meta/status?organizationId=${encodeURIComponent(effectiveOrgId)}`
+        : '/api/meta/status';
+      const res = await fetch(url, {
+        headers: effectiveOrgId ? { 'x-organization-id': effectiveOrgId } : {},
+      });
       if (res.ok) {
         const data = await res.json();
         setMetaStatus(data);
@@ -114,18 +133,19 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
 
   useEffect(() => {
     fetchMetaStatus();
-  }, []);
+  }, [organization?.id, currentUser?.uid]);
 
   // Listen to Firestore WhatsApp accounts for this organization
   useEffect(() => {
-    if (!organization?.id || !currentUser) {
+    const effectiveOrgId = getEffectiveOrgId();
+    if (!currentUser || !effectiveOrgId) {
       setAccounts([]);
       setActiveAccount(null);
       setLoading(false);
       return;
     }
 
-    const accountsPath = `organizations/${organization.id}/whatsappAccounts`;
+    const accountsPath = `organizations/${effectiveOrgId}/whatsappAccounts`;
     const accountsRef = collection(db, accountsPath);
 
     const unsubscribe = onSnapshot(
@@ -198,7 +218,8 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
 
   // Connect WhatsApp via Meta Embedded Signup (Supports Coexistence Mode & Standard Cloud API)
   const connectViaEmbeddedSignup = async (options?: { isCoexistence?: boolean; featureType?: string }): Promise<void> => {
-    if (!organization?.id) throw new Error('Organization not found. Please re-login.');
+    const effectiveOrgId = getEffectiveOrgId();
+    if (!effectiveOrgId) throw new Error('Organization not found. Please re-login.');
 
     const resolvedAppId = (metaStatus?.appId || (import.meta.env.VITE_META_APP_ID as string) || '').trim();
     if (!resolvedAppId) {
@@ -295,7 +316,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
         const extrasPayload: Record<string, unknown> = {
           sessionInfoVersion: '3',
           setup: {
-            external_id: organization.id,
+            external_id: effectiveOrgId,
           },
         };
 
@@ -323,7 +344,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 code: response.authResponse.code,
-                organizationId: organization.id,
+                organizationId: effectiveOrgId,
                 wabaId: capturedWabaId,
                 phoneNumberId: capturedPhoneId,
               }),
@@ -336,7 +357,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
 
                 // Persist safe WhatsApp account metadata in Firestore
                 const accountId = data.phoneNumberId || `wa_${Date.now()}`;
-                const accountDocRef = doc(db, 'organizations', organization.id, 'whatsappAccounts', accountId);
+                const accountDocRef = doc(db, 'organizations', effectiveOrgId, 'whatsappAccounts', accountId);
 
                 const newAccount: Omit<WhatsAppAccount, 'id'> = {
                   wabaId: data.wabaId,
@@ -376,7 +397,8 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
     verifiedName?: string;
     pin?: string;
   }): Promise<{ success: boolean; error?: string }> => {
-    if (!organization?.id) return { success: false, error: 'Organization not found' };
+    const effectiveOrgId = getEffectiveOrgId();
+    if (!effectiveOrgId) return { success: false, error: 'Organization not found. Please log in again.' };
 
     try {
       const res = await fetch('/api/meta/verify-account', {
@@ -384,7 +406,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...params,
-          organizationId: organization.id,
+          organizationId: effectiveOrgId,
         }),
       });
 
@@ -408,7 +430,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
       }
 
       const accountId = data.phoneNumberId || `wa_${Date.now()}`;
-      const accountDocRef = doc(db, 'organizations', organization.id, 'whatsappAccounts', accountId);
+      const accountDocRef = doc(db, 'organizations', effectiveOrgId, 'whatsappAccounts', accountId);
 
       const newAccount: Record<string, any> = {
         wabaId: data.wabaId || params.wabaId || 'waba_direct',
@@ -432,7 +454,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
       try {
         await setDoc(accountDocRef, newAccount);
       } catch (fErr) {
-        handleFirestoreError(fErr, OperationType.WRITE, `organizations/${organization.id}/whatsappAccounts/${accountId}`);
+        handleFirestoreError(fErr, OperationType.WRITE, `organizations/${effectiveOrgId}/whatsappAccounts/${accountId}`);
       }
 
       return { success: true };
@@ -480,14 +502,15 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
   };
 
   const syncAccountWithMeta = async (account: WhatsAppAccount): Promise<{ success: boolean; error?: string }> => {
-    if (!organization?.id) return { success: false, error: 'Organization not found' };
+    const effectiveOrgId = getEffectiveOrgId();
+    if (!effectiveOrgId) return { success: false, error: 'Organization not found' };
 
     try {
       const res = await fetch('/api/meta/sync-account', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          organizationId: organization.id,
+          organizationId: effectiveOrgId,
           phoneNumberId: account.phoneNumberId,
           wabaId: account.wabaId,
           customToken: account.customToken,
@@ -505,21 +528,23 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
   };
 
   const disconnectAccount = async (accountId: string) => {
-    if (!organization?.id) return;
-    const accountRef = doc(db, 'organizations', organization.id, 'whatsappAccounts', accountId);
+    const effectiveOrgId = getEffectiveOrgId();
+    if (!effectiveOrgId) return;
+    const accountRef = doc(db, 'organizations', effectiveOrgId, 'whatsappAccounts', accountId);
     try {
       await updateDoc(accountRef, {
         connectionStatus: 'disconnected',
         updatedAt: new Date().toISOString(),
       });
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `organizations/${organization.id}/whatsappAccounts/${accountId}`);
+      handleFirestoreError(err, OperationType.UPDATE, `organizations/${effectiveOrgId}/whatsappAccounts/${accountId}`);
     }
   };
 
   const reconnectAccount = async (accountId: string) => {
-    if (!organization?.id) return;
-    const accountRef = doc(db, 'organizations', organization.id, 'whatsappAccounts', accountId);
+    const effectiveOrgId = getEffectiveOrgId();
+    if (!effectiveOrgId) return;
+    const accountRef = doc(db, 'organizations', effectiveOrgId, 'whatsappAccounts', accountId);
     try {
       await updateDoc(accountRef, {
         connectionStatus: 'connected',
@@ -527,17 +552,18 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
         updatedAt: new Date().toISOString(),
       });
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `organizations/${organization.id}/whatsappAccounts/${accountId}`);
+      handleFirestoreError(err, OperationType.UPDATE, `organizations/${effectiveOrgId}/whatsappAccounts/${accountId}`);
     }
   };
 
   const deleteAccount = async (accountId: string) => {
-    if (!organization?.id) return;
-    const accountRef = doc(db, 'organizations', organization.id, 'whatsappAccounts', accountId);
+    const effectiveOrgId = getEffectiveOrgId();
+    if (!effectiveOrgId) return;
+    const accountRef = doc(db, 'organizations', effectiveOrgId, 'whatsappAccounts', accountId);
     try {
       await deleteDoc(accountRef);
     } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, `organizations/${organization.id}/whatsappAccounts/${accountId}`);
+      handleFirestoreError(err, OperationType.DELETE, `organizations/${effectiveOrgId}/whatsappAccounts/${accountId}`);
     }
   };
 

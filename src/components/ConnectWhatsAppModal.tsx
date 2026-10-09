@@ -35,9 +35,17 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
   onClose,
   onSuccess,
 }) => {
-  const { metaStatus, connectViaEmbeddedSignup, connectManualAccount, testMetaCredentials } = useWhatsAppAccounts();
-  const { userProfile } = useAuth();
+  const { accounts, metaStatus, connectViaEmbeddedSignup, connectManualAccount, testMetaCredentials } = useWhatsAppAccounts();
+  const { userProfile, organization } = useAuth();
   const toast = useToast();
+
+  const isMaster = userProfile?.role === 'master_admin';
+  const maxNumbersAllowed = isMaster
+    ? 100
+    : organization?.subscription?.maxWhatsAppNumbers ||
+      userProfile?.subscription?.maxWhatsAppNumbers ||
+      10;
+  const isLimitReached = !isMaster && accounts.length >= maxNumbersAllowed;
 
   // Tab: 'direct' (Phone number / ID) or 'embedded' (Facebook SDK)
   const [activeTab, setActiveTab] = useState<'direct' | 'embedded'>('direct');
@@ -139,6 +147,13 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
     const hasAppId = Boolean(metaStatus?.appId && metaStatus.appId.trim() !== '');
     const hasConfigId = Boolean(metaStatus?.configId && metaStatus.configId.trim() !== '');
 
+    if (isLimitReached) {
+      const msg = `Your plan allows ${maxNumbersAllowed} WhatsApp connection${maxNumbersAllowed > 1 ? 's' : ''}. Please upgrade your plan to add another connection.`;
+      setError(msg);
+      toast.showWarning('Limit Reached', msg);
+      return;
+    }
+
     if (!hasAppId || !hasConfigId) {
       const msg = 'Meta App ID ya Facebook Login Configuration ID set nahi hai. Kripya Admin Panel > Meta App Config me ja kar apni details save karein.';
       setError(msg);
@@ -170,6 +185,14 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
 
   const handleDirectConnect = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (isLimitReached) {
+      const msg = `Your plan allows ${maxNumbersAllowed} WhatsApp connection${maxNumbersAllowed > 1 ? 's' : ''}. Please upgrade your plan to add another connection.`;
+      setError(msg);
+      toast.showWarning('Limit Reached', msg);
+      return;
+    }
+
     const cleanPhoneId = phoneNumberId.trim() || displayPhone.replace(/[^0-9]/g, '');
     if (!cleanPhoneId) {
       const msg = 'Please enter a valid Phone Number ID or WhatsApp Mobile Number.';
@@ -271,6 +294,18 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
 
         {/* Body */}
         <div className="p-6 overflow-y-auto space-y-5 text-xs">
+          {isLimitReached && (
+            <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 flex items-start space-x-3 text-amber-900 dark:text-amber-200 text-xs">
+              <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+              <div className="flex-1 space-y-1">
+                <p className="font-bold text-sm">WhatsApp Account Connection Limit Reached</p>
+                <p className="leading-relaxed">
+                  Your plan allows {maxNumbersAllowed} WhatsApp connection{maxNumbersAllowed > 1 ? 's' : ''}. Please upgrade your plan to add another connection.
+                </p>
+              </div>
+            </div>
+          )}
+
           {error && (
             <div className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/50 flex items-start space-x-3 text-rose-700 dark:text-rose-300 text-xs">
               <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />

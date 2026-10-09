@@ -28,6 +28,29 @@ import {
   handleGetMessageDetails,
   getWebhookAuditEvents,
 } from './campaignAnalyticsService.ts';
+import {
+  handleTenantAuthLogin,
+  handleLookupIdentifier,
+  handleSelfChangePassword,
+  handleGetMasterOverview,
+  handleGetMasterAdmins,
+  handleCreateMasterAdmin,
+  handleUpdateMasterAdmin,
+  handleDeleteMasterAdmin,
+  handleResetAdminPassword,
+  handleMasterImpersonate,
+  handleGetMasterPlans,
+  handleSaveMasterPlan,
+  handleGetMasterAuditLogs,
+  handleGetMasterFeatures,
+  handleUpdateMasterFeatures,
+  handleGetAdminUsers,
+  handleCreateAdminUser,
+  handleUpdateAdminUser,
+  handleResetAdminUserPassword,
+  handleDeleteAdminUser,
+  handleAdminImpersonate,
+} from './multiTenantService.ts';
 
 export const apiApp = express();
 
@@ -58,6 +81,35 @@ apiApp.use('/uploads', express.static(path.join(process.cwd(), 'public', 'upload
 
 // Media Upload from PC / Device
 apiApp.post('/api/media/upload', handleUploadMedia);
+
+// Multi-Tenant Authentication & Master/Admin Routes
+apiApp.get('/api/server-time', (req, res) => {
+  res.json({ serverTime: new Date().toISOString(), timestamp: Date.now() });
+});
+apiApp.get('/api/auth/lookup-identifier', handleLookupIdentifier);
+apiApp.post('/api/auth/lookup-identifier', handleLookupIdentifier);
+apiApp.post('/api/auth/login', handleTenantAuthLogin);
+apiApp.post('/api/auth/change-password', handleSelfChangePassword);
+apiApp.get('/api/master/overview', handleGetMasterOverview);
+apiApp.get('/api/master/admins', handleGetMasterAdmins);
+apiApp.post('/api/master/admins', handleCreateMasterAdmin);
+apiApp.put('/api/master/admins/:adminId', handleUpdateMasterAdmin);
+apiApp.delete('/api/master/admins/:adminId', handleDeleteMasterAdmin);
+apiApp.post('/api/master/admins/:adminId/reset-password', handleResetAdminPassword);
+apiApp.post('/api/master/impersonate', handleMasterImpersonate);
+apiApp.get('/api/master/plans', handleGetMasterPlans);
+apiApp.post('/api/master/plans', handleSaveMasterPlan);
+apiApp.get('/api/master/audit-logs', handleGetMasterAuditLogs);
+apiApp.get('/api/master/features', handleGetMasterFeatures);
+apiApp.post('/api/master/features', handleUpdateMasterFeatures);
+
+// Tenant-level User Management
+apiApp.get('/api/admin/users', handleGetAdminUsers);
+apiApp.post('/api/admin/users', handleCreateAdminUser);
+apiApp.put('/api/admin/users/:userId', handleUpdateAdminUser);
+apiApp.post('/api/admin/users/:userId/reset-password', handleResetAdminUserPassword);
+apiApp.delete('/api/admin/users/:userId', handleDeleteAdminUser);
+apiApp.post('/api/admin/impersonate', handleAdminImpersonate);
 
 // Meta Cloud API Routes
 apiApp.get('/api/meta/status', handleGetMetaStatus);

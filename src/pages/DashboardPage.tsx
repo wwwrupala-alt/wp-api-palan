@@ -12,6 +12,8 @@ import {
   RefreshCw,
   Sparkles,
   Zap,
+  Calendar,
+  Clock,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -22,6 +24,7 @@ import {
 } from '../lib/services.ts';
 import type { Contact, Campaign, Conversation } from '../types/index.ts';
 import { parseMessagingLimitTier } from '../lib/metaLimits.ts';
+import { MaskedIdDisplay } from '../components/MaskedIdDisplay.tsx';
 
 interface DashboardPageProps {
   onOpenConnectModal: () => void;
@@ -162,9 +165,10 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                 </span>
               </div>
               <div className="flex flex-wrap items-center gap-2 mt-1">
-                <p className="text-xs font-mono text-neutral-600 dark:text-neutral-400">
-                  {activeAccount.displayPhoneNumber} &bull; WABA: {activeAccount.wabaId}
-                </p>
+                <div className="flex items-center space-x-1.5 text-xs font-mono text-neutral-600 dark:text-neutral-400">
+                  <span>{activeAccount.displayPhoneNumber} &bull; WABA:</span>
+                  <MaskedIdDisplay value={activeAccount.wabaId} />
+                </div>
                 {(() => {
                   const limitInfo = parseMessagingLimitTier(activeAccount.messagingLimitTier);
                   return (
@@ -276,6 +280,105 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Plan & Remaining Quota Status Card (Requirement 4) */}
+      {(() => {
+        const sub = organization?.subscription;
+        const planName = sub?.planName || 'Enterprise Unlimited';
+        const planStatus = sub?.status || 'active';
+        const expiresAt = sub?.expiresAt;
+        const remainingDays = expiresAt
+          ? Math.max(0, Math.ceil((new Date(expiresAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
+          : 30;
+
+        const maxWhatsApp = sub?.maxWhatsAppNumbers || 10;
+        const remainingWhatsApp = Math.max(0, maxWhatsApp - accounts.length);
+
+        const maxBroadcasts = sub?.maxMonthlyBroadcasts || 500000;
+        const remainingMessages = Math.max(0, maxBroadcasts - totalSent);
+
+        const maxUsers = sub?.maxUsers || 25;
+        const maxCampaigns = 250;
+        const remainingCampaigns = Math.max(0, maxCampaigns - campaigns.length);
+
+        return (
+          <div className="p-5 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-neutral-100 dark:border-neutral-800/80 pb-3">
+              <div className="flex items-center space-x-2.5">
+                <div className="w-8 h-8 rounded-lg bg-emerald-100 dark:bg-emerald-950 flex items-center justify-center text-emerald-700 dark:text-emerald-400">
+                  <ShieldCheck className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="flex items-center space-x-2">
+                    <h4 className="font-bold text-sm text-neutral-900 dark:text-white">{planName}</h4>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300">
+                      {planStatus}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-neutral-500">Tenant Subscription &amp; Resource Allocation</p>
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-2 text-xs font-semibold text-neutral-600 dark:text-neutral-400">
+                <Clock className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <span>
+                  Validity: <strong className="text-neutral-900 dark:text-white">{remainingDays} Days Remaining</strong>
+                </span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+              <div className="p-3 rounded-xl bg-neutral-50 dark:bg-neutral-800/50 border border-neutral-200/60 dark:border-neutral-700/50">
+                <span className="text-[11px] text-neutral-500 block mb-0.5">WhatsApp Connections</span>
+                <div className="flex items-baseline space-x-1.5">
+                  <span className="text-base font-bold text-neutral-900 dark:text-white">{accounts.length}</span>
+                  <span className="text-xs text-neutral-400">/ {maxWhatsApp}</span>
+                </div>
+                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">
+                  {remainingWhatsApp} remaining
+                </span>
+              </div>
+
+              <div
+                onClick={() => onNavigate('users')}
+                className="p-3 rounded-xl bg-neutral-50 dark:bg-neutral-800/50 border border-neutral-200/60 dark:border-neutral-700/50 hover:border-emerald-500/50 dark:hover:border-emerald-500/50 transition-all cursor-pointer group"
+              >
+                <div className="flex items-center justify-between mb-0.5">
+                  <span className="text-[11px] text-neutral-500">Team Users Quota</span>
+                  <span className="text-[9px] text-emerald-600 dark:text-emerald-400 font-bold group-hover:underline">Manage &rarr;</span>
+                </div>
+                <div className="flex items-baseline space-x-1.5">
+                  <span className="text-base font-bold text-neutral-900 dark:text-white">{maxUsers}</span>
+                  <span className="text-xs text-neutral-400">allowed</span>
+                </div>
+                <span className="text-[10px] text-neutral-500 font-medium">+ Add &amp; manage users</span>
+              </div>
+
+              <div className="p-3 rounded-xl bg-neutral-50 dark:bg-neutral-800/50 border border-neutral-200/60 dark:border-neutral-700/50">
+                <span className="text-[11px] text-neutral-500 block mb-0.5">Monthly Broadcasts</span>
+                <div className="flex items-baseline space-x-1.5">
+                  <span className="text-base font-bold text-neutral-900 dark:text-white">{totalSent.toLocaleString()}</span>
+                  <span className="text-xs text-neutral-400">/ {maxBroadcasts.toLocaleString()}</span>
+                </div>
+                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">
+                  {remainingMessages.toLocaleString()} remaining
+                </span>
+              </div>
+
+              <div className="p-3 rounded-xl bg-neutral-50 dark:bg-neutral-800/50 border border-neutral-200/60 dark:border-neutral-700/50">
+                <span className="text-[11px] text-neutral-500 block mb-0.5">Campaigns Created</span>
+                <div className="flex items-baseline space-x-1.5">
+                  <span className="text-base font-bold text-neutral-900 dark:text-white">{campaigns.length}</span>
+                  <span className="text-xs text-neutral-400">/ {maxCampaigns}</span>
+                </div>
+                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">
+                  {remainingCampaigns} remaining
+                </span>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Recent Activity and Conversations */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
