@@ -45,106 +45,16 @@ export function verifyPassword(plainText: string, storedHash: string): boolean {
 }
 
 // -------------------------------------------------------------
-// AUDIT LOGGING & ACTIVITY TRAIL
+// AUDIT LOGGING
 // -------------------------------------------------------------
-export function categorizeAction(action: string): 'auth' | 'template' | 'campaign' | 'security' | 'user' | 'system' {
-  const act = (action || '').toUpperCase();
-  if (
-    act.includes('LOGIN') ||
-    act.includes('LOGOUT') ||
-    act.includes('SESSION') ||
-    act.includes('PASSWORD') ||
-    act.includes('AUTH')
-  ) {
-    return 'auth';
-  }
-  if (act.includes('TEMPLATE')) {
-    return 'template';
-  }
-  if (act.includes('CAMPAIGN') || act.includes('BROADCAST')) {
-    return 'campaign';
-  }
-  if (act.includes('USER') || act.includes('TEAM') || act.includes('IMPERSONAT')) {
-    return 'user';
-  }
-  if (act.includes('ADMIN') || act.includes('FEATURE') || act.includes('SUSPEND') || act.includes('SECURITY')) {
-    return 'security';
-  }
-  return 'system';
-}
-
-export function inferStatus(action: string, details?: string): 'success' | 'failure' | 'warning' | 'info' {
-  const act = (action || '').toUpperCase();
-  const det = (details || '').toLowerCase();
-  if (act.includes('FAIL') || act.includes('REJECT') || det.includes('failed') || det.includes('error') || det.includes('incorrect')) {
-    return 'failure';
-  }
-  if (act.includes('TIMEOUT') || act.includes('EXPIR') || act.includes('SUSPEND') || det.includes('timeout') || det.includes('expired')) {
-    return 'warning';
-  }
-  if (act.includes('LOGOUT') || act.includes('INFO') || act.includes('SYNC')) {
-    return 'info';
-  }
-  return 'success';
-}
-
-export function cleanUndefined<T>(value: T): T {
-  if (value === null || value === undefined) {
-    return undefined as unknown as T;
-  }
-  if (Array.isArray(value)) {
-    return value
-      .filter((item) => item !== undefined)
-      .map((item) => (typeof item === 'object' && item !== null ? cleanUndefined(item) : item)) as unknown as T;
-  }
-  if (typeof value === 'object') {
-    const clean: Record<string, any> = {};
-    for (const [k, v] of Object.entries(value)) {
-      if (v !== undefined) {
-        clean[k] = typeof v === 'object' && v !== null ? cleanUndefined(v) : v;
-      }
-    }
-    return clean as unknown as T;
-  }
-  return value;
-}
-
 export async function recordAuditLog(log: Omit<AuditLog, 'id' | 'timestamp'>): Promise<void> {
   try {
     const id = `log_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
-    const category = log.category || categorizeAction(log.action);
-    const status = log.status || inferStatus(log.action, log.details);
-    const rawDoc: Record<string, any> = {
+    const logDoc = {
       id,
       timestamp: new Date().toISOString(),
-      actorId: log.actorId || 'system',
-      actorName: log.actorName || 'System',
-      actorRole: log.actorRole || 'user',
-      action: log.action || 'UNKNOWN',
-      details: log.details || '',
-      category,
-      status,
+      ...log,
     };
-    if (log.targetId !== undefined && log.targetId !== null && log.targetId !== '') {
-      rawDoc.targetId = String(log.targetId);
-    }
-    if (log.targetType !== undefined && log.targetType !== null && log.targetType !== '') {
-      rawDoc.targetType = String(log.targetType);
-    }
-    if (log.organizationId !== undefined && log.organizationId !== null && log.organizationId !== '') {
-      rawDoc.organizationId = String(log.organizationId);
-    }
-    if (log.ip !== undefined && log.ip !== null && log.ip !== '') {
-      rawDoc.ip = String(log.ip);
-    }
-    if (log.userAgent !== undefined && log.userAgent !== null && log.userAgent !== '') {
-      rawDoc.userAgent = String(log.userAgent);
-    }
-    if (log.metadata !== undefined && log.metadata !== null) {
-      rawDoc.metadata = cleanUndefined(log.metadata);
-    }
-
-    const logDoc = cleanUndefined(rawDoc);
     await setDoc(doc(serverDb, 'audit_logs', id), logDoc);
   } catch (err) {
     console.warn('[AuditLog] Failed to write log:', err);
@@ -772,6 +682,8 @@ export async function handleCreateMasterAdmin(req: Request, res: Response): Prom
       validityDays = 30,
       maxWhatsAppNumbers = 5,
       maxUsers = 10,
+      canAccessSettingsMetaApi,
+      canAccessAutomations,
     } = req.body;
 
     if (!adminName || !password || (!email && !phone)) {
@@ -831,6 +743,8 @@ export async function handleCreateMasterAdmin(req: Request, res: Response): Prom
       organizationId: newOrgId,
       loginPassword: hashPassword(password),
       displayPassword: password,
+      canAccessSettingsMetaApi: canAccessSettingsMetaApi !== false,
+      canAccessAutomations: canAccessAutomations !== false,
       subscription: {
         planId: planId || 'plan_pro',
         planName,
@@ -894,6 +808,8 @@ export async function handleUpdateMasterAdmin(req: Request, res: Response): Prom
       maxUsers,
       displayName,
       newPassword,
+      canAccessSettingsMetaApi,
+      canAccessAutomations,
     } = req.body;
 
     const userRef = doc(serverDb, 'users', adminId);
@@ -938,6 +854,12 @@ export async function handleUpdateMasterAdmin(req: Request, res: Response): Prom
     };
 
     if (displayName) updates.displayName = displayName;
+    if (canAccessSettingsMetaApi !== undefined) {
+      updates.canAccessSettingsMetaApi = Boolean(canAccessSettingsMetaApi);
+    }
+    if (canAccessAutomations !== undefined) {
+      updates.canAccessAutomations = Boolean(canAccessAutomations);
+    }
     if (newPassword && String(newPassword).trim().length >= 6) {
       updates.loginPassword = hashPassword(String(newPassword).trim());
     }
@@ -1279,7 +1201,7 @@ export async function handleSaveMasterPlan(req: Request, res: Response): Promise
   }
 }
 
-// Global Audit Logs (Master)
+// Global Audit Logs
 export async function handleGetMasterAuditLogs(req: Request, res: Response): Promise<void> {
   try {
     const logsSnap = await getDocs(collection(serverDb, 'audit_logs'));
@@ -1418,6 +1340,7 @@ export async function handleCreateAdminUser(req: Request, res: Response): Promis
       managedByAdminId: adminId || '',
       loginPassword: hashPassword(password),
       displayPassword: password,
+      canAccessAutomations: permissions?.canAutomations !== false,
       subscription: {
         planName: designation || 'Team Member',
         status: status || 'active',
@@ -1515,6 +1438,9 @@ export async function handleUpdateAdminUser(req: Request, res: Response): Promis
     };
 
     if (displayName) updates.displayName = displayName;
+    if (permissions && permissions.canAutomations !== undefined) {
+      updates.canAccessAutomations = Boolean(permissions.canAutomations);
+    }
     if (phone !== undefined) updates.phone = String(phone).replace(/[^0-9]/g, '');
     if (email !== undefined) updates.email = String(email).trim().toLowerCase();
     if (newPassword && String(newPassword).trim().length >= 6) {

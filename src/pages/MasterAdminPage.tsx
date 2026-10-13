@@ -38,6 +38,7 @@ import {
   RotateCcw,
   SlidersHorizontal,
   ArrowUpDown,
+  Bot,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useToast } from '../context/ToastContext.tsx';
@@ -63,6 +64,8 @@ interface AdminTenantItem {
   usersCount?: number;
   whatsAppCount?: number;
   campaignsCount?: number;
+  canAccessSettingsMetaApi?: boolean;
+  canAccessAutomations?: boolean;
   createdAt: string;
 }
 
@@ -126,6 +129,8 @@ export const MasterAdminPage: React.FC = () => {
   const [newValidityDays, setNewValidityDays] = useState(30);
   const [newMaxWhatsApp, setNewMaxWhatsApp] = useState(1);
   const [newMaxUsers, setNewMaxUsers] = useState(10);
+  const [newCanAccessSettings, setNewCanAccessSettings] = useState(true);
+  const [newCanAccessAutomations, setNewCanAccessAutomations] = useState(true);
 
   // Success Dialog: Created Admin Credentials
   const [createdAdminSuccess, setCreatedAdminSuccess] = useState<{
@@ -151,6 +156,8 @@ export const MasterAdminPage: React.FC = () => {
   const [editMaxUsers, setEditMaxUsers] = useState(10);
   const [editPlanName, setEditPlanName] = useState('');
   const [editStatus, setEditStatus] = useState<string>('active');
+  const [editCanAccessSettings, setEditCanAccessSettings] = useState(true);
+  const [editCanAccessAutomations, setEditCanAccessAutomations] = useState(true);
   const [savingEdit, setSavingEdit] = useState(false);
 
   // Modal: Reset Password
@@ -358,6 +365,8 @@ export const MasterAdminPage: React.FC = () => {
           validityDays: Number(newValidityDays),
           maxWhatsAppNumbers: Number(newMaxWhatsApp),
           maxUsers: Number(newMaxUsers),
+          canAccessSettingsMetaApi: newCanAccessSettings,
+          canAccessAutomations: newCanAccessAutomations,
         }),
       });
 
@@ -391,6 +400,8 @@ export const MasterAdminPage: React.FC = () => {
       setNewAdminPassword('Admin@12345');
       setNewMaxWhatsApp(1);
       setNewValidityDays(30);
+      setNewCanAccessSettings(true);
+      setNewCanAccessAutomations(true);
       await loadMasterData();
     } catch (err: any) {
       toast.showError('Creation Error', err.message || 'Could not create Admin.');
@@ -427,6 +438,8 @@ export const MasterAdminPage: React.FC = () => {
     setEditMaxUsers(adm.subscription?.maxUsers || 10);
     setEditPlanName(adm.subscription?.planName || 'Professional');
     setEditStatus(adm.subscription?.status || 'active');
+    setEditCanAccessSettings(adm.canAccessSettingsMetaApi !== false);
+    setEditCanAccessAutomations(adm.canAccessAutomations !== false);
   };
 
   // Handle Edit Admin / Renew / Reduce Validity
@@ -441,6 +454,8 @@ export const MasterAdminPage: React.FC = () => {
         planName: editPlanName,
         maxWhatsAppNumbers: Number(editMaxWhatsApp),
         maxUsers: Number(editMaxUsers),
+        canAccessSettingsMetaApi: editCanAccessSettings,
+        canAccessAutomations: editCanAccessAutomations,
       };
 
       if (validityMode === 'pick_date' && customDateInput) {
@@ -1186,9 +1201,31 @@ export const MasterAdminPage: React.FC = () => {
 
                           {/* Plan */}
                           <td className="py-3.5 px-4">
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
-                              {adm.subscription?.planName || 'Professional'}
-                            </span>
+                            <div className="space-y-1">
+                              <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                                {adm.subscription?.planName || 'Professional'}
+                              </span>
+                              <div className="flex flex-wrap gap-1">
+                                {adm.canAccessSettingsMetaApi === false ? (
+                                  <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[9px] font-semibold bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400 border border-neutral-300 dark:border-neutral-750" title="Settings & Meta API is hidden from this admin">
+                                    <span>⚙️ Meta API: Off</span>
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800" title="Settings & Meta API is accessible to this admin">
+                                    <span>⚙️ Meta API: On</span>
+                                  </span>
+                                )}
+                                {adm.canAccessAutomations === false ? (
+                                  <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[9px] font-semibold bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400 border border-neutral-300 dark:border-neutral-750" title="Automations is hidden from this admin">
+                                    <span>🤖 Auto: Off</span>
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800" title="Automations is accessible to this admin">
+                                    <span>🤖 Auto: On</span>
+                                  </span>
+                                )}
+                              </div>
+                            </div>
                           </td>
 
                           {/* Status */}
@@ -1652,6 +1689,100 @@ export const MasterAdminPage: React.FC = () => {
                 })()}
               </div>
 
+              {/* Settings & Meta Cloud API Permission Control */}
+              <div className="p-3.5 rounded-2xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/40 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2.5">
+                    <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${
+                      newCanAccessSettings
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'bg-neutral-200 dark:bg-neutral-700 text-neutral-500 dark:text-neutral-400'
+                    }`}>
+                      <ShieldCheck className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <p className="font-bold text-xs text-neutral-900 dark:text-white">
+                        Settings &amp; Meta Cloud API Permission
+                      </p>
+                      <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                        Admin ko panel me &ldquo;Settings &amp; Meta Cloud API&rdquo; ka option dena hai ya nahi
+                      </p>
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={newCanAccessSettings}
+                      onChange={(e) => setNewCanAccessSettings(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-neutral-300 peer-focus:outline-hidden rounded-full peer dark:bg-neutral-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-neutral-600 peer-checked:bg-emerald-600"></div>
+                  </label>
+                </div>
+
+                <div className={`p-2 rounded-xl text-[11px] flex items-center justify-between ${
+                  newCanAccessSettings
+                    ? 'bg-emerald-100/70 text-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                    : 'bg-rose-100/70 text-rose-900 dark:bg-rose-950/60 dark:text-rose-300 border border-rose-200 dark:border-rose-800'
+                }`}>
+                  <span className="font-medium">
+                    {newCanAccessSettings
+                      ? '✅ Ha, option show hoga (Admin can configure Meta credentials & Settings).'
+                      : '🚫 Nahi, option hide rahega (Admin cannot see or access Settings & Meta API).'}
+                  </span>
+                  <span className="font-bold uppercase text-[10px] px-2 py-0.5 rounded bg-white/70 dark:bg-black/30">
+                    {newCanAccessSettings ? 'Allowed' : 'Not Allowed'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Bot & Automations Permission Control */}
+              <div className="p-3.5 rounded-2xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/40 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2.5">
+                    <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${
+                      newCanAccessAutomations
+                        ? 'bg-purple-600 text-white shadow-xs'
+                        : 'bg-neutral-200 dark:bg-neutral-700 text-neutral-500 dark:text-neutral-400'
+                    }`}>
+                      <Bot className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <p className="font-bold text-xs text-neutral-900 dark:text-white">
+                        Bot &amp; Automations Permission
+                      </p>
+                      <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                        Admin ko panel me &ldquo;Automations&rdquo; (Keyword Bot, Flow Rules) ka option dena hai ya nahi
+                      </p>
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={newCanAccessAutomations}
+                      onChange={(e) => setNewCanAccessAutomations(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-neutral-300 peer-focus:outline-hidden rounded-full peer dark:bg-neutral-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-neutral-600 peer-checked:bg-purple-600"></div>
+                  </label>
+                </div>
+
+                <div className={`p-2 rounded-xl text-[11px] flex items-center justify-between ${
+                  newCanAccessAutomations
+                    ? 'bg-purple-100/70 text-purple-900 dark:bg-purple-950/60 dark:text-purple-300 border border-purple-200 dark:border-purple-800'
+                    : 'bg-rose-100/70 text-rose-900 dark:bg-rose-950/60 dark:text-rose-300 border border-rose-200 dark:border-rose-800'
+                }`}>
+                  <span className="font-medium">
+                    {newCanAccessAutomations
+                      ? '✅ Ha, option show hoga (Admin can create bots, trigger keywords & automations).'
+                      : '🚫 Nahi, option hide rahega (Admin cannot see or access Automations tab).'}
+                  </span>
+                  <span className="font-bold uppercase text-[10px] px-2 py-0.5 rounded bg-white/70 dark:bg-black/30">
+                    {newCanAccessAutomations ? 'Allowed' : 'Not Allowed'}
+                  </span>
+                </div>
+              </div>
+
               <div className="pt-3 border-t border-neutral-200 dark:border-neutral-800 flex justify-end space-x-2">
                 <button
                   type="button"
@@ -1780,9 +1911,9 @@ export const MasterAdminPage: React.FC = () => {
 
       {/* MODAL: EDIT ADMIN / RENEW PLAN */}
       {editingAdmin && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fadeIn">
-          <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-3xl w-full max-w-md shadow-2xl p-6 space-y-4">
-            <div className="flex items-center justify-between border-b border-neutral-200 dark:border-neutral-800 pb-3">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fadeIn overflow-y-auto">
+          <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-3xl w-full max-w-lg shadow-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="sticky -top-6 -mt-6 pt-6 bg-white dark:bg-neutral-900 z-20 flex items-center justify-between border-b border-neutral-200 dark:border-neutral-800 pb-3">
               <div className="flex items-center space-x-2 text-neutral-900 dark:text-white font-bold text-base">
                 <Edit className="w-5 h-5 text-amber-600" />
                 <span>Edit Admin: {editingAdmin.displayName}</span>
@@ -2137,7 +2268,101 @@ export const MasterAdminPage: React.FC = () => {
                 </div>
               </div>
 
-              <div className="pt-3 border-t border-neutral-200 dark:border-neutral-800 flex justify-end space-x-2">
+              {/* Settings & Meta Cloud API Permission Control */}
+              <div className="p-3.5 rounded-2xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/40 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2.5">
+                    <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${
+                      editCanAccessSettings
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'bg-neutral-200 dark:bg-neutral-700 text-neutral-500 dark:text-neutral-400'
+                    }`}>
+                      <ShieldCheck className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <p className="font-bold text-xs text-neutral-900 dark:text-white">
+                        Settings &amp; Meta Cloud API Permission
+                      </p>
+                      <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                        Is admin ko Settings &amp; Meta Cloud API ka option show ho ya hide rahe
+                      </p>
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={editCanAccessSettings}
+                      onChange={(e) => setEditCanAccessSettings(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-neutral-300 peer-focus:outline-hidden rounded-full peer dark:bg-neutral-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-neutral-600 peer-checked:bg-emerald-600"></div>
+                  </label>
+                </div>
+
+                <div className={`p-2 rounded-xl text-[11px] flex items-center justify-between ${
+                  editCanAccessSettings
+                    ? 'bg-emerald-100/70 text-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                    : 'bg-rose-100/70 text-rose-900 dark:bg-rose-950/60 dark:text-rose-300 border border-rose-200 dark:border-rose-800'
+                }`}>
+                  <span className="font-medium">
+                    {editCanAccessSettings
+                      ? '✅ Permission Allowed (Admin sees Settings & Meta Cloud API in sidebar).'
+                      : '🚫 Permission Denied (Admin will NOT see Settings & Meta Cloud API).'}
+                  </span>
+                  <span className="font-bold uppercase text-[10px] px-2 py-0.5 rounded bg-white/70 dark:bg-black/30">
+                    {editCanAccessSettings ? 'Allowed' : 'Hidden'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Bot & Automations Permission Control */}
+              <div className="p-3.5 rounded-2xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/40 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2.5">
+                    <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${
+                      editCanAccessAutomations
+                        ? 'bg-purple-600 text-white shadow-xs'
+                        : 'bg-neutral-200 dark:bg-neutral-700 text-neutral-500 dark:text-neutral-400'
+                    }`}>
+                      <Bot className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <p className="font-bold text-xs text-neutral-900 dark:text-white">
+                        Bot &amp; Automations Permission
+                      </p>
+                      <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                        Is admin ko &ldquo;Automations&rdquo; (Bot &amp; Rules) ka option show ho ya hide rahe
+                      </p>
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={editCanAccessAutomations}
+                      onChange={(e) => setEditCanAccessAutomations(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-neutral-300 peer-focus:outline-hidden rounded-full peer dark:bg-neutral-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-neutral-600 peer-checked:bg-purple-600"></div>
+                  </label>
+                </div>
+
+                <div className={`p-2 rounded-xl text-[11px] flex items-center justify-between ${
+                  editCanAccessAutomations
+                    ? 'bg-purple-100/70 text-purple-900 dark:bg-purple-950/60 dark:text-purple-300 border border-purple-200 dark:border-purple-800'
+                    : 'bg-rose-100/70 text-rose-900 dark:bg-rose-950/60 dark:text-rose-300 border border-rose-200 dark:border-rose-800'
+                }`}>
+                  <span className="font-medium">
+                    {editCanAccessAutomations
+                      ? '✅ Permission Allowed (Admin sees Automations in sidebar).'
+                      : '🚫 Permission Denied (Admin will NOT see Automations).'}
+                  </span>
+                  <span className="font-bold uppercase text-[10px] px-2 py-0.5 rounded bg-white/70 dark:bg-black/30">
+                    {editCanAccessAutomations ? 'Allowed' : 'Hidden'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="sticky -bottom-6 -mb-6 pb-6 pt-3 bg-white dark:bg-neutral-900 border-t border-neutral-200 dark:border-neutral-800 flex justify-end space-x-2 z-20">
                 <button
                   type="button"
                   onClick={() => setEditingAdmin(null)}

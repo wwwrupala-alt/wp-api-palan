@@ -15,6 +15,7 @@ import { WhatsAppAccountsPage } from './pages/WhatsAppAccountsPage.tsx';
 import { ContactsPage } from './pages/ContactsPage.tsx';
 import { TemplatesPage } from './pages/TemplatesPage.tsx';
 import { CampaignsPage } from './pages/CampaignsPage.tsx';
+import { DripCampaignsPage } from './pages/DripCampaignsPage.tsx';
 import { CampaignAnalyticsPage } from './pages/CampaignAnalyticsPage.tsx';
 import { AutomationsPage } from './pages/AutomationsPage.tsx';
 import { AdminPage } from './pages/AdminPage.tsx';
@@ -76,13 +77,21 @@ const AppContent: React.FC = () => {
     } else if (impersonatedBy || isAdmin) {
       if (currentTab === 'master') {
         setCurrentTab('dashboard');
+      } else if (currentTab === 'admin' && !isMasterAdmin && userProfile?.canAccessSettingsMetaApi === false) {
+        setCurrentTab('dashboard');
+      } else if (currentTab === 'automations' && !isMasterAdmin && userProfile?.canAccessAutomations === false) {
+        setCurrentTab('dashboard');
       }
     } else if (isUser) {
+      const userPerms = (userProfile?.subscription?.features as any) || {};
+      const userCanAuto = userProfile?.canAccessAutomations !== false && userPerms.canAutomations !== false;
       if (['master', 'users', 'admin'].includes(currentTab)) {
+        setCurrentTab('dashboard');
+      } else if (currentTab === 'automations' && !userCanAuto) {
         setCurrentTab('dashboard');
       }
     }
-  }, [isMasterAdmin, impersonatedBy, isAdmin, isUser]);
+  }, [isMasterAdmin, impersonatedBy, isAdmin, isUser, userProfile?.canAccessSettingsMetaApi, userProfile?.canAccessAutomations, userProfile?.subscription?.features, currentTab]);
 
   if (legalDoc) {
     return (
@@ -180,6 +189,12 @@ const AppContent: React.FC = () => {
                 setSelectedAnalyticsCampaignId(campId);
                 setCurrentTab('analytics');
               }}
+              onNavigateToDrip={() => setCurrentTab('drip')}
+            />
+          )}
+          {currentTab === 'drip' && (
+            <DripCampaignsPage
+              onNavigateToCampaigns={() => setCurrentTab('campaigns')}
             />
           )}
           {currentTab === 'analytics' && (
@@ -188,8 +203,13 @@ const AppContent: React.FC = () => {
               onNavigateToCampaigns={() => setCurrentTab('campaigns')}
             />
           )}
-          {currentTab === 'automations' && <AutomationsPage />}
-          {currentTab === 'admin' && (isAdmin || isMasterAdmin) && <AdminPage />}
+          {currentTab === 'automations' &&
+            (isMasterAdmin ||
+              (userProfile?.canAccessAutomations !== false &&
+                (userProfile?.subscription?.features as any)?.canAutomations !== false)) && (
+              <AutomationsPage />
+            )}
+          {currentTab === 'admin' && (isAdmin || isMasterAdmin) && (isMasterAdmin || userProfile?.canAccessSettingsMetaApi !== false) && <AdminPage />}
         </main>
       </div>
 

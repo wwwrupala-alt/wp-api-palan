@@ -52,6 +52,7 @@ export const Header: React.FC<HeaderProps> = ({
     contacts: 'Contact Management',
     templates: 'Message Templates',
     campaigns: 'Broadcast Campaigns',
+    drip: 'WhatsApp Drip Campaigns & Automated Sequences',
     analytics: 'Campaign Analytics & Live Tracking',
     automations: 'Bot & Automations',
     admin: 'Settings & Meta Cloud API',

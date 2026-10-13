@@ -23,11 +23,23 @@ import {
   processIncomingWhatsAppStatusUpdate,
 } from './metaService.ts';
 import {
+  handleCancelScheduledCampaign,
+  handleRescheduleCampaign,
+  handleSendScheduledCampaignNow,
+} from './campaignSchedulerService.ts';
+import {
   handleGetCampaignAnalytics,
   handleGetCampaignMessages,
   handleGetMessageDetails,
   getWebhookAuditEvents,
 } from './campaignAnalyticsService.ts';
+import {
+  handleToggleDripCampaignStatus,
+  handleEnrollDripSubscribers,
+  handleTestDripStep,
+  handleAdvanceDripSubscriber,
+  handleCancelDripSubscriber,
+} from './dripSchedulerService.ts';
 import {
   handleTenantAuthLogin,
   handleLookupIdentifier,
@@ -124,6 +136,16 @@ apiApp.post('/api/meta/templates', handleCreateTemplate);
 apiApp.delete('/api/meta/templates', handleDeleteTemplate);
 apiApp.post('/api/meta/send-message', handleSendMessage);
 apiApp.post('/api/meta/campaigns/send', handleSendCampaign);
+apiApp.post('/api/meta/campaigns/:campaignId/send-now', handleSendScheduledCampaignNow);
+apiApp.post('/api/meta/campaigns/:campaignId/reschedule', handleRescheduleCampaign);
+apiApp.post('/api/meta/campaigns/:campaignId/cancel-schedule', handleCancelScheduledCampaign);
+
+// WhatsApp Drip Campaigns Sequential Engine Endpoints
+apiApp.post('/api/drip/campaigns/:id/toggle', handleToggleDripCampaignStatus);
+apiApp.post('/api/drip/campaigns/:id/enroll', handleEnrollDripSubscribers);
+apiApp.post('/api/drip/campaigns/:id/test-step', handleTestDripStep);
+apiApp.post('/api/drip/campaigns/:id/subscribers/:subId/advance', handleAdvanceDripSubscriber);
+apiApp.post('/api/drip/campaigns/:id/subscribers/:subId/cancel', handleCancelDripSubscriber);
 
 // WhatsApp Campaign Real-Time Tracking & Analytics Endpoints (Item 12)
 apiApp.get('/api/campaigns/:campaignId/analytics', handleGetCampaignAnalytics);

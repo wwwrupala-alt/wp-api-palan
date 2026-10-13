@@ -382,7 +382,7 @@ export const LegalPage: React.FC<LegalPageProps> = ({
                 </p>
                 <div className="p-3.5 rounded-2xl bg-neutral-50 dark:bg-neutral-850 border border-neutral-200 dark:border-neutral-800 text-xs space-y-1">
                   <p className="font-bold text-neutral-900 dark:text-white">CloudWABA Compliance &amp; Privacy Office</p>
-                  <p className="text-neutral-600 dark:text-neutral-400">Email: <a href="mailto:www.rupala@gmail.com" className="text-emerald-600 dark:text-emerald-400 font-semibold underline">www.rupala@gmail.com</a></p>
+                  <p className="text-neutral-600 dark:text-neutral-400">Email: <a href="mailto:apenterprise1950@gmail.com" className="text-emerald-600 dark:text-emerald-400 font-semibold underline">apenterprise1950@gmail.com</a></p>
                   <p className="text-neutral-500 dark:text-neutral-400">Platform: CloudWABA WhatsApp Business API SaaS</p>
                 </div>
               </section>
@@ -486,7 +486,7 @@ export const LegalPage: React.FC<LegalPageProps> = ({
                 </h3>
                 <div className="p-3.5 rounded-2xl bg-neutral-50 dark:bg-neutral-850 border border-neutral-200 dark:border-neutral-800 text-xs space-y-1">
                   <p className="font-bold text-neutral-900 dark:text-white">CloudWABA Legal Department</p>
-                  <p className="text-neutral-600 dark:text-neutral-400">Email: <a href="mailto:www.rupala@gmail.com" className="text-emerald-600 dark:text-emerald-400 font-semibold underline">www.rupala@gmail.com</a></p>
+                  <p className="text-neutral-600 dark:text-neutral-400">Email: <a href="mailto:apenterprise1950@gmail.com" className="text-emerald-600 dark:text-emerald-400 font-semibold underline">apenterprise1950@gmail.com</a></p>
                   <p className="text-neutral-500 dark:text-neutral-400">Support Desk: CloudWABA WhatsApp Business Platform SaaS</p>
                 </div>
               </section>

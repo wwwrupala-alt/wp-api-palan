@@ -21,6 +21,7 @@ import {
   Loader2,
   X,
   AlertCircle,
+  Workflow,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -134,16 +135,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'contacts', label: 'Contacts', icon: Users },
     { id: 'templates', label: 'Templates', icon: FileText },
     { id: 'campaigns', label: 'Campaigns', icon: Send },
-    { id: 'analytics', label: 'Campaign Analytics', icon: BarChart3 },
-    { id: 'automations', label: 'Automations', icon: Bot }
+    { id: 'drip', label: 'Drip Campaigns', icon: Workflow, badge: 'Pro' },
+    { id: 'analytics', label: 'Campaign Analytics', icon: BarChart3 }
   );
+
+  // Check permission for Automations (Bot & Automations)
+  const canAccessAutomations =
+    isMasterAdmin ||
+    (userProfile?.canAccessAutomations !== false &&
+      (userProfile?.subscription?.features as any)?.canAutomations !== false);
+  if (canAccessAutomations) {
+    navItems.push({ id: 'automations', label: 'Automations', icon: Bot });
+  }
 
   // Admin and Master Admin Tenant Controls (Hidden from standard Users)
   if (isAdmin || isMasterAdmin) {
-    navItems.push(
-      { id: 'users', label: 'Users & Team', icon: Users },
-      { id: 'admin', label: 'Settings & Meta Cloud API', icon: ShieldCheck }
-    );
+    navItems.push({ id: 'users', label: 'Users & Team', icon: Users });
+
+    // Only show 'Settings & Meta Cloud API' if Master Admin or permitted
+    const canAccessSettings = isMasterAdmin || userProfile?.canAccessSettingsMetaApi !== false;
+    if (canAccessSettings) {
+      navItems.push({ id: 'admin', label: 'Settings & Meta Cloud API', icon: ShieldCheck });
+    }
   }
 
   const handleNavClick = (tabId: string) => {

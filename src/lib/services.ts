@@ -18,6 +18,9 @@ import type {
   ContactGroup,
   Template,
   Campaign,
+  DripCampaign,
+  DripSubscriber,
+  DripStep,
   Message,
   Conversation,
   Automation,
@@ -377,17 +380,24 @@ export async function createCampaign(
     name: string;
     whatsAppAccountId: string;
     templateId: string;
-    templateName: string;
+    templateName?: string;
+    templateCategory?: string;
+    template?: any;
+    headerMediaUrl?: string;
+    variableValues?: Record<string, string>;
     groupId?: string;
     recipientCount: number;
     scheduledAt?: string;
+    scheduleData?: any;
+    status?: 'draft' | 'scheduled' | 'sending' | 'completed' | 'paused' | 'cancelled' | 'failed';
+    recipients?: any[];
   }
 ) {
   const campaignId = `cmp_${Date.now()}`;
   const path = `organizations/${orgId}/campaigns/${campaignId}`;
   const rawRecord: Omit<Campaign, 'id'> = {
     ...campaignData,
-    status: campaignData.scheduledAt ? 'scheduled' : 'draft',
+    status: campaignData.status || (campaignData.scheduledAt ? 'scheduled' : 'draft'),
     createdAt: new Date().toISOString(),
     stats: {
       total: campaignData.recipientCount || 0,
@@ -412,6 +422,224 @@ export async function createCampaign(
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
   }
+}
+
+/**
+ * Trigger immediate dispatch of a scheduled campaign (Send Now)
+ */
+export async function sendScheduledCampaignNowApi(orgId: string, campaignId: string) {
+  const res = await fetch(`/api/meta/campaigns/${campaignId}/send-now`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-organization-id': orgId,
+    },
+    body: JSON.stringify({ organizationId: orgId }),
+  });
+  return parseJsonResponse(res, 'Failed to trigger immediate campaign broadcast.');
+}
+
+/**
+ * Reschedule a scheduled/draft campaign to a new date and time
+ */
+export async function rescheduleCampaignApi(orgId: string, campaignId: string, scheduledAt: string) {
+  const res = await fetch(`/api/meta/campaigns/${campaignId}/reschedule`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-organization-id': orgId,
+    },
+    body: JSON.stringify({ scheduledAt, organizationId: orgId }),
+  });
+  return parseJsonResponse(res, 'Failed to reschedule campaign.');
+}
+
+/**
+ * Cancel a scheduled campaign
+ */
+export async function cancelScheduledCampaignApi(orgId: string, campaignId: string) {
+  const res = await fetch(`/api/meta/campaigns/${campaignId}/cancel-schedule`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-organization-id': orgId,
+    },
+    body: JSON.stringify({ organizationId: orgId }),
+  });
+  return parseJsonResponse(res, 'Failed to cancel scheduled campaign.');
+}
+
+/**
+ * Real-time subscription to Drip Campaigns of an organization
+ */
+export function subscribeDripCampaigns(
+  orgId: string,
+  onData: (drips: DripCampaign[]) => void,
+  onError?: (err: unknown) => void
+): () => void {
+  const path = `organizations/${orgId}/drip_campaigns`;
+  const q = query(collection(db, path), orderBy('createdAt', 'desc'));
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const list: DripCampaign[] = [];
+      snapshot.forEach((d) => {
+        list.push({ id: d.id, ...(d.data() as any) });
+      });
+      onData(list);
+    },
+    (err) => {
+      console.warn(`[Firestore] Drip campaigns subscription notice:`, err);
+      onError?.(err);
+    }
+  );
+}
+
+export async function createDripCampaign(orgId: string, data: Omit<DripCampaign, 'id' | 'createdAt' | 'updatedAt'>) {
+  const dripId = `drip_${Date.now()}`;
+  const path = `organizations/${orgId}/drip_campaigns/${dripId}`;
+  const record = removeUndefined({
+    ...data,
+    organizationId: orgId,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+  try {
+    await setDoc(doc(db, 'organizations', orgId, 'drip_campaigns', dripId), record);
+    return dripId;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, path);
+  }
+}
+
+export async function updateDripCampaign(orgId: string, dripId: string, data: Partial<DripCampaign>) {
+  const path = `organizations/${orgId}/drip_campaigns/${dripId}`;
+  const record = removeUndefined({
+    ...data,
+    updatedAt: new Date().toISOString(),
+  });
+  try {
+    await updateDoc(doc(db, 'organizations', orgId, 'drip_campaigns', dripId), record);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, path);
+  }
+}
+
+export async function deleteDripCampaign(orgId: string, dripId: string) {
+  const path = `organizations/${orgId}/drip_campaigns/${dripId}`;
+  try {
+    try {
+      const subsSnap = await getDocs(collection(db, `${path}/subscribers`));
+      if (!subsSnap.empty) {
+        await Promise.all(subsSnap.docs.map((d) => deleteDoc(d.ref)));
+      }
+    } catch {}
+    await deleteDoc(doc(db, 'organizations', orgId, 'drip_campaigns', dripId));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, path);
+  }
+}
+
+export async function toggleDripCampaignStatusApi(orgId: string, dripId: string, status: 'active' | 'paused') {
+  const res = await fetch(`/api/drip/campaigns/${dripId}/toggle`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-organization-id': orgId,
+    },
+    body: JSON.stringify({ status, organizationId: orgId }),
+  });
+  return parseJsonResponse(res, 'Failed to toggle drip campaign status.');
+}
+
+export async function enrollDripSubscribersApi(
+  orgId: string,
+  dripId: string,
+  recipients: Array<{ phone: string; name?: string }>
+) {
+  const res = await fetch(`/api/drip/campaigns/${dripId}/enroll`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-organization-id': orgId,
+    },
+    body: JSON.stringify({ recipients, organizationId: orgId }),
+  });
+  return parseJsonResponse(res, 'Failed to enroll subscribers into drip sequence.');
+}
+
+export async function testSendDripStepApi(
+  orgId: string,
+  dripId: string,
+  stepNumber: number,
+  testPhone: string,
+  customToken?: string,
+  step?: any,
+  phoneNumberId?: string
+) {
+  const res = await fetch(`/api/drip/campaigns/${dripId || 'preview'}/test-step`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-organization-id': orgId,
+    },
+    body: JSON.stringify({
+      stepNumber,
+      testPhone,
+      organizationId: orgId,
+      customToken,
+      step,
+      phoneNumberId,
+    }),
+  });
+  return parseJsonResponse(res, 'Failed to send test drip step.');
+}
+
+export function subscribeDripSubscribers(
+  orgId: string,
+  dripId: string,
+  onData: (subscribers: DripSubscriber[]) => void,
+  onError?: (err: unknown) => void
+): () => void {
+  const path = `organizations/${orgId}/drip_campaigns/${dripId}/subscribers`;
+  return onSnapshot(
+    collection(db, path),
+    (snapshot) => {
+      const list: DripSubscriber[] = [];
+      snapshot.forEach((d) => {
+        list.push({ id: d.id, ...(d.data() as any) });
+      });
+      onData(list);
+    },
+    (err) => {
+      console.warn(`[Firestore] Drip subscribers subscription error for ${dripId}:`, err);
+      onError?.(err);
+    }
+  );
+}
+
+export async function advanceDripSubscriberApi(orgId: string, dripId: string, subId: string) {
+  const res = await fetch(`/api/drip/campaigns/${dripId}/subscribers/${subId}/advance`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-organization-id': orgId,
+    },
+    body: JSON.stringify({ organizationId: orgId }),
+  });
+  return parseJsonResponse(res, 'Failed to trigger subscriber advance.');
+}
+
+export async function cancelDripSubscriberApi(orgId: string, dripId: string, subId: string) {
+  const res = await fetch(`/api/drip/campaigns/${dripId}/subscribers/${subId}/cancel`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-organization-id': orgId,
+    },
+    body: JSON.stringify({ organizationId: orgId }),
+  });
+  return parseJsonResponse(res, 'Failed to cancel subscriber.');
 }
 
 export async function deleteCampaign(orgId: string, campaignId: string) {

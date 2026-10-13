@@ -22,6 +22,10 @@ import {
   Smartphone,
   Sparkles,
   Variable,
+  Zap,
+  Ban,
+  Play,
+  Workflow,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -33,6 +37,9 @@ import {
   subscribeGroups,
   deleteCampaign,
   deleteMultipleCampaigns,
+  sendScheduledCampaignNowApi,
+  rescheduleCampaignApi,
+  cancelScheduledCampaignApi,
 } from '../lib/services.ts';
 import type { Campaign, Template, Contact, ContactGroup } from '../types/index.ts';
 import { CreateCampaignModal } from '../components/CreateCampaignModal.tsx';
@@ -40,9 +47,13 @@ import { MiniTemplatePhonePreview } from '../components/MiniTemplatePhonePreview
 
 interface CampaignsPageProps {
   onViewAnalytics?: (campaignId: string) => void;
+  onNavigateToDrip?: () => void;
 }
 
-export const CampaignsPage: React.FC<CampaignsPageProps> = ({ onViewAnalytics }) => {
+export const CampaignsPage: React.FC<CampaignsPageProps> = ({
+  onViewAnalytics,
+  onNavigateToDrip,
+}) => {
   const { organization } = useAuth();
   const { activeAccount } = useWhatsAppAccounts();
   const toast = useToast();
@@ -71,6 +82,143 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({ onViewAnalytics })
 
   // Clone Campaign Target State (User Request: Clone Icon -> Re-campaign with same details, only change numbers)
   const [cloneCampaignTarget, setCloneCampaignTarget] = useState<Campaign | null>(null);
+
+  // Scheduled Campaign Actions State
+  const [rescheduleTargetCampaign, setRescheduleTargetCampaign] = useState<Campaign | null>(null);
+  const [rescheduleDateTime, setRescheduleDateTime] = useState<string>('');
+  const [isRescheduling, setIsRescheduling] = useState(false);
+
+  const [sendNowTargetCampaign, setSendNowTargetCampaign] = useState<Campaign | null>(null);
+  const [isSendingNow, setIsSendingNow] = useState(false);
+
+  const [cancelScheduleTarget, setCancelScheduleTarget] = useState<Campaign | null>(null);
+  const [isCancellingSchedule, setIsCancellingSchedule] = useState(false);
+
+  const formatLocalDateTimeInput = (d: Date) => {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const year = d.getFullYear();
+    const month = pad(d.getMonth() + 1);
+    const day = pad(d.getDate());
+    const hours = pad(d.getHours());
+    const minutes = pad(d.getMinutes());
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
+  };
+
+  const getRelativeScheduledTime = (dateIso?: string) => {
+    if (!dateIso) return null;
+    const target = new Date(dateIso);
+    const diffMs = target.getTime() - Date.now();
+    if (isNaN(diffMs)) return null;
+
+    if (diffMs <= 0) {
+      return { text: 'Due now / Processing', isOverdue: true };
+    }
+
+    const diffMins = Math.floor(diffMs / (60 * 1000));
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffDays > 0) {
+      const remHours = diffHours % 24;
+      return {
+        text: `In ${diffDays}d ${remHours > 0 ? `${remHours}h` : ''}`,
+        isOverdue: false,
+      };
+    }
+    if (diffHours > 0) {
+      const remMins = diffMins % 60;
+      return {
+        text: `In ${diffHours}h ${remMins > 0 ? `${remMins}m` : ''}`,
+        isOverdue: false,
+      };
+    }
+    return {
+      text: `In ${diffMins}m`,
+      isOverdue: false,
+    };
+  };
+
+  const getQuickReschedulePreset = (minutesAhead: number) => {
+    const target = new Date(Date.now() + minutesAhead * 60 * 1000);
+    return formatLocalDateTimeInput(target);
+  };
+
+  const getTomorrowReschedulePreset = (hours: number, minutes: number = 0) => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(hours, minutes, 0, 0);
+    return formatLocalDateTimeInput(tomorrow);
+  };
+
+  const upcomingScheduledCampaigns = useMemo(() => {
+    return campaigns
+      .filter((c) => c.status === 'scheduled' && c.scheduledAt)
+      .sort((a, b) => new Date(a.scheduledAt!).getTime() - new Date(b.scheduledAt!).getTime());
+  }, [campaigns]);
+
+  const nextScheduledCampaign = upcomingScheduledCampaigns[0] || null;
+
+  const handleOpenRescheduleModal = (c: Campaign) => {
+    setRescheduleTargetCampaign(c);
+    const initialDate = c.scheduledAt ? new Date(c.scheduledAt) : new Date(Date.now() + 60 * 60 * 1000);
+    setRescheduleDateTime(formatLocalDateTimeInput(initialDate));
+  };
+
+  const handleConfirmReschedule = async () => {
+    if (!organization?.id || !rescheduleTargetCampaign || !rescheduleDateTime) return;
+    const targetMs = new Date(rescheduleDateTime).getTime();
+    if (isNaN(targetMs) || targetMs <= Date.now()) {
+      toast.showWarning('Invalid Time', 'Please choose a future date and time for rescheduling.');
+      return;
+    }
+    setIsRescheduling(true);
+    try {
+      await rescheduleCampaignApi(organization.id, rescheduleTargetCampaign.id, new Date(rescheduleDateTime).toISOString());
+      toast.showSuccess(
+        'Campaign Rescheduled!',
+        `Broadcast "${rescheduleTargetCampaign.name}" rescheduled for ${new Date(rescheduleDateTime).toLocaleString()}.`
+      );
+      setRescheduleTargetCampaign(null);
+    } catch (err: any) {
+      toast.showError('Reschedule Failed', err?.message || 'Could not reschedule campaign.');
+    } finally {
+      setIsRescheduling(false);
+    }
+  };
+
+  const handleConfirmSendNow = async () => {
+    if (!organization?.id || !sendNowTargetCampaign) return;
+    setIsSendingNow(true);
+    try {
+      await sendScheduledCampaignNowApi(organization.id, sendNowTargetCampaign.id);
+      toast.showSuccess(
+        'Campaign Dispatched Now!',
+        `Broadcast "${sendNowTargetCampaign.name}" has been triggered immediately via Meta API.`
+      );
+      setSendNowTargetCampaign(null);
+    } catch (err: any) {
+      toast.showError('Immediate Send Failed', err?.message || 'Could not send scheduled campaign now.');
+    } finally {
+      setIsSendingNow(false);
+    }
+  };
+
+  const handleConfirmCancelSchedule = async () => {
+    if (!organization?.id || !cancelScheduleTarget) return;
+    setIsCancellingSchedule(true);
+    try {
+      await cancelScheduledCampaignApi(organization.id, cancelScheduleTarget.id);
+      toast.showSuccess(
+        'Schedule Cancelled',
+        `Broadcast "${cancelScheduleTarget.name}" schedule cancelled.`
+      );
+      setCancelScheduleTarget(null);
+    } catch (err: any) {
+      toast.showError('Cancel Failed', err?.message || 'Could not cancel scheduled campaign.');
+    } finally {
+      setIsCancellingSchedule(false);
+    }
+  };
 
   // Resolved template for the campaign preview modal
   const previewTemplate = useMemo<Template | null>(() => {
@@ -310,6 +458,30 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({ onViewAnalytics })
 
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-7xl mx-auto animate-fadeIn">
+      {/* Mode Switcher: Broadcast Campaigns vs Drip Campaigns */}
+      <div className="flex items-center space-x-1 p-1 rounded-2xl bg-neutral-100 dark:bg-neutral-800/80 w-fit">
+        <button
+          type="button"
+          className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white shadow-2xs cursor-default flex items-center space-x-1.5"
+        >
+          <Send className="w-3.5 h-3.5 text-emerald-600" />
+          <span>Broadcast Campaigns</span>
+        </button>
+        {onNavigateToDrip && (
+          <button
+            type="button"
+            onClick={onNavigateToDrip}
+            className="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white flex items-center space-x-1.5 transition-colors cursor-pointer"
+          >
+            <Workflow className="w-3.5 h-3.5 text-amber-500" />
+            <span>Drip Campaigns (Automated Sequences)</span>
+            <span className="px-1.5 py-0.2 rounded-md text-[9px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+              Pro
+            </span>
+          </button>
+        )}
+      </div>
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
@@ -327,6 +499,19 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({ onViewAnalytics })
         </div>
 
         <div className="flex items-center space-x-2">
+          {onNavigateToDrip && (
+            <button
+              onClick={onNavigateToDrip}
+              className="inline-flex items-center space-x-1.5 px-3.5 py-2.5 rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 hover:bg-amber-100 font-bold text-xs sm:text-sm transition-colors cursor-pointer"
+            >
+              <Workflow className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+              <span>Drip Campaigns</span>
+              <span className="px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-amber-200 dark:bg-amber-900 text-amber-800 dark:text-amber-200">
+                Pro
+              </span>
+            </button>
+          )}
+
           {onViewAnalytics && campaigns.length > 0 && (
             <button
               onClick={() => onViewAnalytics(campaigns[0].id)}
@@ -347,6 +532,141 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({ onViewAnalytics })
           </button>
         </div>
       </div>
+
+      {/* Quick KPI Stat Cards */}
+      {campaigns.length > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div
+            onClick={() => setStatusFilter('all')}
+            className={`p-3.5 rounded-2xl border transition-all cursor-pointer ${
+              statusFilter === 'all'
+                ? 'bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 border-neutral-900 shadow-xs'
+                : 'bg-white dark:bg-neutral-800/80 border-neutral-200 dark:border-neutral-700 hover:border-neutral-300'
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <span className={`text-[11px] font-semibold uppercase tracking-wider ${statusFilter === 'all' ? 'text-neutral-300 dark:text-neutral-600' : 'text-neutral-500'}`}>
+                Total Broadcasts
+              </span>
+              <Send className="w-3.5 h-3.5 opacity-70" />
+            </div>
+            <div className="text-xl font-bold font-mono mt-1">
+              {campaigns.length}
+            </div>
+          </div>
+
+          <div
+            onClick={() => setStatusFilter('scheduled')}
+            className={`p-3.5 rounded-2xl border transition-all cursor-pointer ${
+              statusFilter === 'scheduled'
+                ? 'bg-amber-500 text-white border-amber-500 shadow-xs'
+                : 'bg-amber-50/60 dark:bg-amber-950/20 border-amber-200/80 dark:border-amber-900/50 hover:border-amber-300 text-amber-900 dark:text-amber-100'
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold uppercase tracking-wider">
+                ⏰ Scheduled
+              </span>
+              <Clock className="w-3.5 h-3.5" />
+            </div>
+            <div className="text-xl font-bold font-mono mt-1 flex items-baseline space-x-1.5">
+              <span>{campaigns.filter((c) => c.status === 'scheduled').length}</span>
+              <span className="text-[10px] font-normal opacity-80">broadcasts</span>
+            </div>
+          </div>
+
+          <div
+            onClick={() => setStatusFilter('completed')}
+            className={`p-3.5 rounded-2xl border transition-all cursor-pointer ${
+              statusFilter === 'completed'
+                ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                : 'bg-emerald-50/60 dark:bg-emerald-950/20 border-emerald-200/80 dark:border-emerald-900/50 hover:border-emerald-300 text-emerald-900 dark:text-emerald-100'
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold uppercase tracking-wider">
+                Completed
+              </span>
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+            </div>
+            <div className="text-xl font-bold font-mono mt-1">
+              {campaigns.filter((c) => c.status === 'completed').length}
+            </div>
+          </div>
+
+          <div className="p-3.5 rounded-2xl bg-white dark:bg-neutral-800/80 border border-neutral-200 dark:border-neutral-700">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-neutral-500">
+                Delivered Msgs
+              </span>
+              <Users className="w-3.5 h-3.5 text-purple-500" />
+            </div>
+            <div className="text-xl font-bold font-mono mt-1 text-purple-600 dark:text-purple-400">
+              {campaigns.reduce((acc, c) => acc + (c.stats?.delivered || c.stats?.sent || 0), 0).toLocaleString()}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Upcoming Scheduled Broadcast Announcement Banner */}
+      {nextScheduledCampaign && (
+        <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/15 via-amber-500/10 to-orange-500/15 dark:from-amber-950/40 dark:via-neutral-900 dark:to-orange-950/30 border border-amber-300/80 dark:border-amber-900/60 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 text-xs shadow-xs animate-fadeIn">
+          <div className="flex items-center space-x-3">
+            <div className="w-10 h-10 rounded-2xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <Clock className="w-5 h-5 animate-pulse" />
+            </div>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-bold text-neutral-900 dark:text-white text-sm">
+                  Next Scheduled Broadcast: &ldquo;{nextScheduledCampaign.name}&rdquo;
+                </span>
+                {nextScheduledCampaign.scheduledAt && (() => {
+                  const rel = getRelativeScheduledTime(nextScheduledCampaign.scheduledAt);
+                  return rel ? (
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                      rel.isOverdue
+                        ? 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
+                        : 'bg-amber-200 text-amber-900 dark:bg-amber-900 dark:text-amber-200'
+                    }`}>
+                      {rel.text}
+                    </span>
+                  ) : null;
+                })()}
+              </div>
+              <p className="text-[11px] text-neutral-600 dark:text-neutral-400">
+                Scheduled for <strong>{new Date(nextScheduledCampaign.scheduledAt!).toLocaleString()}</strong> • {nextScheduledCampaign.recipientCount} Recipients • Template: <span className="font-mono">{nextScheduledCampaign.templateName}</span>
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-2 self-end md:self-auto shrink-0">
+            <button
+              type="button"
+              onClick={() => setSendNowTargetCampaign(nextScheduledCampaign)}
+              className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs flex items-center space-x-1.5 transition-colors cursor-pointer shadow-xs"
+            >
+              <Zap className="w-3.5 h-3.5" />
+              <span>Send Now</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleOpenRescheduleModal(nextScheduledCampaign)}
+              className="px-3 py-1.5 rounded-xl border border-amber-300 dark:border-amber-800 bg-white dark:bg-neutral-800 text-amber-900 dark:text-amber-200 font-semibold text-xs hover:bg-amber-50 transition-colors cursor-pointer"
+            >
+              <Calendar className="w-3.5 h-3.5" />
+              <span>Reschedule</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setCancelScheduleTarget(nextScheduledCampaign)}
+              className="p-1.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-500 hover:text-rose-600 hover:border-rose-300 transition-colors cursor-pointer"
+              title="Cancel scheduled broadcast"
+            >
+              <Ban className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Floating / Sticky Bulk Action Bar (When 1 or more campaigns are selected) */}
       {selectedCampaignIds.length > 0 && (
@@ -388,7 +708,7 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({ onViewAnalytics })
             <input
               type="text"
               placeholder="Search campaigns by name or template..."
-              value={searchQuery}
+              value={searchQuery || ''}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-9 pr-4 py-2 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs text-neutral-900 dark:text-white placeholder-neutral-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-500"
             />
@@ -405,16 +725,17 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({ onViewAnalytics })
           <div className="flex items-center space-x-2 w-full sm:w-auto">
             <Filter className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
             <select
-              value={statusFilter}
+              value={statusFilter || 'all'}
               onChange={(e) => setStatusFilter(e.target.value)}
               className="w-full sm:w-auto px-3 py-2 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs text-neutral-800 dark:text-neutral-200 focus:outline-hidden focus:ring-2 focus:ring-emerald-500"
             >
               <option value="all">All Statuses ({campaigns.length})</option>
-              <option value="completed">Completed</option>
-              <option value="sending">Sending</option>
-              <option value="scheduled">Scheduled</option>
-              <option value="draft">Draft</option>
-              <option value="failed">Failed</option>
+              <option value="scheduled">⏰ Scheduled ({campaigns.filter((c) => c.status === 'scheduled').length})</option>
+              <option value="completed">Completed ({campaigns.filter((c) => c.status === 'completed').length})</option>
+              <option value="sending">Sending ({campaigns.filter((c) => c.status === 'sending').length})</option>
+              <option value="cancelled">Cancelled ({campaigns.filter((c) => c.status === 'cancelled').length})</option>
+              <option value="draft">Draft ({campaigns.filter((c) => c.status === 'draft').length})</option>
+              <option value="failed">Failed ({campaigns.filter((c) => c.status === 'failed').length})</option>
             </select>
           </div>
         </div>
@@ -534,25 +855,58 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({ onViewAnalytics })
                         {c.templateName}
                       </td>
                       <td className="py-3.5 px-4">
-                        <span
-                          className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                            c.status === 'completed'
-                              ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400'
-                              : c.status === 'sending'
-                              ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400 animate-pulse'
-                              : c.status === 'failed'
-                              ? 'bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-400'
-                              : 'bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300'
-                          }`}
-                        >
-                          {c.status.toUpperCase()}
-                        </span>
+                        {c.status === 'scheduled' ? (
+                          <span className="inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-300/70 dark:border-amber-800 shadow-2xs">
+                            <Clock className="w-3 h-3 text-amber-600 animate-spin" style={{ animationDuration: '6s' }} />
+                            <span>SCHEDULED</span>
+                          </span>
+                        ) : c.status === 'cancelled' ? (
+                          <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400">
+                            <Ban className="w-3 h-3 text-neutral-400" />
+                            <span>CANCELLED</span>
+                          </span>
+                        ) : (
+                          <span
+                            className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                              c.status === 'completed'
+                                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400'
+                                : c.status === 'sending'
+                                ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400 animate-pulse'
+                                : c.status === 'failed'
+                                ? 'bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-400'
+                                : 'bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300'
+                            }`}
+                          >
+                            {c.status.toUpperCase()}
+                          </span>
+                        )}
                       </td>
                       <td className="py-3.5 px-4 font-medium text-neutral-700 dark:text-neutral-300">
                         {c.recipientCount} recipients
                       </td>
                       <td className="py-3.5 px-4">
-                        {c.stats ? (
+                        {c.status === 'scheduled' ? (
+                          <div className="space-y-0.5">
+                            <div className="flex items-center space-x-1 text-xs text-amber-900 dark:text-amber-200 font-semibold">
+                              <Calendar className="w-3 h-3 text-amber-600 shrink-0" />
+                              <span className="text-[11px] truncate max-w-[170px]">
+                                {c.scheduledAt ? new Date(c.scheduledAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Future'}
+                              </span>
+                            </div>
+                            {c.scheduledAt && (() => {
+                              const rel = getRelativeScheduledTime(c.scheduledAt);
+                              return rel ? (
+                                <span className={`inline-block px-1.5 py-0.2 rounded text-[10px] font-bold ${
+                                  rel.isOverdue
+                                    ? 'bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300'
+                                    : 'bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300'
+                                }`}>
+                                  {rel.text}
+                                </span>
+                              ) : null;
+                            })()}
+                          </div>
+                        ) : c.stats ? (
                           <div className="flex items-center space-x-2 text-[11px]">
                             <span className="text-emerald-600 font-semibold">{c.stats.sent} Sent</span>
                             <span className="text-neutral-300">•</span>
@@ -573,6 +927,64 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({ onViewAnalytics })
                       </td>
                       <td className="py-3.5 px-4 text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end space-x-1.5">
+                          {/* If scheduled: Provide Send Now, Reschedule, Cancel Schedule */}
+                          {c.status === 'scheduled' && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSendNowTargetCampaign(c);
+                                }}
+                                title="Send Now: Immediately dispatch via Meta API"
+                                className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-bold text-[11px] shadow-2xs transition-colors cursor-pointer"
+                              >
+                                <Zap className="w-3.5 h-3.5" />
+                                <span>Send Now</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenRescheduleModal(c);
+                                }}
+                                title="Reschedule: Change date and time"
+                                className="inline-flex items-center space-x-1 px-2 py-1 rounded-lg border border-amber-300 dark:border-amber-800/80 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 hover:bg-amber-100 font-semibold text-[11px] transition-colors cursor-pointer"
+                              >
+                                <Calendar className="w-3.5 h-3.5" />
+                                <span>Reschedule</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setCancelScheduleTarget(c);
+                                }}
+                                title="Cancel scheduled broadcast"
+                                className="p-1.5 rounded-lg border border-neutral-200 dark:border-neutral-700 hover:border-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-neutral-500 hover:text-rose-600 transition-colors cursor-pointer"
+                              >
+                                <Ban className="w-3.5 h-3.5" />
+                              </button>
+                            </>
+                          )}
+
+                          {c.status === 'cancelled' && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleOpenRescheduleModal(c);
+                              }}
+                              title="Re-schedule & re-arm broadcast"
+                              className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 text-amber-800 dark:text-amber-300 hover:bg-amber-100 font-semibold text-[11px] transition-colors cursor-pointer"
+                            >
+                              <Calendar className="w-3.5 h-3.5" />
+                              <span>Re-schedule</span>
+                            </button>
+                          )}
+
                           {/* 1. View Mobile Preview Button (User Request: View Icon -> Mobile View with variables & media) */}
                           <button
                             type="button"
@@ -603,7 +1015,7 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({ onViewAnalytics })
                           </button>
 
                           {/* 3. Track (Analytics) */}
-                          {onViewAnalytics && (
+                          {onViewAnalytics && c.status !== 'scheduled' && (
                             <button
                               type="button"
                               onClick={(e) => {
@@ -974,6 +1386,250 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({ onViewAnalytics })
             setCloneCampaignTarget(null);
           }}
         />
+      )}
+
+      {/* Reschedule Campaign Modal */}
+      {rescheduleTargetCampaign && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fadeIn">
+          <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl max-w-md w-full p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between pb-2 border-b border-neutral-200 dark:border-neutral-800">
+              <div className="flex items-center space-x-2.5 text-amber-600 dark:text-amber-400">
+                <div className="w-9 h-9 rounded-xl bg-amber-100 dark:bg-amber-950/50 flex items-center justify-center shrink-0">
+                  <Calendar className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-neutral-900 dark:text-white text-sm">
+                    Reschedule Broadcast
+                  </h3>
+                  <p className="text-[11px] text-neutral-500 truncate max-w-[230px]">
+                    {rescheduleTargetCampaign.name}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRescheduleTargetCampaign(null)}
+                className="text-neutral-400 hover:text-neutral-600 p-1 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
+                  New Broadcast Date & Time
+                </label>
+                <input
+                  type="datetime-local"
+                  value={rescheduleDateTime || ''}
+                  min={formatLocalDateTimeInput(new Date())}
+                  onChange={(e) => setRescheduleDateTime(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs font-medium text-neutral-900 dark:text-white focus:ring-2 focus:ring-amber-500 focus:outline-hidden"
+                />
+              </div>
+
+              {/* Quick Presets */}
+              <div className="space-y-1">
+                <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider">
+                  Quick Presets:
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setRescheduleDateTime(getQuickReschedulePreset(15))}
+                    className="px-2.5 py-1 rounded-lg bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 text-[11px] font-medium text-neutral-700 dark:text-neutral-300 transition-colors cursor-pointer"
+                  >
+                    +15m
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRescheduleDateTime(getQuickReschedulePreset(30))}
+                    className="px-2.5 py-1 rounded-lg bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 text-[11px] font-medium text-neutral-700 dark:text-neutral-300 transition-colors cursor-pointer"
+                  >
+                    +30m
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRescheduleDateTime(getQuickReschedulePreset(60))}
+                    className="px-2.5 py-1 rounded-lg bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 text-[11px] font-medium text-neutral-700 dark:text-neutral-300 transition-colors cursor-pointer"
+                  >
+                    +1h
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRescheduleDateTime(getQuickReschedulePreset(180))}
+                    className="px-2.5 py-1 rounded-lg bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 text-[11px] font-medium text-neutral-700 dark:text-neutral-300 transition-colors cursor-pointer"
+                  >
+                    +3h
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRescheduleDateTime(getTomorrowReschedulePreset(9, 0))}
+                    className="px-2.5 py-1 rounded-lg bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 text-[11px] font-medium text-neutral-700 dark:text-neutral-300 transition-colors cursor-pointer"
+                  >
+                    Tomorrow 9 AM
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRescheduleDateTime(getTomorrowReschedulePreset(18, 0))}
+                    className="px-2.5 py-1 rounded-lg bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 text-[11px] font-medium text-neutral-700 dark:text-neutral-300 transition-colors cursor-pointer"
+                  >
+                    Tomorrow 6 PM
+                  </button>
+                </div>
+              </div>
+
+              {rescheduleDateTime && (
+                <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-900/40 text-xs space-y-1">
+                  <div className="flex items-center justify-between text-amber-900 dark:text-amber-200 font-bold">
+                    <span>Target Schedule:</span>
+                    <span className="text-[11px]">
+                      {getRelativeScheduledTime(rescheduleDateTime)?.text || ''}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-neutral-600 dark:text-neutral-400">
+                    {new Date(rescheduleDateTime).toLocaleString()}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end space-x-2 pt-2 border-t border-neutral-200 dark:border-neutral-800">
+              <button
+                type="button"
+                onClick={() => setRescheduleTargetCampaign(null)}
+                className="px-3.5 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 text-xs font-semibold text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmReschedule}
+                disabled={isRescheduling}
+                className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold flex items-center space-x-1.5 transition-colors cursor-pointer shadow-xs disabled:opacity-50"
+              >
+                {isRescheduling ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Saving...</span>
+                  </>
+                ) : (
+                  <>
+                    <Calendar className="w-3.5 h-3.5" />
+                    <span>Confirm Reschedule</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Immediate Send Now Confirmation Modal */}
+      {sendNowTargetCampaign && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fadeIn">
+          <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl max-w-md w-full p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center space-x-3 text-amber-600 dark:text-amber-400">
+              <div className="w-10 h-10 rounded-xl bg-amber-100 dark:bg-amber-950/50 flex items-center justify-center shrink-0">
+                <Zap className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-neutral-900 dark:text-white">
+                  Send Broadcast Immediately?
+                </h3>
+                <p className="text-xs text-neutral-500">
+                  Bypass schedule timer and launch now
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-neutral-600 dark:text-neutral-300 leading-relaxed">
+              Kya aap campaign <strong>&ldquo;{sendNowTargetCampaign.name}&rdquo;</strong> ko bina schedule ka wait kiye abhi turant <strong>{sendNowTargetCampaign.recipientCount} recipients</strong> ko broadcast karna chahte hain?
+            </p>
+
+            <div className="flex items-center justify-end space-x-2 pt-2 border-t border-neutral-200 dark:border-neutral-800">
+              <button
+                type="button"
+                onClick={() => setSendNowTargetCampaign(null)}
+                className="px-3.5 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 text-xs font-semibold text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
+              >
+                No, Keep Schedule
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmSendNow}
+                disabled={isSendingNow}
+                className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold flex items-center space-x-1.5 transition-colors cursor-pointer shadow-xs disabled:opacity-50"
+              >
+                {isSendingNow ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Launching...</span>
+                  </>
+                ) : (
+                  <>
+                    <Zap className="w-3.5 h-3.5" />
+                    <span>Yes, Send Now</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cancel Schedule Confirmation Modal */}
+      {cancelScheduleTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fadeIn">
+          <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl max-w-md w-full p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center space-x-3 text-rose-600 dark:text-rose-400">
+              <div className="w-10 h-10 rounded-xl bg-rose-100 dark:bg-rose-950/50 flex items-center justify-center shrink-0">
+                <Ban className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-neutral-900 dark:text-white">
+                  Cancel Scheduled Broadcast?
+                </h3>
+                <p className="text-xs text-neutral-500">
+                  Automatic dispatch will be stopped
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-neutral-600 dark:text-neutral-300 leading-relaxed">
+              Kya aap campaign <strong>&ldquo;{cancelScheduleTarget.name}&rdquo;</strong> ka scheduled broadcast cancel karna chahte hain? Background automatic dispatch rok diya jayega aur status <strong>CANCELLED</strong> mark ho jayega.
+            </p>
+
+            <div className="flex items-center justify-end space-x-2 pt-2 border-t border-neutral-200 dark:border-neutral-800">
+              <button
+                type="button"
+                onClick={() => setCancelScheduleTarget(null)}
+                className="px-3.5 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 text-xs font-semibold text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
+              >
+                Keep Scheduled
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmCancelSchedule}
+                disabled={isCancellingSchedule}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold flex items-center space-x-1.5 transition-colors cursor-pointer shadow-xs disabled:opacity-50"
+              >
+                {isCancellingSchedule ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Cancelling...</span>
+                  </>
+                ) : (
+                  <>
+                    <Ban className="w-3.5 h-3.5" />
+                    <span>Yes, Cancel Schedule</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

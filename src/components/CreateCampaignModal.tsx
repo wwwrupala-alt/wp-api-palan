@@ -26,6 +26,8 @@ import {
   HardDrive,
   Link as LinkIcon,
   Trash2,
+  Clock,
+  Calendar,
 } from 'lucide-react';
 import type { Campaign, Template, Contact, ContactGroup, WhatsAppAccount } from '../types/index.ts';
 import { useToast } from '../context/ToastContext.tsx';
@@ -73,6 +75,54 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
   const [campaignMediaUrl, setCampaignMediaUrl] = useState('');
   const [campaignMediaPreviewUrl, setCampaignMediaPreviewUrl] = useState('');
 
+  // Broadcast Schedule Mode: 'immediate' | 'schedule'
+  const [scheduleMode, setScheduleMode] = useState<'immediate' | 'schedule'>('immediate');
+  const [scheduledDateTime, setScheduledDateTime] = useState<string>('');
+
+  const formatLocalDateTimeInput = (d: Date) => {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const year = d.getFullYear();
+    const month = pad(d.getMonth() + 1);
+    const day = pad(d.getDate());
+    const hours = pad(d.getHours());
+    const minutes = pad(d.getMinutes());
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
+  };
+
+  const getQuickPresetTime = (minutesAhead: number) => {
+    const target = new Date(Date.now() + minutesAhead * 60 * 1000);
+    return formatLocalDateTimeInput(target);
+  };
+
+  const getTomorrowPresetTime = (hours: number, minutes: number = 0) => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(hours, minutes, 0, 0);
+    return formatLocalDateTimeInput(tomorrow);
+  };
+
+  const getRelativeScheduleText = (dateTimeStr: string) => {
+    if (!dateTimeStr) return '';
+    const target = new Date(dateTimeStr);
+    const diffMs = target.getTime() - Date.now();
+    if (isNaN(diffMs)) return 'Invalid date';
+    if (diffMs <= 0) return 'Past time selected - please select a future time.';
+
+    const diffMins = Math.floor(diffMs / (60 * 1000));
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffDays > 0) {
+      const remHours = diffHours % 24;
+      return `In ${diffDays} day${diffDays > 1 ? 's' : ''}${remHours > 0 ? ` and ${remHours} hr${remHours > 1 ? 's' : ''}` : ''}`;
+    }
+    if (diffHours > 0) {
+      const remMins = diffMins % 60;
+      return `In ${diffHours} hr${diffHours > 1 ? 's' : ''}${remMins > 0 ? ` and ${remMins} min${remMins > 1 ? 's' : ''}` : ''}`;
+    }
+    return `In ${diffMins} minute${diffMins > 1 ? 's' : ''}`;
+  };
+
   // Pre-fill state when cloning an existing campaign (Re-Campaign flow)
   useEffect(() => {
     if (!isOpen) return;
@@ -117,6 +167,20 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
         setCampaignMediaPreviewUrl('');
       }
 
+      // Pre-fill schedule mode if cloned campaign was scheduled
+      if (initialCloneCampaign.scheduledAt) {
+        setScheduleMode('schedule');
+        const scDate = new Date(initialCloneCampaign.scheduledAt);
+        if (scDate.getTime() > Date.now()) {
+          setScheduledDateTime(formatLocalDateTimeInput(scDate));
+        } else {
+          setScheduledDateTime(getQuickPresetTime(60));
+        }
+      } else {
+        setScheduleMode('immediate');
+        setScheduledDateTime(getQuickPresetTime(60));
+      }
+
       // Default to manual paste mode so user can immediately input new phone numbers
       setAudienceMode('manual');
       setManualNumbersText('');
@@ -133,6 +197,8 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
       setCampaignMediaPreviewUrl('');
       setUploadedCampaignMedia(null);
       setManualNumbersText('');
+      setScheduleMode('immediate');
+      setScheduledDateTime(getQuickPresetTime(60));
       setErrorMsg(null);
     }
   }, [isOpen, initialCloneCampaign, templates]);
@@ -381,6 +447,23 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
       return;
     }
 
+    // Schedule Validation
+    if (scheduleMode === 'schedule') {
+      if (!scheduledDateTime) {
+        const msg = 'Please choose a future date and time for scheduled broadcast.';
+        setErrorMsg(msg);
+        toast.showWarning('Date/Time Required', msg);
+        return;
+      }
+      const targetTime = new Date(scheduledDateTime).getTime();
+      if (isNaN(targetTime) || targetTime <= Date.now() + 60 * 1000) {
+        const msg = 'Scheduled broadcast time must be at least 1 minute in the future.';
+        setErrorMsg(msg);
+        toast.showWarning('Invalid Schedule Time', msg);
+        return;
+      }
+    }
+
     setSubmitting(true);
     setErrorMsg(null);
 
@@ -394,53 +477,106 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
         campaignVariables.header_media_url = campaignMediaUrl.trim();
       }
 
-      // 2. Create campaign document with template metadata & dynamic variables
-      const campaignPayload = {
-        name: campName.trim() || `${selectedTemplate.name} Broadcast`,
-        whatsAppAccountId: activeAccount.id,
-        templateId: selectedTemplate.id,
-        templateName: selectedTemplate.name,
-        templateCategory: selectedTemplate.category,
-        template: selectedTemplate,
-        headerMediaUrl: campaignMediaUrl.trim() || undefined,
-        variableValues: campaignVariables,
-        ...(audienceMode !== 'manual' && selectedGroupId !== 'all' ? { groupId: selectedGroupId } : {}),
-        recipientCount: totalTargetRecipients.length,
-      };
+      const campaignName = campName.trim() || `${selectedTemplate.name} Broadcast`;
 
-      const campaignId = await createCampaign(organizationId, campaignPayload);
-      if (!campaignId) throw new Error('Failed to create campaign record in database.');
-
-      // 3. Dispatch via backend Meta API
-      await launchCampaign(
-        organizationId,
-        campaignId,
-        activeAccount.phoneNumberId,
-        {
-          name: selectedTemplate.name,
-          language: selectedTemplate.language || 'en_US',
-          components: selectedTemplate.components,
-        },
-        totalTargetRecipients.map((c) => ({
-          phone: c.phone,
-          name: c.name,
-          variableValues: {
-            ...campaignVariables,
-            body_1: c.name || campaignVariables.body_1 || 'Customer',
+      if (scheduleMode === 'schedule') {
+        const scheduledIso = new Date(scheduledDateTime).toISOString();
+        const campaignPayload = {
+          name: campaignName,
+          whatsAppAccountId: activeAccount.id,
+          phoneNumberId: activeAccount.phoneNumberId,
+          templateId: selectedTemplate.id,
+          templateName: selectedTemplate.name,
+          templateCategory: selectedTemplate.category,
+          template: selectedTemplate,
+          headerMediaUrl: campaignMediaUrl.trim() || undefined,
+          variableValues: campaignVariables,
+          ...(audienceMode !== 'manual' && selectedGroupId !== 'all' ? { groupId: selectedGroupId } : {}),
+          recipientCount: totalTargetRecipients.length,
+          status: 'scheduled' as const,
+          scheduledAt: scheduledIso,
+          scheduleData: {
+            organizationId,
+            phoneNumberId: activeAccount.phoneNumberId,
+            template: {
+              name: selectedTemplate.name,
+              language: selectedTemplate.language || 'en_US',
+              components: selectedTemplate.components,
+            },
+            recipients: totalTargetRecipients.map((c) => ({
+              phone: c.phone,
+              name: c.name,
+              variableValues: {
+                ...campaignVariables,
+                body_1: c.name || campaignVariables.body_1 || 'Customer',
+              },
+            })),
+            customToken: activeAccount.customToken,
+            variableValues: campaignVariables,
+            campaignName,
+            scheduledAt: scheduledIso,
           },
-        })),
-        activeAccount.customToken,
-        campaignVariables,
-        campaignPayload.name
-      );
+        };
 
-      toast.showSuccess(
-        'Broadcast Campaign Launched!',
-        `Dispatched "${campaignPayload.name}" to ${totalTargetRecipients.length} recipients successfully.`
-      );
+        const campaignId = await createCampaign(organizationId, campaignPayload);
+        if (!campaignId) throw new Error('Failed to create scheduled campaign in database.');
 
-      onSuccess?.();
-      onClose();
+        toast.showSuccess(
+          'Campaign Scheduled Successfully!',
+          `"${campaignName}" is queued to broadcast on ${new Date(scheduledDateTime).toLocaleString()} (${totalTargetRecipients.length} recipients).`
+        );
+
+        onSuccess?.();
+        onClose();
+      } else {
+        // Immediate Launch
+        const campaignPayload = {
+          name: campaignName,
+          whatsAppAccountId: activeAccount.id,
+          templateId: selectedTemplate.id,
+          templateName: selectedTemplate.name,
+          templateCategory: selectedTemplate.category,
+          template: selectedTemplate,
+          headerMediaUrl: campaignMediaUrl.trim() || undefined,
+          variableValues: campaignVariables,
+          ...(audienceMode !== 'manual' && selectedGroupId !== 'all' ? { groupId: selectedGroupId } : {}),
+          recipientCount: totalTargetRecipients.length,
+        };
+
+        const campaignId = await createCampaign(organizationId, campaignPayload);
+        if (!campaignId) throw new Error('Failed to create campaign record in database.');
+
+        // 3. Dispatch via backend Meta API
+        await launchCampaign(
+          organizationId,
+          campaignId,
+          activeAccount.phoneNumberId,
+          {
+            name: selectedTemplate.name,
+            language: selectedTemplate.language || 'en_US',
+            components: selectedTemplate.components,
+          },
+          totalTargetRecipients.map((c) => ({
+            phone: c.phone,
+            name: c.name,
+            variableValues: {
+              ...campaignVariables,
+              body_1: c.name || campaignVariables.body_1 || 'Customer',
+            },
+          })),
+          activeAccount.customToken,
+          campaignVariables,
+          campaignPayload.name
+        );
+
+        toast.showSuccess(
+          'Broadcast Campaign Launched!',
+          `Dispatched "${campaignPayload.name}" to ${totalTargetRecipients.length} recipients successfully.`
+        );
+
+        onSuccess?.();
+        onClose();
+      }
     } catch (err: any) {
       const msg = err?.message || 'Campaign dispatch failed.';
       setErrorMsg(msg);
@@ -573,7 +709,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
               <input
                 type="text"
                 placeholder="e.g. Diwali Mega Sale Offer / Urgent Payment Reminder"
-                value={campName}
+                value={campName || ''}
                 onChange={(e) => setCampName(e.target.value)}
                 className="w-full min-h-[44px] px-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-sm sm:text-xs text-neutral-900 dark:text-white placeholder-neutral-400 focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
               />
@@ -601,7 +737,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
                 </div>
               ) : (
                 <select
-                  value={selectedTemplateId}
+                  value={selectedTemplateId || ''}
                   onChange={(e) => {
                     setSelectedTemplateId(e.target.value);
                     setTemplateVariables({});
@@ -798,7 +934,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
                       <input
                         type="url"
                         placeholder="https://example.com/banner.jpg or https://example.com/video.mp4"
-                        value={campaignMediaUrl}
+                        value={campaignMediaUrl || ''}
                         onChange={(e) => setCampaignMediaUrl(e.target.value)}
                         className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 text-xs text-neutral-900 dark:text-white font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
                       />
@@ -909,7 +1045,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
                     Select Contact Group (Opted-in Contacts)
                   </label>
                   <select
-                    value={selectedGroupId}
+                    value={selectedGroupId || ''}
                     onChange={(e) => setSelectedGroupId(e.target.value)}
                     className="w-full min-h-[44px] px-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-sm sm:text-xs text-neutral-900 dark:text-white cursor-pointer focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
                   >
@@ -940,7 +1076,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
                       <span className="text-neutral-400">Default Code:</span>
                       <input
                         type="text"
-                        value={defaultCountryCode}
+                        value={defaultCountryCode || '+91'}
                         onChange={(e) => setDefaultCountryCode(e.target.value)}
                         placeholder="91"
                         className="w-10 px-1 py-0.5 rounded border border-neutral-300 dark:border-neutral-700 text-center font-mono text-[10px]"
@@ -950,7 +1086,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
 
                   <textarea
                     rows={4}
-                    value={manualNumbersText}
+                    value={manualNumbersText || ''}
                     onChange={(e) => setManualNumbersText(e.target.value)}
                     placeholder="Enter or paste numbers:
 9974428034
@@ -984,18 +1120,199 @@ Rahul: 919974428034
               </div>
             </div>
 
-            {/* Step 4: Quick Single Test Send */}
+            {/* Step 4: Broadcast Delivery Timing - Send Immediately vs Schedule Campaign */}
+            <div className="space-y-3 pt-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400 flex items-center space-x-1.5">
+                  <Clock className="w-3.5 h-3.5 text-emerald-500" />
+                  <span>4. Broadcast Delivery Timing</span>
+                </label>
+                <span className="text-[11px] text-neutral-500">
+                  {scheduleMode === 'immediate' ? 'Instant dispatch' : 'Automated schedule'}
+                </span>
+              </div>
+
+              {/* Delivery Mode Toggle Cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setScheduleMode('immediate')}
+                  className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer flex items-start space-x-3 ${
+                    scheduleMode === 'immediate'
+                      ? 'border-emerald-500 bg-emerald-50/70 dark:bg-emerald-950/40 ring-1 ring-emerald-500 text-emerald-900 dark:text-emerald-100 shadow-xs'
+                      : 'border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800/60 hover:bg-neutral-50 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-300'
+                  }`}
+                >
+                  <div
+                    className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5 ${
+                      scheduleMode === 'immediate'
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-neutral-100 dark:bg-neutral-700 text-neutral-500'
+                    }`}
+                  >
+                    <Send className="w-4 h-4" />
+                  </div>
+                  <div className="space-y-0.5">
+                    <div className="flex items-center space-x-1.5">
+                      <span className="text-xs font-bold">Broadcast Now</span>
+                      <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-100 dark:bg-emerald-900 text-emerald-700 dark:text-emerald-300">
+                        INSTANT
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-neutral-500 dark:text-neutral-400 leading-snug">
+                      Dispatches immediately to all {totalTargetRecipients.length} recipients via Meta API.
+                    </p>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setScheduleMode('schedule');
+                    if (!scheduledDateTime) {
+                      setScheduledDateTime(getQuickPresetTime(60));
+                    }
+                  }}
+                  className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer flex items-start space-x-3 ${
+                    scheduleMode === 'schedule'
+                      ? 'border-amber-500 bg-amber-50/70 dark:bg-amber-950/40 ring-1 ring-amber-500 text-amber-900 dark:text-amber-100 shadow-xs'
+                      : 'border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800/60 hover:bg-neutral-50 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-300'
+                  }`}
+                >
+                  <div
+                    className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5 ${
+                      scheduleMode === 'schedule'
+                        ? 'bg-amber-600 text-white'
+                        : 'bg-neutral-100 dark:bg-neutral-700 text-neutral-500'
+                    }`}
+                  >
+                    <Clock className="w-4 h-4" />
+                  </div>
+                  <div className="space-y-0.5">
+                    <div className="flex items-center space-x-1.5">
+                      <span className="text-xs font-bold">Schedule for Later</span>
+                      <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-100 dark:bg-amber-900 text-amber-800 dark:text-amber-300">
+                        BROADCAST LATER
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-neutral-500 dark:text-neutral-400 leading-snug">
+                      Pick a future date & time. Our background scheduler triggers it automatically.
+                    </p>
+                  </div>
+                </button>
+              </div>
+
+              {/* Schedule Details Config Box */}
+              {scheduleMode === 'schedule' && (
+                <div className="p-4 rounded-2xl bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 space-y-3.5 animate-fadeIn">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <label className="text-xs font-bold text-amber-900 dark:text-amber-200 flex items-center space-x-1.5">
+                      <Calendar className="w-3.5 h-3.5 text-amber-600" />
+                      <span>Choose Broadcast Date & Time</span>
+                      <span className="text-red-500">*</span>
+                    </label>
+                    <span className="text-[10px] text-amber-700 dark:text-amber-400 bg-amber-100/80 dark:bg-amber-900/40 px-2 py-0.5 rounded-lg font-mono">
+                      Timezone: {Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local'}
+                    </span>
+                  </div>
+
+                  <div className="space-y-2">
+                    <input
+                      type="datetime-local"
+                      value={scheduledDateTime || ''}
+                      min={formatLocalDateTimeInput(new Date())}
+                      onChange={(e) => setScheduledDateTime(e.target.value)}
+                      className="w-full min-h-[44px] px-3.5 py-2.5 rounded-xl border border-amber-300 dark:border-amber-800 bg-white dark:bg-neutral-900 text-sm sm:text-xs font-semibold text-neutral-900 dark:text-white focus:ring-2 focus:ring-amber-500 focus:outline-hidden"
+                    />
+
+                    {/* Quick Preset Shortcut Buttons */}
+                    <div className="space-y-1.5">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-amber-800 dark:text-amber-400">
+                        ⚡ Quick Time Presets:
+                      </span>
+                      <div className="flex flex-wrap gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setScheduledDateTime(getQuickPresetTime(15))}
+                          className="px-2.5 py-1 rounded-lg bg-white dark:bg-neutral-800 border border-amber-200 dark:border-amber-800 text-[11px] font-medium text-amber-900 dark:text-amber-200 hover:bg-amber-100 dark:hover:bg-amber-900/60 transition-colors cursor-pointer"
+                        >
+                          +15 Mins
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setScheduledDateTime(getQuickPresetTime(30))}
+                          className="px-2.5 py-1 rounded-lg bg-white dark:bg-neutral-800 border border-amber-200 dark:border-amber-800 text-[11px] font-medium text-amber-900 dark:text-amber-200 hover:bg-amber-100 dark:hover:bg-amber-900/60 transition-colors cursor-pointer"
+                        >
+                          +30 Mins
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setScheduledDateTime(getQuickPresetTime(60))}
+                          className="px-2.5 py-1 rounded-lg bg-white dark:bg-neutral-800 border border-amber-200 dark:border-amber-800 text-[11px] font-medium text-amber-900 dark:text-amber-200 hover:bg-amber-100 dark:hover:bg-amber-900/60 transition-colors cursor-pointer"
+                        >
+                          +1 Hour
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setScheduledDateTime(getQuickPresetTime(180))}
+                          className="px-2.5 py-1 rounded-lg bg-white dark:bg-neutral-800 border border-amber-200 dark:border-amber-800 text-[11px] font-medium text-amber-900 dark:text-amber-200 hover:bg-amber-100 dark:hover:bg-amber-900/60 transition-colors cursor-pointer"
+                        >
+                          +3 Hours
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setScheduledDateTime(getTomorrowPresetTime(9, 0))}
+                          className="px-2.5 py-1 rounded-lg bg-white dark:bg-neutral-800 border border-amber-200 dark:border-amber-800 text-[11px] font-medium text-amber-900 dark:text-amber-200 hover:bg-amber-100 dark:hover:bg-amber-900/60 transition-colors cursor-pointer"
+                        >
+                          🌅 Tomorrow 09:00 AM
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setScheduledDateTime(getTomorrowPresetTime(18, 0))}
+                          className="px-2.5 py-1 rounded-lg bg-white dark:bg-neutral-800 border border-amber-200 dark:border-amber-800 text-[11px] font-medium text-amber-900 dark:text-amber-200 hover:bg-amber-100 dark:hover:bg-amber-900/60 transition-colors cursor-pointer"
+                        >
+                          🌆 Tomorrow 06:00 PM
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Relative Schedule Info & System Assurance */}
+                  {scheduledDateTime && (
+                    <div className="p-2.5 rounded-xl bg-white/90 dark:bg-neutral-900/80 border border-amber-200 dark:border-amber-900/50 space-y-1 text-xs">
+                      <div className="flex items-center justify-between font-semibold text-amber-900 dark:text-amber-200">
+                        <span className="flex items-center space-x-1.5">
+                          <Clock className="w-3.5 h-3.5 text-amber-600" />
+                          <span>Queued Schedule:</span>
+                        </span>
+                        <span className="px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-900 text-amber-800 dark:text-amber-300 font-bold text-[11px]">
+                          {getRelativeScheduleText(scheduledDateTime)}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-neutral-600 dark:text-neutral-400">
+                        Scheduled for: <strong>{new Date(scheduledDateTime).toLocaleString()}</strong>
+                      </p>
+                      <p className="text-[10px] text-neutral-500 dark:text-neutral-400 pt-0.5">
+                        ⚡ Background Cloud Engine automatically broadcasts this at your scheduled time without needing your browser tab open.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Step 5: Quick Single Test Send */}
             <div className="p-3.5 rounded-2xl bg-neutral-50 dark:bg-neutral-800/40 border border-neutral-200 dark:border-neutral-700 space-y-2">
               <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 flex items-center space-x-1">
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
-                <span>Test Broadcast (Send to Yourself First)</span>
+                <span>5. Test Broadcast (Send to Yourself First)</span>
               </span>
 
               <div className="flex flex-col sm:flex-row gap-2">
                 <input
                   type="text"
                   placeholder="+91 9974428034"
-                  value={testPhone}
+                  value={testPhone || ''}
                   onChange={(e) => setTestPhone(e.target.value)}
                   className="flex-1 min-h-[44px] px-3.5 py-2 rounded-xl border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 text-sm sm:text-xs text-neutral-900 dark:text-white font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
                 />
@@ -1225,12 +1542,21 @@ Rahul: 919974428034
               type="button"
               onClick={handleLaunchCampaign}
               disabled={submitting || !selectedTemplate || totalTargetRecipients.length === 0}
-              className="min-h-[44px] sm:min-h-[38px] px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-bold text-xs flex items-center justify-center space-x-2 disabled:opacity-50 transition-all shadow-md shadow-emerald-600/20 cursor-pointer"
+              className={`min-h-[44px] sm:min-h-[38px] px-5 py-2.5 rounded-xl active:scale-[0.98] text-white font-bold text-xs flex items-center justify-center space-x-2 disabled:opacity-50 transition-all shadow-md cursor-pointer ${
+                scheduleMode === 'schedule'
+                  ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-600/20'
+                  : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'
+              }`}
             >
               {submitting ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Launching...</span>
+                  <span>{scheduleMode === 'schedule' ? 'Scheduling Broadcast...' : 'Launching Broadcast...'}</span>
+                </>
+              ) : scheduleMode === 'schedule' ? (
+                <>
+                  <Clock className="w-4 h-4" />
+                  <span>Schedule Broadcast ({totalTargetRecipients.length})</span>
                 </>
               ) : (
                 <>

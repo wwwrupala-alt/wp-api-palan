@@ -40,10 +40,6 @@ export interface AuditLog {
   organizationId?: string;
   details: string;
   ip?: string;
-  userAgent?: string;
-  category?: 'auth' | 'template' | 'campaign' | 'security' | 'user' | 'system';
-  status?: 'success' | 'failure' | 'warning' | 'info';
-  metadata?: Record<string, any>;
 }
 
 export interface UserSubscription {
@@ -87,6 +83,8 @@ export interface UserProfile {
   displayPassword?: string;
   managedByAdminId?: string;
   subscription?: UserSubscription;
+  canAccessSettingsMetaApi?: boolean;
+  canAccessAutomations?: boolean;
   organizationId: string;
   createdAt: string;
   updatedAt: string;
@@ -229,7 +227,77 @@ export interface Campaign {
   startedAt?: string;
   createdAt: string;
   completedAt?: string;
+  cancelledAt?: string;
   stats?: CampaignStats;
+  scheduleData?: any;
+}
+
+export interface DripStep {
+  id: string;
+  stepNumber: number;
+  title: string;
+  delayValue: number;
+  delayUnit: 'minutes' | 'hours' | 'days';
+  templateId: string;
+  templateName: string;
+  templateCategory?: string;
+  template?: Template;
+  headerMediaUrl?: string;
+  variableValues?: Record<string, string>;
+  condition?: 'always' | 'if_not_replied' | 'if_read';
+  stats?: {
+    sent: number;
+    delivered: number;
+    read: number;
+    failed: number;
+  };
+}
+
+export interface DripSubscriberLog {
+  stepNumber: number;
+  templateName: string;
+  sentAt: string;
+  status: 'sent' | 'delivered' | 'read' | 'failed' | 'skipped';
+  metaMessageId?: string;
+  error?: string;
+  note?: string;
+}
+
+export interface DripSubscriber {
+  id: string;
+  dripCampaignId: string;
+  organizationId: string;
+  phone: string;
+  name?: string;
+  currentStep: number;
+  status: 'active' | 'completed' | 'paused' | 'cancelled';
+  enrolledAt: string;
+  lastStepSentAt?: string;
+  nextExecutionAt?: string;
+  stepHistory?: DripSubscriberLog[];
+}
+
+export interface DripCampaign {
+  id: string;
+  organizationId: string;
+  name: string;
+  description?: string;
+  whatsAppAccountId: string;
+  status: 'active' | 'paused' | 'draft' | 'completed';
+  triggerType: 'group_enrollment' | 'manual_contacts' | 'all_opted_in';
+  targetGroupId?: string;
+  steps: DripStep[];
+  enrolledCount: number;
+  activeSubscribers: number;
+  completedSubscribers: number;
+  stats?: {
+    totalMessagesSent: number;
+    delivered: number;
+    read: number;
+    failed: number;
+  };
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Message {

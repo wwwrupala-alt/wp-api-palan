@@ -579,7 +579,7 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
             <div className="relative flex-1 md:flex-none">
               <select
                 aria-label="Select WhatsApp Campaign"
-                value={selectedCampaignId}
+                value={selectedCampaignId || ''}
                 onChange={(e) => {
                   setSelectedCampaignId(e.target.value);
                   setCurrentPage(1);
@@ -925,7 +925,7 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
                     <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                       <select
                         aria-label="Select Recipient for Preview"
-                        value={previewRecipientId}
+                        value={previewRecipientId || 'default'}
                         onChange={(e) => setPreviewRecipientId(e.target.value)}
                         className="flex-1 px-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-neutral-50/50 dark:bg-neutral-800 text-xs text-neutral-900 dark:text-white font-medium focus:ring-2 focus:ring-purple-500 focus:outline-hidden cursor-pointer"
                       >
@@ -1263,7 +1263,7 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
                 <input
                   type="text"
                   placeholder="Search customer name, phone number, or WhatsApp Message ID..."
-                  value={searchQuery}
+                  value={searchQuery || ''}
                   onChange={(e) => {
                     setSearchQuery(e.target.value);
                     setCurrentPage(1);

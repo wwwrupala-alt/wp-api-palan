@@ -1152,6 +1152,248 @@ export async function handleSendMessage(req: Request, res: Response) {
 }
 
 // Handler: Dispatch Campaign Broadcast via Meta Cloud API
+// Core Campaign Dispatch Engine (usable by immediate send and background scheduled cron)
+export async function executeCampaignDispatchCore(params: {
+  phoneNumberId: string;
+  template: any;
+  recipients: any[];
+  variableValues?: any;
+  customToken?: string;
+  campaignId?: string;
+  campaignName?: string;
+  organizationId: string;
+}) {
+  const {
+    phoneNumberId,
+    template,
+    recipients,
+    variableValues,
+    customToken,
+    campaignId,
+    campaignName,
+    organizationId,
+  } = params;
+
+  const config = getMetaConfig();
+  const token = customToken || config.systemToken;
+
+  if (!token) {
+    throw new Error('Meta system user access token is required to execute broadcast campaigns.');
+  }
+
+  let sentCount = 0;
+  let failedCount = 0;
+  const errors: Array<{ phone: string; error: string }> = [];
+  const dispatchedRecipients: CampaignRecipient[] = [];
+  const nowIso = new Date().toISOString();
+
+  // Pre-resolve header media (upload local image/video/document to Meta to obtain a valid Meta Media ID)
+  let resolvedHeaderMedia: { id?: string; link?: string; filename?: string } | null = null;
+  const headerComp = template.components?.find((c: any) => String(c.type || '').toUpperCase() === 'HEADER');
+  if (headerComp) {
+    const headerFormat = String(headerComp.format || '').toUpperCase();
+    if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerFormat)) {
+      const rawMedia =
+        variableValues?.header_media_url ||
+        variableValues?.media_url ||
+        recipients[0]?.variableValues?.header_media_url ||
+        recipients[0]?.variableValues?.media_url ||
+        headerComp.example?.header_handle?.[0];
+
+      if (rawMedia) {
+        resolvedHeaderMedia = await resolveMetaMediaObject(
+          rawMedia,
+          phoneNumberId,
+          token,
+          headerFormat.toLowerCase() as any,
+          config.graphVersion
+        );
+      }
+    }
+  }
+
+  // Send messages in batches adhering to Meta rate limits
+  for (const recipient of recipients) {
+    const cleanPhone = (recipient.phone || recipient).replace(/[^0-9]/g, '');
+    const recipientVariables = recipient.variableValues || variableValues || {};
+    const formattedComponents = formatTemplateComponentsForSending(
+      template.components,
+      recipientVariables,
+      resolvedHeaderMedia
+    );
+    const recipientId = recipient.id || `rec_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const customerName = recipient.name || 'Customer';
+
+    try {
+      const sendUrl = `https://graph.facebook.com/${config.graphVersion}/${phoneNumberId}/messages`;
+      const resMeta = await fetch(sendUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          recipient_type: 'individual',
+          to: cleanPhone,
+          type: 'template',
+          template: {
+            name: template.name,
+            language: { code: template.language || 'en_US' },
+            ...(formattedComponents.length > 0 ? { components: formattedComponents } : {}),
+          },
+        }),
+      });
+
+      const dataMeta = await resMeta.json();
+      if (resMeta.ok && !dataMeta.error) {
+        sentCount++;
+        const wamid = dataMeta.messages?.[0]?.id || `wamid_${Date.now()}_${cleanPhone}`;
+
+        const recItem: CampaignRecipient = {
+          id: recipientId,
+          campaignId: campaignId || '',
+          campaignName: campaignName || template.name,
+          organizationId: organizationId || '',
+          phoneNumber: `+${cleanPhone}`,
+          customerName,
+          whatsappMessageId: wamid,
+          currentStatus: 'sent',
+          sentAt: nowIso,
+          timeline: [
+            {
+              status: 'queued',
+              timestamp: nowIso,
+              description: 'Campaign message queued',
+            },
+            {
+              status: 'sent',
+              timestamp: nowIso,
+              description: 'Dispatched via Meta WhatsApp Cloud API',
+              details: `WAMID: ${wamid}`,
+            },
+          ],
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        };
+        dispatchedRecipients.push(recItem);
+
+        if (organizationId && campaignId) {
+          try {
+            // 1. Save recipient to campaign subcollection in Firestore
+            const recDocRef = doc(serverDb, `organizations/${organizationId}/campaigns/${campaignId}/recipients`, recipientId);
+            await setDoc(recDocRef, recItem, { merge: true });
+
+            // 2. Index in wamidTracker for instantaneous status webhook correlation
+            const trackerRef = doc(serverDb, 'wamidTracker', wamid);
+            await setDoc(
+              trackerRef,
+              {
+                wamid,
+                organizationId,
+                campaignId,
+                recipientId,
+                phoneNumber: cleanPhone,
+                customerName,
+                status: 'sent',
+                updatedAt: nowIso,
+              },
+              { merge: true }
+            );
+          } catch (saveErr) {
+            console.warn('[Broadcast] Error writing recipient/tracker to Firestore:', saveErr);
+          }
+        }
+      } else {
+        failedCount++;
+        const errorMsg = dataMeta.error?.message || 'Meta rejection';
+        errors.push({ phone: cleanPhone, error: errorMsg });
+
+        const failRec: CampaignRecipient = {
+          id: recipientId,
+          campaignId: campaignId || '',
+          campaignName: campaignName || template.name,
+          organizationId: organizationId || '',
+          phoneNumber: `+${cleanPhone}`,
+          customerName,
+          currentStatus: 'failed',
+          failedAt: nowIso,
+          failureReason: errorMsg,
+          failureCode: dataMeta.error?.code ? String(dataMeta.error.code) : undefined,
+          timeline: [
+            {
+              status: 'failed',
+              timestamp: nowIso,
+              description: `Failed to deliver: ${errorMsg}`,
+            },
+          ],
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        };
+        dispatchedRecipients.push(failRec);
+
+        if (organizationId && campaignId) {
+          try {
+            const recDocRef = doc(serverDb, `organizations/${organizationId}/campaigns/${campaignId}/recipients`, recipientId);
+            await setDoc(recDocRef, failRec, { merge: true });
+          } catch (saveErr) {
+            console.warn('[Broadcast] Error saving failed recipient to Firestore:', saveErr);
+          }
+        }
+      }
+    } catch (err) {
+      failedCount++;
+      const netError = err instanceof Error ? err.message : 'Network error';
+      errors.push({ phone: cleanPhone, error: netError });
+    }
+  }
+
+  if (campaignId) {
+    registerRecipients(campaignId, dispatchedRecipients, organizationId);
+  }
+
+  const campaignStats = {
+    sent: sentCount,
+    failed: failedCount,
+    delivered: 0,
+    read: 0,
+    replied: 0,
+    total: recipients.length,
+    queued: 0,
+    deliveryRate: 0,
+    readRate: 0,
+    failureRate: recipients.length > 0 ? Number(((failedCount / recipients.length) * 100).toFixed(1)) : 0,
+    replyRate: 0,
+  };
+
+  if (organizationId && campaignId) {
+    try {
+      const campDocRef = doc(serverDb, `organizations/${organizationId}/campaigns`, campaignId);
+      await updateDoc(campDocRef, {
+        status: 'completed',
+        completedAt: nowIso,
+        stats: campaignStats,
+        updatedAt: nowIso,
+      });
+    } catch (campErr) {
+      console.warn('[Broadcast] Error updating campaign stats:', campErr);
+    }
+  }
+
+  addWebhookLog({
+    event: 'Campaign Broadcast Completed',
+    origin: 'Broadcast Engine',
+    details: `Template: ${template.name} - Sent: ${sentCount}, Failed: ${failedCount}`,
+    status: failedCount > 0 ? 'warning' : 'success',
+  });
+
+  return {
+    stats: campaignStats,
+    recipients: dispatchedRecipients,
+    errors: errors.slice(0, 5),
+  };
+}
+
 export async function handleSendCampaign(req: Request, res: Response) {
   try {
     const {
@@ -1210,217 +1452,20 @@ export async function handleSendCampaign(req: Request, res: Response) {
       }
     }
 
-    let sentCount = 0;
-    let failedCount = 0;
-    const errors: Array<{ phone: string; error: string }> = [];
-    const dispatchedRecipients: CampaignRecipient[] = [];
-    const nowIso = new Date().toISOString();
-
-    // Pre-resolve header media (upload local image/video/document to Meta to obtain a valid Meta Media ID)
-    let resolvedHeaderMedia: { id?: string; link?: string; filename?: string } | null = null;
-    const headerComp = template.components?.find((c: any) => String(c.type || '').toUpperCase() === 'HEADER');
-    if (headerComp) {
-      const headerFormat = String(headerComp.format || '').toUpperCase();
-      if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerFormat)) {
-        const rawMedia =
-          variableValues?.header_media_url ||
-          variableValues?.media_url ||
-          recipients[0]?.variableValues?.header_media_url ||
-          recipients[0]?.variableValues?.media_url ||
-          headerComp.example?.header_handle?.[0];
-
-        if (rawMedia) {
-          resolvedHeaderMedia = await resolveMetaMediaObject(
-            rawMedia,
-            phoneNumberId,
-            token,
-            headerFormat.toLowerCase() as any,
-            config.graphVersion
-          );
-        }
-      }
-    }
-
-    // Send messages in batches adhering to Meta rate limits
-    for (const recipient of recipients) {
-      const cleanPhone = (recipient.phone || recipient).replace(/[^0-9]/g, '');
-      const recipientVariables = recipient.variableValues || variableValues || {};
-      const formattedComponents = formatTemplateComponentsForSending(
-        template.components,
-        recipientVariables,
-        resolvedHeaderMedia
-      );
-      const recipientId = recipient.id || `rec_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-      const customerName = recipient.name || 'Customer';
-
-      try {
-        const sendUrl = `https://graph.facebook.com/${config.graphVersion}/${phoneNumberId}/messages`;
-        const resMeta = await fetch(sendUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            messaging_product: 'whatsapp',
-            recipient_type: 'individual',
-            to: cleanPhone,
-            type: 'template',
-            template: {
-              name: template.name,
-              language: { code: template.language || 'en_US' },
-              ...(formattedComponents.length > 0 ? { components: formattedComponents } : {}),
-            },
-          }),
-        });
-
-        const dataMeta = await resMeta.json();
-        if (resMeta.ok && !dataMeta.error) {
-          sentCount++;
-          const wamid = dataMeta.messages?.[0]?.id || `wamid_${Date.now()}_${cleanPhone}`;
-
-          const recItem: CampaignRecipient = {
-            id: recipientId,
-            campaignId: campaignId || '',
-            campaignName: campaignName || template.name,
-            organizationId: organizationId || '',
-            phoneNumber: `+${cleanPhone}`,
-            customerName,
-            whatsappMessageId: wamid,
-            currentStatus: 'sent',
-            sentAt: nowIso,
-            timeline: [
-              {
-                status: 'queued',
-                timestamp: nowIso,
-                description: 'Campaign message queued',
-              },
-              {
-                status: 'sent',
-                timestamp: nowIso,
-                description: 'Dispatched via Meta WhatsApp Cloud API',
-                details: `WAMID: ${wamid}`,
-              },
-            ],
-            createdAt: nowIso,
-            updatedAt: nowIso,
-          };
-          dispatchedRecipients.push(recItem);
-
-          if (organizationId && campaignId) {
-            try {
-              // 1. Save recipient to campaign subcollection in Firestore
-              const recDocRef = doc(serverDb, `organizations/${organizationId}/campaigns/${campaignId}/recipients`, recipientId);
-              await setDoc(recDocRef, recItem, { merge: true });
-
-              // 2. Index in wamidTracker for instantaneous status webhook correlation
-              const trackerRef = doc(serverDb, 'wamidTracker', wamid);
-              await setDoc(
-                trackerRef,
-                {
-                  wamid,
-                  organizationId,
-                  campaignId,
-                  recipientId,
-                  phoneNumber: cleanPhone,
-                  customerName,
-                  status: 'sent',
-                  updatedAt: nowIso,
-                },
-                { merge: true }
-              );
-            } catch (saveErr) {
-              console.warn('[Broadcast] Error writing recipient/tracker to Firestore:', saveErr);
-            }
-          }
-        } else {
-          failedCount++;
-          const errorMsg = dataMeta.error?.message || 'Meta rejection';
-          errors.push({ phone: cleanPhone, error: errorMsg });
-
-          const failRec: CampaignRecipient = {
-            id: recipientId,
-            campaignId: campaignId || '',
-            campaignName: campaignName || template.name,
-            organizationId: organizationId || '',
-            phoneNumber: `+${cleanPhone}`,
-            customerName,
-            currentStatus: 'failed',
-            failedAt: nowIso,
-            failureReason: errorMsg,
-            failureCode: dataMeta.error?.code ? String(dataMeta.error.code) : undefined,
-            timeline: [
-              {
-                status: 'failed',
-                timestamp: nowIso,
-                description: `Failed to deliver: ${errorMsg}`,
-              },
-            ],
-            createdAt: nowIso,
-            updatedAt: nowIso,
-          };
-          dispatchedRecipients.push(failRec);
-
-          if (organizationId && campaignId) {
-            try {
-              const recDocRef = doc(serverDb, `organizations/${organizationId}/campaigns/${campaignId}/recipients`, recipientId);
-              await setDoc(recDocRef, failRec, { merge: true });
-            } catch (saveErr) {
-              console.warn('[Broadcast] Error saving failed recipient to Firestore:', saveErr);
-            }
-          }
-        }
-      } catch (err) {
-        failedCount++;
-        const netError = err instanceof Error ? err.message : 'Network error';
-        errors.push({ phone: cleanPhone, error: netError });
-      }
-    }
-
-    if (campaignId) {
-      registerRecipients(campaignId, dispatchedRecipients, organizationId);
-    }
-
-    const campaignStats = {
-      sent: sentCount,
-      failed: failedCount,
-      delivered: 0,
-      read: 0,
-      replied: 0,
-      total: recipients.length,
-      queued: 0,
-      deliveryRate: 0,
-      readRate: 0,
-      failureRate: recipients.length > 0 ? Number(((failedCount / recipients.length) * 100).toFixed(1)) : 0,
-      replyRate: 0,
-    };
-
-    if (organizationId && campaignId) {
-      try {
-        const campDocRef = doc(serverDb, `organizations/${organizationId}/campaigns`, campaignId);
-        await updateDoc(campDocRef, {
-          status: 'completed',
-          completedAt: nowIso,
-          stats: campaignStats,
-          updatedAt: nowIso,
-        });
-      } catch (campErr) {
-        console.warn('[Broadcast] Error updating campaign stats:', campErr);
-      }
-    }
-
-    addWebhookLog({
-      event: 'Campaign Broadcast Completed',
-      origin: 'Broadcast Engine',
-      details: `Template: ${template.name} - Sent: ${sentCount}, Failed: ${failedCount}`,
-      status: failedCount > 0 ? 'warning' : 'success',
+    const dispatchResult = await executeCampaignDispatchCore({
+      phoneNumberId,
+      template,
+      recipients,
+      variableValues,
+      customToken: token,
+      campaignId,
+      campaignName,
+      organizationId: orgId || organizationId,
     });
 
     return res.json({
       success: true,
-      stats: campaignStats,
-      recipients: dispatchedRecipients,
-      errors: errors.slice(0, 5),
+      ...dispatchResult,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Error executing broadcast campaign';

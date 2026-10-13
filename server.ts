@@ -4,6 +4,8 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { apiApp } from './src/server/apiApp.ts';
+import { startCampaignScheduler } from './src/server/campaignSchedulerService.ts';
+import { startDripScheduler } from './src/server/dripSchedulerService.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -15,6 +17,10 @@ async function startServer() {
 
   // 1. Mount API backend endpoints FIRST before any static or SPA fallback
   app.use(apiApp);
+
+  // 2. Initialize background schedulers for scheduled broadcasts & drip sequences
+  startCampaignScheduler();
+  startDripScheduler();
 
   if (isProduction && fs.existsSync(path.join(__dirname, 'dist'))) {
     // Production mode: serve static files from dist directory

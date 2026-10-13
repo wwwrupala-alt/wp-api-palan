@@ -436,7 +436,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onOpenLegal }) => {
         <div className="mt-5 text-center space-y-2">
           <div className="text-xs text-neutral-500 dark:text-neutral-400 flex items-center justify-center space-x-2">
             <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-            <span>Multi-tenant workspace isolation &amp; Cloud Firestore</span>
+            <span>Meta Official API WhatsApp Marketing</span>
           </div>
 
           <div className="flex items-center justify-center flex-wrap gap-x-2 gap-y-1 text-[11px] text-neutral-400 dark:text-neutral-500">

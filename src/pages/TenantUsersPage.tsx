@@ -28,6 +28,7 @@ import {
   HelpCircle,
   RefreshCw,
   Smartphone,
+  Bot,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useToast } from '../context/ToastContext.tsx';
@@ -60,6 +61,7 @@ export const TenantUsersPage: React.FC = () => {
     canBroadcast: true,
     canManageContacts: true,
     canTemplates: true,
+    canAutomations: true,
   });
   const [creatingUser, setCreatingUser] = useState(false);
 
@@ -80,6 +82,7 @@ export const TenantUsersPage: React.FC = () => {
     canBroadcast: true,
     canManageContacts: true,
     canTemplates: true,
+    canAutomations: true,
   });
   const [savingEdit, setSavingEdit] = useState(false);
 
@@ -240,6 +243,13 @@ export const TenantUsersPage: React.FC = () => {
       setNewUserPassword('User@12345');
       setNewUserValidityDays(30);
       setNewUserMaxWhatsApp(1);
+      setNewUserPermissions({
+        canChat: true,
+        canBroadcast: true,
+        canManageContacts: true,
+        canTemplates: true,
+        canAutomations: true,
+      });
       await loadTenantUsers();
     } catch (err: any) {
       toast.showError('Error', err.message);
@@ -673,6 +683,16 @@ export const TenantUsersPage: React.FC = () => {
                           >
                             Contacts
                           </span>
+                          <span
+                            title="Bot & Automations"
+                            className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                              u.canAccessAutomations !== false && perms.canAutomations !== false
+                                ? 'bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800'
+                                : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-400 line-through'
+                            }`}
+                          >
+                            Auto
+                          </span>
                         </div>
                       </td>
 
@@ -717,6 +737,7 @@ export const TenantUsersPage: React.FC = () => {
                                 canBroadcast: perms.canBroadcast !== false,
                                 canManageContacts: perms.canManageContacts !== false,
                                 canTemplates: perms.canTemplates !== false,
+                                canAutomations: u.canAccessAutomations !== false && perms.canAutomations !== false,
                               });
                             }}
                             title="Edit User & Extend Validity"
@@ -1057,6 +1078,24 @@ export const TenantUsersPage: React.FC = () => {
                       />
                       <span>Message Templates</span>
                     </label>
+
+                    <label className="flex items-center space-x-2 p-2 rounded-xl border border-neutral-200 dark:border-neutral-800 cursor-pointer col-span-2">
+                      <input
+                        type="checkbox"
+                        checked={newUserPermissions.canAutomations}
+                        onChange={(e) =>
+                          setNewUserPermissions({
+                            ...newUserPermissions,
+                            canAutomations: e.target.checked,
+                          })
+                        }
+                        className="rounded text-purple-600"
+                      />
+                      <div className="flex items-center space-x-1.5">
+                        <Bot className="w-3.5 h-3.5 text-purple-600" />
+                        <span className="font-semibold text-neutral-900 dark:text-white">Bot &amp; Automations</span>
+                      </div>
+                    </label>
                   </div>
                 </div>
 
@@ -1394,6 +1433,78 @@ export const TenantUsersPage: React.FC = () => {
                     <option value="active">ACTIVE</option>
                     <option value="suspended">SUSPENDED</option>
                   </select>
+                </div>
+
+                {/* Permissions & Feature Access */}
+                <div className="space-y-2 pt-2 border-t border-neutral-200 dark:border-neutral-800">
+                  <label className="font-semibold text-neutral-700 dark:text-neutral-300 block">
+                    Permissions &amp; Feature Access:
+                  </label>
+                  <div className="grid grid-cols-2 gap-2 text-[11px]">
+                    <label className="flex items-center space-x-2 p-2 rounded-xl border border-neutral-200 dark:border-neutral-800 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={editPermissions.canChat}
+                        onChange={(e) => setEditPermissions({ ...editPermissions, canChat: e.target.checked })}
+                        className="rounded text-emerald-600"
+                      />
+                      <span>Live Team Inbox</span>
+                    </label>
+
+                    <label className="flex items-center space-x-2 p-2 rounded-xl border border-neutral-200 dark:border-neutral-800 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={editPermissions.canBroadcast}
+                        onChange={(e) =>
+                          setEditPermissions({ ...editPermissions, canBroadcast: e.target.checked })
+                        }
+                        className="rounded text-emerald-600"
+                      />
+                      <span>Send Broadcasts</span>
+                    </label>
+
+                    <label className="flex items-center space-x-2 p-2 rounded-xl border border-neutral-200 dark:border-neutral-800 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={editPermissions.canManageContacts}
+                        onChange={(e) =>
+                          setEditPermissions({ ...editPermissions, canManageContacts: e.target.checked })
+                        }
+                        className="rounded text-emerald-600"
+                      />
+                      <span>Manage Contacts</span>
+                    </label>
+
+                    <label className="flex items-center space-x-2 p-2 rounded-xl border border-neutral-200 dark:border-neutral-800 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={editPermissions.canTemplates}
+                        onChange={(e) =>
+                          setEditPermissions({ ...editPermissions, canTemplates: e.target.checked })
+                        }
+                        className="rounded text-emerald-600"
+                      />
+                      <span>Message Templates</span>
+                    </label>
+
+                    <label className="flex items-center space-x-2 p-2 rounded-xl border border-neutral-200 dark:border-neutral-800 cursor-pointer col-span-2">
+                      <input
+                        type="checkbox"
+                        checked={editPermissions.canAutomations}
+                        onChange={(e) =>
+                          setEditPermissions({
+                            ...editPermissions,
+                            canAutomations: e.target.checked,
+                          })
+                        }
+                        className="rounded text-purple-600"
+                      />
+                      <div className="flex items-center space-x-1.5">
+                        <Bot className="w-3.5 h-3.5 text-purple-600" />
+                        <span className="font-semibold text-neutral-900 dark:text-white">Bot &amp; Automations</span>
+                      </div>
+                    </label>
+                  </div>
                 </div>
               </div>
 
