@@ -59,6 +59,10 @@ interface WhatsAppAccountsContextType {
     customToken?: string;
   }) => Promise<{ success: boolean; error?: string }>;
   syncAccountWithMeta: (account: WhatsAppAccount) => Promise<{ success: boolean; error?: string }>;
+  forceUnsubscribeOldApp: (params: {
+    wabaId: string;
+    customToken?: string;
+  }) => Promise<{ success: boolean; message?: string; error?: string; help?: string }>;
   disconnectAccount: (accountId: string) => Promise<void>;
   reconnectAccount: (accountId: string) => Promise<void>;
   deleteAccount: (accountId: string) => Promise<void>;
@@ -527,6 +531,43 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
     }
   };
 
+  const forceUnsubscribeOldApp = async (params: {
+    wabaId: string;
+    customToken?: string;
+  }): Promise<{ success: boolean; message?: string; error?: string; help?: string }> => {
+    try {
+      const effectiveOrgId = getEffectiveOrgId();
+      const res = await fetch('/api/meta/force-unsubscribe-old-app', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          wabaId: params.wabaId.trim(),
+          customToken: params.customToken?.trim(),
+          organizationId: effectiveOrgId,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        return {
+          success: false,
+          error: data.error || 'Failed to unsubscribe old provider from WABA.',
+          help: data.help,
+        };
+      }
+
+      return {
+        success: true,
+        message: data.message || 'Successfully unlinked old provider!',
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err?.message || 'Network error while unlinking old provider.',
+      };
+    }
+  };
+
   const disconnectAccount = async (accountId: string) => {
     const effectiveOrgId = getEffectiveOrgId();
     if (!effectiveOrgId) return;
@@ -580,6 +621,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
         testMetaCredentials,
         registerPhoneNumber,
         syncAccountWithMeta,
+        forceUnsubscribeOldApp,
         disconnectAccount,
         reconnectAccount,
         deleteAccount,

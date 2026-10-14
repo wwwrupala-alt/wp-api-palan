@@ -35,7 +35,14 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
   onClose,
   onSuccess,
 }) => {
-  const { accounts, metaStatus, connectViaEmbeddedSignup, connectManualAccount, testMetaCredentials } = useWhatsAppAccounts();
+  const {
+    accounts,
+    metaStatus,
+    connectViaEmbeddedSignup,
+    connectManualAccount,
+    testMetaCredentials,
+    forceUnsubscribeOldApp,
+  } = useWhatsAppAccounts();
   const { userProfile, organization } = useAuth();
   const toast = useToast();
 
@@ -47,10 +54,13 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
       10;
   const isLimitReached = !isMaster && accounts.length >= maxNumbersAllowed;
 
-  // Tab: 'direct' (Phone number / ID) or 'embedded' (Facebook SDK)
-  const [activeTab, setActiveTab] = useState<'direct' | 'embedded'>('direct');
+  // Tab: 'direct' (Phone number / ID), 'embedded' (Facebook SDK), or 'fix_wbbox' (Error #2655093 fixer)
+  const [activeTab, setActiveTab] = useState<'direct' | 'embedded' | 'fix_wbbox'>('direct');
   const [loading, setLoading] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [unlinking, setUnlinking] = useState(false);
+  const [unlinkSuccessMsg, setUnlinkSuccessMsg] = useState<string | null>(null);
+  const [unlinkHelpMsg, setUnlinkHelpMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [showToken, setShowToken] = useState(false);
@@ -183,6 +193,38 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
     }
   };
 
+  const handleUnlinkOldProvider = async () => {
+    if (!wabaId.trim()) {
+      const msg = 'Please enter your WABA ID (WhatsApp Business Account ID) to unlink the previous provider.';
+      setError(msg);
+      toast.showWarning('WABA ID Required', msg);
+      return;
+    }
+
+    setUnlinking(true);
+    setError(null);
+    setUnlinkSuccessMsg(null);
+    setUnlinkHelpMsg(null);
+
+    const res = await forceUnsubscribeOldApp({
+      wabaId: wabaId.trim(),
+      customToken: customToken.trim() || undefined,
+    });
+
+    setUnlinking(false);
+
+    if (res.success) {
+      setUnlinkSuccessMsg(res.message || 'Successfully unlinked previous partner/Wbbox subscription!');
+      toast.showSuccess('Old Provider Unlinked', res.message || 'Successfully unlinked old provider!');
+    } else {
+      setError(res.error || 'Failed to unlink old provider.');
+      if (res.help) {
+        setUnlinkHelpMsg(res.help);
+      }
+      toast.showError('Unlink Failed', res.error);
+    }
+  };
+
   const handleDirectConnect = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -280,6 +322,7 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
             onClick={() => {
               setActiveTab('embedded');
               setError(null);
+              setUnlinkSuccessMsg(null);
             }}
             className={`pb-3 px-3 text-xs sm:text-sm font-medium border-b-2 flex items-center space-x-2 transition-colors cursor-pointer ${
               activeTab === 'embedded'
@@ -288,7 +331,24 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
             }`}
           >
             <Facebook className="w-4 h-4" />
-            <span>Facebook Embedded Signup</span>
+            <span>Facebook Embedded Signup (V4)</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('fix_wbbox');
+              setError(null);
+              setUnlinkSuccessMsg(null);
+            }}
+            className={`pb-3 px-3 text-xs sm:text-sm font-medium border-b-2 flex items-center space-x-2 transition-colors cursor-pointer ${
+              activeTab === 'fix_wbbox'
+                ? 'border-amber-600 text-amber-600 dark:text-amber-400 dark:border-amber-400 font-semibold'
+                : 'border-transparent text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-300'
+            }`}
+          >
+            <AlertTriangle className="w-4 h-4 text-amber-500" />
+            <span>Fix #2655093 (Unlink Wbbox)</span>
           </button>
         </div>
 
@@ -512,12 +572,12 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
                 </button>
               </div>
             </form>
-          ) : (
+          ) : activeTab === 'embedded' ? (
             <div className="space-y-4">
               <div className="bg-neutral-50 dark:bg-neutral-800/40 rounded-2xl p-4 border border-neutral-200 dark:border-neutral-800 space-y-3">
                 <h4 className="text-xs font-semibold text-neutral-900 dark:text-white flex items-center space-x-2">
                   <Shield className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                  <span>Meta Embedded Signup (Facebook Login v22.0)</span>
+                  <span>Meta Embedded Signup (Facebook Login v22.0 &bull; V4 Ready)</span>
                 </h4>
                 <p className="text-xs text-neutral-600 dark:text-neutral-300 leading-relaxed">
                   Log in directly through Meta/Facebook to select your Meta Business Portfolio, create or choose a WhatsApp Business Account (WABA), and verify your business phone number automatically.
@@ -549,7 +609,7 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
                         )}
                       </div>
                       <p className="text-[11px] opacity-80 leading-normal">
-                        Keeps WhatsApp Business App working on mobile. Uses QR code scan &amp; <code className="bg-neutral-200 dark:bg-neutral-800 px-1 py-0.5 rounded text-[10px]">featureType: "whatsapp_business_app_onboarding"</code>.
+                        Keeps WhatsApp Business App working on mobile. Uses QR code scan &amp; <code className="bg-neutral-200 dark:bg-neutral-800 px-1 py-0.5 rounded text-[10px]">featureType: &quot;whatsapp_business_app_onboarding&quot;</code>.
                       </p>
                     </button>
 
@@ -604,12 +664,12 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
                       />
                     </div>
                     <div>
-                      sessionInfoVersion: <strong className="text-emerald-700 dark:text-emerald-400">"3"</strong>
+                      sessionInfoVersion: <strong className="text-emerald-700 dark:text-emerald-400">&quot;3&quot;</strong>
                     </div>
                     <div>
                       featureType:{' '}
                       <strong className="text-emerald-700 dark:text-emerald-400">
-                        {embeddedMode === 'coexistence' ? '"whatsapp_business_app_onboarding"' : 'none'}
+                        {embeddedMode === 'coexistence' ? '&quot;whatsapp_business_app_onboarding&quot;' : 'none'}
                       </strong>
                     </div>
                   </div>
@@ -666,6 +726,128 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
                   </>
                 )}
               </button>
+            </div>
+          ) : (
+            /* Fix Error #2655093 / Unlink Old Provider Tab */
+            <div className="space-y-4">
+              <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2 font-semibold text-amber-900 dark:text-amber-200 text-sm">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span>Unlink Old Provider / Fix Meta Error #2655093</span>
+                  </div>
+                  <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-amber-200/70 dark:bg-amber-900 text-amber-800 dark:text-amber-300">
+                    Naya Account Model Tool
+                  </span>
+                </div>
+                <p className="text-xs text-amber-800/90 dark:text-amber-300/90 leading-relaxed">
+                  Agar aapka WhatsApp number pehle kisi doosre provider (jaise <strong>Wbbox</strong> ya purane BSP) ke paas connect tha aur aapko Meta error <strong>#2655093</strong> <em>(&quot;Phone number is already associated with another WhatsApp Business Account&quot;)</em> mil raha hai, to Meta Graph API ko purani partner subscription <code>DELETE /subscribed_apps</code> call bhejna zaroori hai.
+                </p>
+                <p className="text-[11px] text-amber-800 dark:text-amber-300">
+                  Yeh tool aapke WABA ko purane provider se azaad kar dega taaki Meta ka Naya Account Model aapke number ko seamlessly convert kar sake.
+                </p>
+              </div>
+
+              {unlinkSuccessMsg && (
+                <div className="p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-xs space-y-2">
+                  <div className="flex items-center space-x-2 font-semibold">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    <span>Purana Provider Unlinked!</span>
+                  </div>
+                  <p className="leading-relaxed">{unlinkSuccessMsg}</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('direct');
+                      setUnlinkSuccessMsg(null);
+                    }}
+                    className="mt-1 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs flex items-center space-x-1.5 transition-colors cursor-pointer"
+                  >
+                    <span>Ab WhatsApp Account Connect Karein</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
+              {unlinkHelpMsg && (
+                <div className="p-3.5 rounded-2xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 text-blue-900 dark:text-blue-200 text-xs space-y-1">
+                  <p className="font-semibold flex items-center space-x-1.5">
+                    <HelpCircle className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Meta Business Suite Manual Step</span>
+                  </p>
+                  <p className="leading-relaxed">{unlinkHelpMsg}</p>
+                </div>
+              )}
+
+              <div className="space-y-3 bg-neutral-50 dark:bg-neutral-800/40 p-4 rounded-2xl border border-neutral-200 dark:border-neutral-800">
+                <div>
+                  <label className="block text-[11px] font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
+                    WhatsApp Business Account ID (WABA ID) <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={wabaId}
+                    onChange={(e) => setWabaId(e.target.value)}
+                    placeholder="e.g. 108394857291039"
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white font-mono text-xs focus:ring-2 focus:ring-amber-500 focus:outline-hidden"
+                  />
+                  <p className="text-[10px] text-neutral-500 mt-1">
+                    WABA ID aapke Meta Business Manager &gt; WhatsApp Accounts me dikhta hai.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
+                    System User Access Token <span className="text-neutral-400 font-normal">(Optional - Leave blank to use Admin Token)</span>
+                  </label>
+                  <input
+                    type="password"
+                    value={customToken}
+                    onChange={(e) => setCustomToken(e.target.value)}
+                    placeholder="EAAG... (Leave empty to use configured Meta Token)"
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white font-mono text-xs focus:ring-2 focus:ring-amber-500 focus:outline-hidden"
+                  />
+                </div>
+
+                <div className="pt-2">
+                  <button
+                    type="button"
+                    onClick={handleUnlinkOldProvider}
+                    disabled={unlinking || !wabaId.trim()}
+                    className="w-full py-3 px-4 rounded-xl bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-semibold flex items-center justify-center space-x-2 transition-colors cursor-pointer text-xs"
+                  >
+                    {unlinking ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Releasing Old Provider from Meta Graph API...</span>
+                      </>
+                    ) : (
+                      <>
+                        <AlertTriangle className="w-4 h-4" />
+                        <span>Force Unlink Old Provider (/subscribed_apps)</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* 3 Updates Quick Summary Card */}
+              <div className="p-3.5 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 space-y-2 text-[11px] text-neutral-600 dark:text-neutral-400">
+                <span className="font-semibold text-neutral-800 dark:text-neutral-200 block text-xs">
+                  📌 WhatsApp Meta 2026 Rules Summary:
+                </span>
+                <ul className="space-y-1 list-disc pl-4 leading-relaxed">
+                  <li>
+                    <strong>Naya Account Model:</strong> Meta aapka purana WABA delete nahi karega; same WABA ID convert hoti hai.
+                  </li>
+                  <li>
+                    <strong>Embedded Signup V4:</strong> V2 band ho chuka hai. Hamara system v22.0 SDK ke sath full V4 compliant hai.
+                  </li>
+                  <li>
+                    <strong>14-Day Coexistence Rule:</strong> Co-existence connect karne ke baad mobile me WhatsApp Business app ko har 14 din me 1 baar open zaroor karein taaki link auto-disconnect na ho.
+                  </li>
+                </ul>
+              </div>
             </div>
           )}
         </div>

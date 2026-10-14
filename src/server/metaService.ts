@@ -1570,7 +1570,13 @@ export async function handleTestConnection(req: Request, res: Response) {
           diagnostics.qualityRating = phoneData.quality_rating || 'UNKNOWN';
           diagnostics.codeVerificationStatus = phoneData.code_verification_status || 'NOT_VERIFIED';
         } else {
-          diagnostics.errors.push(`Phone Number: ${phoneData.error?.message || 'Invalid Phone Number ID'}`);
+          const errCode = phoneData.error?.error_subcode || phoneData.error?.code;
+          const errMsg = phoneData.error?.message || 'Invalid Phone Number ID';
+          if (errCode === 2655093 || errMsg.includes('2655093') || errMsg.toLowerCase().includes('already registered')) {
+            diagnostics.errors.push(`[Meta Error #2655093]: Number is still attached to previous provider (Wbbox). Click "Fix Error #2655093 / Unlink Old Provider" to release it.`);
+          } else {
+            diagnostics.errors.push(`Phone Number: ${errMsg}`);
+          }
         }
       } catch (err) {
         diagnostics.errors.push(`Phone check error: ${err instanceof Error ? err.message : 'Network error'}`);
@@ -1589,7 +1595,8 @@ export async function handleTestConnection(req: Request, res: Response) {
           diagnostics.wabaValid = true;
           diagnostics.wabaName = wabaData.name || '';
         } else {
-          diagnostics.errors.push(`WABA ID: ${wabaData.error?.message || 'Invalid WABA ID'}`);
+          const errMsg = wabaData.error?.message || 'Invalid WABA ID';
+          diagnostics.errors.push(`WABA ID: ${errMsg}`);
         }
       } catch (err) {
         diagnostics.errors.push(`WABA check error: ${err instanceof Error ? err.message : 'Network error'}`);
@@ -1604,6 +1611,84 @@ export async function handleTestConnection(req: Request, res: Response) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to test connection with Meta';
+    return res.status(500).json({ success: false, error: message });
+  }
+}
+
+// Handler: Force Unsubscribe Old App / Fix Error #2655093 (DELETE /{wabaId}/subscribed_apps)
+export async function handleForceUnsubscribeOldApp(req: Request, res: Response) {
+  try {
+    const { wabaId, customToken, organizationId } = req.body;
+    if (!wabaId || typeof wabaId !== 'string' || !wabaId.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: 'WABA ID (WhatsApp Business Account ID) is required to release old provider.',
+      });
+    }
+
+    const cleanWabaId = wabaId.trim();
+    const config = await getEffectiveMetaConfig(organizationId);
+    const token = (customToken || config.systemToken).trim();
+
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        error: 'A valid System User Access Token or Meta Token is required to unlink the old provider from Graph API.',
+      });
+    }
+
+    const url = `https://graph.facebook.com/${config.graphVersion}/${encodeURIComponent(cleanWabaId)}/subscribed_apps`;
+
+    // 1. DELETE /subscribed_apps removes previous partner hooks (Wbbox, etc.)
+    const delRes = await fetch(url, {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const delData = await delRes.json().catch(() => ({}));
+
+    if (!delRes.ok) {
+      const errMsg = delData?.error?.message || 'Meta Graph API returned an error while releasing the WABA.';
+      const isSubcode2655093 =
+        delData?.error?.error_subcode === 2655093 ||
+        delData?.error?.code === 2655093 ||
+        errMsg.includes('2655093');
+
+      addWebhookLog({
+        event: 'Unsubscribe Old App Failed',
+        origin: 'Meta Cloud API /subscribed_apps',
+        details: `WABA ${cleanWabaId}: ${errMsg}`,
+        status: 'error',
+        rawPayload: delData,
+      });
+
+      return res.status(delRes.status >= 400 && delRes.status < 500 ? 400 : 500).json({
+        success: false,
+        error: errMsg,
+        isSubcode2655093,
+        details: delData?.error,
+        help: 'If Meta rejects DELETE subscribed_apps, please log in to Meta Business Suite > Settings > WhatsApp Accounts > Partners and remove the previous provider.',
+      });
+    }
+
+    addWebhookLog({
+      event: 'Unsubscribed Old App (Error #2655093 Fix)',
+      origin: 'Meta Cloud API /subscribed_apps',
+      details: `Successfully cleared subscribed_apps for WABA ${cleanWabaId}. Old partner link unlinked!`,
+      status: 'success',
+      rawPayload: delData,
+    });
+
+    return res.json({
+      success: true,
+      message: `Successfully unlinked previous partner/Wbbox subscription from WABA ${cleanWabaId}! The account is now free for new connection.`,
+      wabaId: cleanWabaId,
+      result: delData,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to release old app subscription';
     return res.status(500).json({ success: false, error: message });
   }
 }
@@ -2426,7 +2511,7 @@ export function handleWebhookPost(req: Request, res: Response) {
     }
 
     // 3. Handle official Meta Template Status Updates (APPROVED, REJECTED, PAUSED)
-    if (field === 'message_template_status_update' || value.event) {
+    if (field === 'message_template_status_update' || (value.event && !value.event.startsWith('ACCOUNT_') && !value.event.startsWith('PARTNER_'))) {
       const tplEvent = value.event || 'UPDATED';
       const tplName = value.message_template_name || value.template_name || 'Template';
       const reason = value.reason ? ` - Reason: ${value.reason}` : '';
@@ -2438,6 +2523,65 @@ export function handleWebhookPost(req: Request, res: Response) {
         status: tplEvent === 'APPROVED' ? 'success' : tplEvent === 'REJECTED' ? 'error' : 'warning',
         rawPayload: value,
       });
+    }
+
+    // 4. Handle Meta Account Updates & Coexistence Lifecycle (ACCOUNT_OFFBOARDED, ACCOUNT_RECONNECTED, PARTNER_ADDED, PARTNER_REMOVED)
+    if (
+      field === 'account_update' ||
+      value.account_update ||
+      value.event === 'ACCOUNT_OFFBOARDED' ||
+      value.event === 'ACCOUNT_RECONNECTED' ||
+      value.event === 'PARTNER_ADDED' ||
+      value.event === 'PARTNER_REMOVED' ||
+      field === 'phone_number_name_update' ||
+      field === 'phone_number_quality_update'
+    ) {
+      const eventType = value.event || value.account_update?.event || (field ? field.toUpperCase() : 'ACCOUNT_UPDATE');
+      const phoneOrWaba = value.phone_number || value.phone_number_id || value.waba_id || 'WhatsApp Account';
+      const isOffboarded = eventType === 'ACCOUNT_OFFBOARDED';
+      const isReconnected = eventType === 'ACCOUNT_RECONNECTED';
+      const partnerDetail = value.partner_name || value.partner_id ? ` (Partner: ${value.partner_name || value.partner_id})` : '';
+
+      addWebhookLog({
+        event: `Meta Account: ${eventType}`,
+        origin: 'WhatsApp Coexistence / Account Update',
+        details: `${phoneOrWaba} - Event: ${eventType}${partnerDetail}. ${
+          isOffboarded
+            ? 'Account disconnected (check 14-day WhatsApp mobile app inactivity or partner change).'
+            : isReconnected
+            ? 'Account re-connected successfully.'
+            : ''
+        }`,
+        status: isOffboarded ? 'warning' : 'success',
+        rawPayload: value,
+      });
+
+      // Update Firestore if account phone number is known
+      const phoneIdToUpdate = value.phone_number_id || (value.phone_number ? String(value.phone_number).replace(/[^0-9]/g, '') : null);
+      if (phoneIdToUpdate) {
+        (async () => {
+          try {
+            const orgsSnap = await getDocs(collection(serverDb, 'organizations'));
+            for (const orgDoc of orgsSnap.docs) {
+              const accRef = doc(serverDb, 'organizations', orgDoc.id, 'whatsappAccounts', phoneIdToUpdate);
+              const accSnap = await getDoc(accRef);
+              if (accSnap.exists()) {
+                await updateDoc(accRef, {
+                  connectionStatus: isOffboarded ? 'disconnected' : isReconnected ? 'connected' : accSnap.data().connectionStatus,
+                  lastAccountUpdateEvent: eventType,
+                  lastAccountUpdateAt: new Date().toISOString(),
+                  coexistenceNote: isOffboarded
+                    ? 'Disconnected by Meta. If using Coexistence mode, please open WhatsApp Business on your mobile phone to refresh.'
+                    : undefined,
+                });
+                break;
+              }
+            }
+          } catch (updateErr) {
+            console.warn('[Webhook] Failed to auto-update Firestore account on account_update event:', updateErr);
+          }
+        })();
+      }
     }
   }
 
