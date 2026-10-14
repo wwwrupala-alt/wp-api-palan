@@ -18,6 +18,12 @@ import {
   EyeOff,
   Activity,
   ShieldCheck,
+  RefreshCw,
+  ArrowRightLeft,
+  Lock,
+  Layers,
+  Send,
+  Check,
 } from 'lucide-react';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
 import { useAuth } from '../context/AuthContext.tsx';
@@ -39,9 +45,10 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
     accounts,
     metaStatus,
     connectViaEmbeddedSignup,
+    checkWabaMigration,
+    triggerWabaMigration,
     connectManualAccount,
     testMetaCredentials,
-    forceUnsubscribeOldApp,
   } = useWhatsAppAccounts();
   const { userProfile, organization } = useAuth();
   const toast = useToast();
@@ -54,19 +61,18 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
       10;
   const isLimitReached = !isMaster && accounts.length >= maxNumbersAllowed;
 
-  // Tab: 'direct' (Phone number / ID), 'embedded' (Facebook SDK), or 'fix_wbbox' (Error #2655093 fixer)
-  const [activeTab, setActiveTab] = useState<'direct' | 'embedded' | 'fix_wbbox'>('direct');
+  // Active Tab: 'embedded' (Meta V4), 'migration' (Existing WABA Migration), or 'direct' (Manual)
+  const [activeTab, setActiveTab] = useState<'embedded' | 'migration' | 'direct'>('embedded');
   const [loading, setLoading] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [unlinking, setUnlinking] = useState(false);
-  const [unlinkSuccessMsg, setUnlinkSuccessMsg] = useState<string | null>(null);
-  const [unlinkHelpMsg, setUnlinkHelpMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [showToken, setShowToken] = useState(false);
-  const [embeddedMode, setEmbeddedMode] = useState<'coexistence' | 'standard'>('coexistence');
 
-  // Direct connect fields - Real Meta details (always blank by default)
+  // Embedded Signup V4 flow mode: coexistence | standard | migration
+  const [embeddedMode, setEmbeddedMode] = useState<'coexistence' | 'standard' | 'migration'>('coexistence');
+
+  // Direct connect fields
   const [phoneNumberId, setPhoneNumberId] = useState('');
   const [wabaId, setWabaId] = useState('');
   const [customToken, setCustomToken] = useState('');
@@ -74,7 +80,31 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
   const [businessName, setBusinessName] = useState('');
   const [pin, setPin] = useState('');
 
-  // Reset form whenever modal opens so it is always clean & blank
+  // WABA Migration State
+  const [migrationWabaId, setMigrationWabaId] = useState('');
+  const [migrationPhoneId, setMigrationPhoneId] = useState('');
+  const [migrationToken, setMigrationToken] = useState('');
+  const [migrationPin, setMigrationPin] = useState('');
+  const [migrationOtpCode, setMigrationOtpCode] = useState('');
+  const [migrationCodeMethod, setMigrationCodeMethod] = useState<'SMS' | 'VOICE'>('SMS');
+  const [checkingMigration, setCheckingMigration] = useState(false);
+  const [triggeringMigration, setTriggeringMigration] = useState(false);
+  const [requestingOtp, setRequestingOtp] = useState(false);
+  const [verifyingOtp, setVerifyingOtp] = useState(false);
+  const [otpRequested, setOtpRequested] = useState(false);
+  const [otpVerified, setOtpVerified] = useState(false);
+
+  const [migrationCheckResult, setMigrationCheckResult] = useState<{
+    eligible?: boolean;
+    waba?: any;
+    phone?: any;
+    phoneNumbers?: any[];
+    migrationStatus?: string;
+    recommendation?: string;
+    metaGraphVersion?: string;
+  } | null>(null);
+
+  // Reset form state on modal open
   useEffect(() => {
     if (isOpen) {
       setPhoneNumberId('');
@@ -86,6 +116,16 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
       setError(null);
       setSuccess(null);
       setDiagnostics(null);
+
+      // Reset migration states
+      setMigrationWabaId('');
+      setMigrationPhoneId('');
+      setMigrationToken('');
+      setMigrationPin('');
+      setMigrationOtpCode('');
+      setMigrationCheckResult(null);
+      setOtpRequested(false);
+      setOtpVerified(false);
     }
   }, [isOpen]);
 
@@ -103,6 +143,279 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
 
   if (!isOpen) return null;
 
+  // 1. Meta Embedded Signup V4 Launch
+  const handleEmbeddedSignup = async () => {
+    setError(null);
+    setSuccess(null);
+
+    const hasAppId = Boolean(metaStatus?.appId && metaStatus.appId.trim() !== '');
+    const hasConfigId = Boolean(metaStatus?.configId && metaStatus.configId.trim() !== '');
+
+    if (isLimitReached) {
+      const msg = `Your plan allows ${maxNumbersAllowed} WhatsApp connection${maxNumbersAllowed > 1 ? 's' : ''}. Please upgrade your plan to add another connection.`;
+      setError(msg);
+      toast.showWarning('Limit Reached', msg);
+      return;
+    }
+
+    if (!hasAppId || !hasConfigId) {
+      const msg = 'Meta App ID ya Facebook Login Configuration ID set nahi hai. Kripya Admin Panel > Meta App Config me ja kar details save karein.';
+      setError(msg);
+      toast.showWarning('Meta App Configuration Missing', msg);
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      await connectViaEmbeddedSignup({
+        isCoexistence: embeddedMode === 'coexistence',
+        featureType:
+          embeddedMode === 'coexistence'
+            ? 'whatsapp_business_app_onboarding'
+            : embeddedMode === 'migration'
+            ? 'whatsapp_waba_migration'
+            : undefined,
+        sessionInfoVersion: '4', // Enforce Meta Embedded Signup V4 (15 Oct 2026 standard)
+        migrationMode: embeddedMode === 'migration',
+      });
+      setSuccess('WhatsApp Account successfully connected via Meta Embedded Signup V4!');
+      toast.showSuccess('WhatsApp Connected', 'Account successfully connected via Meta Embedded Signup V4 (15 Oct 2026 Compliant)!');
+      setTimeout(() => {
+        onSuccess?.();
+        onClose();
+      }, 1500);
+    } catch (err: any) {
+      const msg = err?.message || 'Meta Embedded Signup was closed or cancelled.';
+      setError(msg);
+      toast.showError('Meta Embedded Signup Failed', msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 2. Check Existing WABA Migration Eligibility
+  const handleCheckMigration = async () => {
+    const cleanPhone = migrationPhoneId.trim();
+    const cleanWaba = migrationWabaId.trim();
+
+    if (!cleanPhone && !cleanWaba) {
+      const msg = 'Please enter either an existing WABA ID or Phone Number ID to check migration.';
+      setError(msg);
+      toast.showWarning('Identifier Required', msg);
+      return;
+    }
+
+    setCheckingMigration(true);
+    setError(null);
+    setMigrationCheckResult(null);
+
+    try {
+      const res = await checkWabaMigration({
+        wabaId: cleanWaba || undefined,
+        phoneNumberId: cleanPhone || undefined,
+        customToken: migrationToken.trim() || undefined,
+      });
+
+      if (res.success && res.eligible) {
+        setMigrationCheckResult(res);
+        toast.showSuccess(
+          'Migration Assessment Ready',
+          res.recommendation || 'Existing WABA & Phone verified on Meta Graph API.'
+        );
+      } else {
+        const errorText = res.error || 'Could not verify existing WABA on Meta.';
+        setError(errorText);
+        toast.showError('Migration Check Failed', errorText);
+      }
+    } catch (err: any) {
+      const errorText = err?.message || 'Error communicating with Meta migration service.';
+      setError(errorText);
+      toast.showError('Migration Check Error', errorText);
+    } finally {
+      setCheckingMigration(false);
+    }
+  };
+
+  // 3. Request OTP for Migration (if unverified phone)
+  const handleRequestMigrationOtp = async (method: 'SMS' | 'VOICE') => {
+    const cleanPhone = (migrationCheckResult?.phone?.id || migrationPhoneId).trim();
+    if (!cleanPhone) {
+      toast.showWarning('Phone ID Required', 'Please enter a valid Phone Number ID.');
+      return;
+    }
+
+    setRequestingOtp(true);
+    setMigrationCodeMethod(method);
+    setError(null);
+
+    try {
+      const res = await triggerWabaMigration({
+        wabaId: migrationWabaId.trim(),
+        phoneNumberId: cleanPhone,
+        action: 'request_code',
+        codeMethod: method,
+        customToken: migrationToken.trim() || undefined,
+      });
+
+      if (res.success) {
+        setOtpRequested(true);
+        toast.showSuccess(
+          'Verification Code Dispatched',
+          res.message || `Meta has dispatched a verification code via ${method}.`
+        );
+      } else {
+        setError(res.error || 'Failed to request OTP code.');
+        toast.showError('OTP Request Failed', res.error);
+      }
+    } catch (err: any) {
+      setError(err?.message || 'Error requesting verification OTP.');
+    } finally {
+      setRequestingOtp(false);
+    }
+  };
+
+  // 4. Verify OTP Code
+  const handleVerifyMigrationOtp = async () => {
+    if (!migrationOtpCode.trim()) {
+      toast.showWarning('Code Required', 'Please enter the verification code received on your phone.');
+      return;
+    }
+
+    const cleanPhone = (migrationCheckResult?.phone?.id || migrationPhoneId).trim();
+    setVerifyingOtp(true);
+    setError(null);
+
+    try {
+      const res = await triggerWabaMigration({
+        wabaId: migrationWabaId.trim(),
+        phoneNumberId: cleanPhone,
+        action: 'verify_code',
+        otpCode: migrationOtpCode.trim(),
+        customToken: migrationToken.trim() || undefined,
+      });
+
+      if (res.success) {
+        setOtpVerified(true);
+        toast.showSuccess('Phone Verified', 'Phone number code verified on Meta! Now finalize with PIN.');
+      } else {
+        setError(res.error || 'Failed to verify OTP code.');
+        toast.showError('Verification Failed', res.error);
+      }
+    } catch (err: any) {
+      setError(err?.message || 'Error verifying OTP code.');
+    } finally {
+      setVerifyingOtp(false);
+    }
+  };
+
+  // 5. Trigger Final WABA & Phone Migration (Register PIN + Subscribed Apps + Save Account)
+  const handleTriggerFinalMigration = async () => {
+    if (isLimitReached) {
+      const msg = `Your plan allows ${maxNumbersAllowed} WhatsApp connection${maxNumbersAllowed > 1 ? 's' : ''}. Please upgrade your plan.`;
+      setError(msg);
+      toast.showWarning('Limit Reached', msg);
+      return;
+    }
+
+    const cleanPhone = (migrationCheckResult?.phone?.id || migrationPhoneId).trim();
+    const cleanWaba = (migrationCheckResult?.waba?.id || migrationWabaId).trim();
+
+    if (!cleanPhone) {
+      const msg = 'Phone Number ID is required to execute migration.';
+      setError(msg);
+      toast.showWarning('Phone ID Required', msg);
+      return;
+    }
+
+    setTriggeringMigration(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const res = await triggerWabaMigration({
+        wabaId: cleanWaba,
+        phoneNumberId: cleanPhone,
+        pin: migrationPin.trim() || '123456',
+        action: 'register_and_migrate',
+        customToken: migrationToken.trim() || undefined,
+      });
+
+      if (res.success && res.migrated) {
+        const msg = `WABA ${cleanWaba || 'Account'} and WhatsApp Phone ${cleanPhone} successfully migrated to CloudWABA Platform!`;
+        setSuccess(msg);
+        toast.showSuccess('Migration Successful', msg);
+        setTimeout(() => {
+          onSuccess?.();
+          onClose();
+        }, 1500);
+      } else {
+        let errorText = res.error || 'Failed to complete WABA migration with Meta.';
+        if (errorText.toLowerCase().includes('smb')) {
+          errorText = 'Meta Rule: "Register endpoint is not available for SMB businesses". Yeh account SMB category me hai. Kripya upar pehle tab "Embedded Signup V4" par click karke connect karein!';
+        }
+        setError(errorText);
+        toast.showError('Migration Notice', errorText);
+      }
+    } catch (err: any) {
+      const errorText = err?.message || 'Error executing WABA migration.';
+      setError(errorText);
+      toast.showError('Migration Error', errorText);
+    } finally {
+      setTriggeringMigration(false);
+    }
+  };
+
+  // 6. Direct Connect Form Handler
+  const handleDirectConnect = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (isLimitReached) {
+      const msg = `Your plan allows ${maxNumbersAllowed} WhatsApp connection${maxNumbersAllowed > 1 ? 's' : ''}. Please upgrade your plan.`;
+      setError(msg);
+      toast.showWarning('Limit Reached', msg);
+      return;
+    }
+
+    const cleanPhoneId = phoneNumberId.trim() || displayPhone.replace(/[^0-9]/g, '');
+    if (!cleanPhoneId) {
+      const msg = 'Please enter a valid Phone Number ID or WhatsApp Mobile Number.';
+      setError(msg);
+      toast.showWarning('Missing WhatsApp Number', msg);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setSuccess(null);
+
+    const result = await connectManualAccount({
+      phoneNumberId: cleanPhoneId,
+      displayPhoneNumber: displayPhone.trim() || cleanPhoneId,
+      verifiedName: businessName.trim() || 'WhatsApp Business',
+      wabaId: wabaId.trim() || undefined,
+      customToken: customToken.trim() || undefined,
+      pin: pin.trim() || undefined,
+    });
+
+    if (result.success) {
+      setSuccess('WhatsApp Account verified & successfully connected to your workspace!');
+      toast.showSuccess(
+        'WhatsApp Account Connected',
+        `${businessName || 'WhatsApp'} is now ready for messaging and broadcast campaigns.`
+      );
+      setTimeout(() => {
+        onSuccess?.();
+        onClose();
+      }, 1200);
+    } else {
+      setError(result.error || 'Failed to connect WhatsApp account.');
+      toast.showError('Failed to Connect WhatsApp Account', result.error);
+    }
+    setLoading(false);
+  };
+
+  // 7. Test Direct Meta Credentials
   const handleTestMetaConnection = async () => {
     if (!customToken.trim()) {
       const msg = 'Please provide a System User Access Token to test live connection with Meta.';
@@ -150,129 +463,6 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
     }
   };
 
-  const handleEmbeddedSignup = async () => {
-    setError(null);
-    setSuccess(null);
-
-    const hasAppId = Boolean(metaStatus?.appId && metaStatus.appId.trim() !== '');
-    const hasConfigId = Boolean(metaStatus?.configId && metaStatus.configId.trim() !== '');
-
-    if (isLimitReached) {
-      const msg = `Your plan allows ${maxNumbersAllowed} WhatsApp connection${maxNumbersAllowed > 1 ? 's' : ''}. Please upgrade your plan to add another connection.`;
-      setError(msg);
-      toast.showWarning('Limit Reached', msg);
-      return;
-    }
-
-    if (!hasAppId || !hasConfigId) {
-      const msg = 'Meta App ID ya Facebook Login Configuration ID set nahi hai. Kripya Admin Panel > Meta App Config me ja kar apni details save karein.';
-      setError(msg);
-      toast.showWarning('Meta App Configuration Missing', msg);
-      return;
-    }
-
-    setLoading(true);
-
-    try {
-      await connectViaEmbeddedSignup({
-        isCoexistence: embeddedMode === 'coexistence',
-        featureType: embeddedMode === 'coexistence' ? 'whatsapp_business_app_onboarding' : undefined,
-      });
-      setSuccess('WhatsApp Account successfully connected via Meta Embedded Signup!');
-      toast.showSuccess('WhatsApp Connected', 'Account successfully connected via Meta Embedded Signup!');
-      setTimeout(() => {
-        onSuccess?.();
-        onClose();
-      }, 1500);
-    } catch (err: any) {
-      const msg = err?.message || 'Meta Embedded Signup was closed or cancelled.';
-      setError(msg);
-      toast.showError('Meta Embedded Signup Failed', msg);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleUnlinkOldProvider = async () => {
-    if (!wabaId.trim()) {
-      const msg = 'Please enter your WABA ID (WhatsApp Business Account ID) to unlink the previous provider.';
-      setError(msg);
-      toast.showWarning('WABA ID Required', msg);
-      return;
-    }
-
-    setUnlinking(true);
-    setError(null);
-    setUnlinkSuccessMsg(null);
-    setUnlinkHelpMsg(null);
-
-    const res = await forceUnsubscribeOldApp({
-      wabaId: wabaId.trim(),
-      customToken: customToken.trim() || undefined,
-    });
-
-    setUnlinking(false);
-
-    if (res.success) {
-      setUnlinkSuccessMsg(res.message || 'Successfully unlinked previous partner/Wbbox subscription!');
-      toast.showSuccess('Old Provider Unlinked', res.message || 'Successfully unlinked old provider!');
-    } else {
-      setError(res.error || 'Failed to unlink old provider.');
-      if (res.help) {
-        setUnlinkHelpMsg(res.help);
-      }
-      toast.showError('Unlink Failed', res.error);
-    }
-  };
-
-  const handleDirectConnect = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    if (isLimitReached) {
-      const msg = `Your plan allows ${maxNumbersAllowed} WhatsApp connection${maxNumbersAllowed > 1 ? 's' : ''}. Please upgrade your plan to add another connection.`;
-      setError(msg);
-      toast.showWarning('Limit Reached', msg);
-      return;
-    }
-
-    const cleanPhoneId = phoneNumberId.trim() || displayPhone.replace(/[^0-9]/g, '');
-    if (!cleanPhoneId) {
-      const msg = 'Please enter a valid Phone Number ID or WhatsApp Mobile Number.';
-      setError(msg);
-      toast.showWarning('Missing WhatsApp Number', msg);
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-    setSuccess(null);
-
-    const result = await connectManualAccount({
-      phoneNumberId: cleanPhoneId,
-      displayPhoneNumber: displayPhone.trim() || cleanPhoneId,
-      verifiedName: businessName.trim() || 'WhatsApp Business',
-      wabaId: wabaId.trim() || undefined,
-      customToken: customToken.trim() || undefined,
-      pin: pin.trim() || undefined,
-    });
-
-    if (result.success) {
-      setSuccess('WhatsApp Account verified & successfully connected to your workspace!');
-      toast.showSuccess(
-        'WhatsApp Account Connected',
-        `${businessName || 'WhatsApp'} is now ready for messaging and broadcast campaigns.`
-      );
-      setTimeout(() => {
-        onSuccess?.();
-        onClose();
-      }, 1200);
-    } else {
-      setError(result.error || 'Failed to connect WhatsApp account.');
-      toast.showError('Failed to Connect WhatsApp Account', result.error);
-    }
-    setLoading(false);
-  };
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-xs animate-fadeIn">
       <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
@@ -283,11 +473,16 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
               <Smartphone className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-base sm:text-lg font-bold text-neutral-900 dark:text-white">
-                Connect Real WhatsApp Business Account
-              </h2>
+              <div className="flex items-center space-x-2">
+                <h2 className="text-base sm:text-lg font-bold text-neutral-900 dark:text-white">
+                  Connect WhatsApp Business Account
+                </h2>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
+                  V4 Oct 2026 Ready
+                </span>
+              </div>
               <p className="text-xs text-neutral-500 dark:text-neutral-400">
-                Official Meta WhatsApp Cloud API &bull; Coexistence Mode &bull; Paid Marketing Engine
+                Official Meta Cloud API v22.0 &bull; Embedded Signup V4 &bull; WABA Migration Engine
               </p>
             </div>
           </div>
@@ -299,61 +494,66 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
           </button>
         </div>
 
-        {/* Tab selection */}
-        <div className="flex border-b border-neutral-200 dark:border-neutral-800 px-6 pt-2 bg-neutral-50/40 dark:bg-neutral-900/40">
-          <button
-            type="button"
-            onClick={() => {
-              setActiveTab('direct');
-              setError(null);
-            }}
-            className={`pb-3 px-3 text-xs sm:text-sm font-medium border-b-2 flex items-center space-x-2 transition-colors cursor-pointer ${
-              activeTab === 'direct'
-                ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400 dark:border-emerald-400 font-semibold'
-                : 'border-transparent text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-300'
-            }`}
-          >
-            <Key className="w-4 h-4" />
-            <span>Real Meta API Credentials (Recommended)</span>
-          </button>
-
+        {/* Tab selection: 3 Tabs (Embedded V4, WABA Migration, Direct Credentials) */}
+        <div className="flex border-b border-neutral-200 dark:border-neutral-800 px-6 pt-2 bg-neutral-50/40 dark:bg-neutral-900/40 overflow-x-auto">
           <button
             type="button"
             onClick={() => {
               setActiveTab('embedded');
               setError(null);
-              setUnlinkSuccessMsg(null);
             }}
-            className={`pb-3 px-3 text-xs sm:text-sm font-medium border-b-2 flex items-center space-x-2 transition-colors cursor-pointer ${
+            className={`pb-3 px-3 text-xs sm:text-sm font-medium border-b-2 flex items-center space-x-2 whitespace-nowrap transition-colors cursor-pointer ${
               activeTab === 'embedded'
                 ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400 dark:border-emerald-400 font-semibold'
                 : 'border-transparent text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-300'
             }`}
           >
             <Facebook className="w-4 h-4" />
-            <span>Facebook Embedded Signup (V4)</span>
+            <span>Embedded Signup V4</span>
+            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-emerald-500/10 text-emerald-600 font-bold border border-emerald-500/20">
+              New Standard
+            </span>
           </button>
 
           <button
             type="button"
             onClick={() => {
-              setActiveTab('fix_wbbox');
+              setActiveTab('migration');
               setError(null);
-              setUnlinkSuccessMsg(null);
             }}
-            className={`pb-3 px-3 text-xs sm:text-sm font-medium border-b-2 flex items-center space-x-2 transition-colors cursor-pointer ${
-              activeTab === 'fix_wbbox'
-                ? 'border-amber-600 text-amber-600 dark:text-amber-400 dark:border-amber-400 font-semibold'
+            className={`pb-3 px-3 text-xs sm:text-sm font-medium border-b-2 flex items-center space-x-2 whitespace-nowrap transition-colors cursor-pointer ${
+              activeTab === 'migration'
+                ? 'border-purple-600 text-purple-600 dark:text-purple-400 dark:border-purple-400 font-semibold'
                 : 'border-transparent text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-300'
             }`}
           >
-            <AlertTriangle className="w-4 h-4 text-amber-500" />
-            <span>Fix #2655093 (Unlink Wbbox)</span>
+            <ArrowRightLeft className="w-4 h-4" />
+            <span>WABA Migration</span>
+            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-purple-500/10 text-purple-600 font-bold border border-purple-500/20">
+              Migrate BSP
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('direct');
+              setError(null);
+            }}
+            className={`pb-3 px-3 text-xs sm:text-sm font-medium border-b-2 flex items-center space-x-2 whitespace-nowrap transition-colors cursor-pointer ${
+              activeTab === 'direct'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400 dark:border-blue-400 font-semibold'
+                : 'border-transparent text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-300'
+            }`}
+          >
+            <Key className="w-4 h-4" />
+            <span>Direct Credentials</span>
           </button>
         </div>
 
-        {/* Body */}
+        {/* Body Content */}
         <div className="p-6 overflow-y-auto space-y-5 text-xs">
+          {/* Plan limit warning */}
           {isLimitReached && (
             <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 flex items-start space-x-3 text-amber-900 dark:text-amber-200 text-xs">
               <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
@@ -383,15 +583,422 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
             </div>
           )}
 
-          {activeTab === 'direct' ? (
-            <form onSubmit={handleDirectConnect} className="space-y-4">
-              <div className="p-3.5 rounded-2xl bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200/60 dark:border-emerald-800/40 space-y-1">
-                <p className="font-semibold text-emerald-900 dark:text-emerald-300 flex items-center space-x-1.5">
-                  <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                  <span>Real Meta WhatsApp Cloud API Details</span>
+          {/* TAB 1: EMBEDDED SIGNUP V4 */}
+          {activeTab === 'embedded' && (
+            <div className="space-y-4">
+              {/* Meta 15 Oct 2026 Compliance Banner */}
+              <div className="p-3.5 rounded-2xl bg-gradient-to-r from-emerald-50 to-teal-50 dark:from-emerald-950/30 dark:to-teal-950/30 border border-emerald-200/80 dark:border-emerald-800/50 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+                    <span className="font-bold text-xs text-emerald-900 dark:text-emerald-200">
+                      Meta Embedded Signup V4 Standard (15 Oct 2026 Mandate)
+                    </span>
+                  </div>
+                  <span className="text-[10px] bg-emerald-600 text-white font-mono px-2 py-0.5 rounded-full font-bold">
+                    sessionInfoVersion: "4"
+                  </span>
+                </div>
+                <p className="text-[11px] text-emerald-800 dark:text-emerald-300 leading-relaxed">
+                  Meta has scheduled the complete deprecation of Embedded Signup v2 and v3 for <strong>October 15, 2026</strong>. This platform is upgraded to <strong>Embedded Signup V4</strong> with Unified Onboarding, Phone-First verification, and automated WABA migration support.
                 </p>
-                <p className="text-[11px] text-emerald-800 dark:text-emerald-300/90 leading-relaxed">
-                  Yeh details Meta Developer Portal se milti hain. Inhe daal kar aap direct real marketing broadcasts aur live messages bhej sakte hain.
+              </div>
+
+              {/* Onboarding Mode Selection */}
+              <div className="space-y-2">
+                <label className="block text-xs font-semibold text-neutral-700 dark:text-neutral-300">
+                  Select Onboarding Architecture:
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setEmbeddedMode('coexistence')}
+                    className={`p-3 rounded-2xl border text-left transition-all cursor-pointer ${
+                      embeddedMode === 'coexistence'
+                        ? 'border-emerald-500 bg-emerald-50/70 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 ring-2 ring-emerald-500/20'
+                        : 'border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 dark:hover:border-neutral-600 text-neutral-700 dark:text-neutral-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-bold text-xs flex items-center gap-1.5">
+                        📱 Coexistence Mode
+                      </span>
+                      {embeddedMode === 'coexistence' && (
+                        <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                      )}
+                    </div>
+                    <p className="text-[10px] opacity-80 leading-normal">
+                      Retains mobile WhatsApp Business App. Dual access with Cloud API.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setEmbeddedMode('standard')}
+                    className={`p-3 rounded-2xl border text-left transition-all cursor-pointer ${
+                      embeddedMode === 'standard'
+                        ? 'border-blue-500 bg-blue-50/70 dark:bg-blue-950/40 text-blue-900 dark:text-blue-200 ring-2 ring-blue-500/20'
+                        : 'border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 dark:hover:border-neutral-600 text-neutral-700 dark:text-neutral-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-bold text-xs flex items-center gap-1.5">
+                        ☁️ Standard Cloud API
+                      </span>
+                      {embeddedMode === 'standard' && (
+                        <Check className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                      )}
+                    </div>
+                    <p className="text-[10px] opacity-80 leading-normal">
+                      Dedicated or virtual business number with high-speed broadcasting.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setEmbeddedMode('migration')}
+                    className={`p-3 rounded-2xl border text-left transition-all cursor-pointer ${
+                      embeddedMode === 'migration'
+                        ? 'border-purple-500 bg-purple-50/70 dark:bg-purple-950/40 text-purple-900 dark:text-purple-200 ring-2 ring-purple-500/20'
+                        : 'border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 dark:hover:border-neutral-600 text-neutral-700 dark:text-neutral-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-bold text-xs flex items-center gap-1.5">
+                        🔄 Existing WABA
+                      </span>
+                      {embeddedMode === 'migration' && (
+                        <Check className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
+                      )}
+                    </div>
+                    <p className="text-[10px] opacity-80 leading-normal">
+                      Migrate existing WABA &amp; numbers via Meta V4 dialog.
+                    </p>
+                  </button>
+                </div>
+              </div>
+
+              {/* Configuration Status Inspection Box */}
+              {Boolean(metaStatus?.appId && metaStatus?.configId) ? (
+                <div className="p-3.5 rounded-2xl bg-neutral-50 dark:bg-neutral-800/40 border border-neutral-200 dark:border-neutral-700/60 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-xs text-neutral-800 dark:text-neutral-200 flex items-center space-x-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                      <span>Meta Embedded Signup V4 Active Parameters</span>
+                    </span>
+                    <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-950 px-2 py-0.5 rounded-full font-bold">
+                      Graph API v22.0
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 text-[11px] font-mono bg-white dark:bg-neutral-900/60 p-2.5 rounded-xl border border-neutral-200/60 dark:border-neutral-800">
+                    <div>
+                      <span className="text-neutral-500 font-sans block text-[10px]">Meta App ID:</span>
+                      <MaskedIdDisplay value={metaStatus?.appId} label="Meta App ID" digitsToShow={1} />
+                    </div>
+                    <div>
+                      <span className="text-neutral-500 font-sans block text-[10px]">Facebook Login Config ID:</span>
+                      <MaskedIdDisplay value={metaStatus?.configId} label="Configuration ID" digitsToShow={1} />
+                    </div>
+                    <div>
+                      <span className="text-neutral-500 font-sans block text-[10px]">Session Info Version:</span>
+                      <strong className="text-emerald-700 dark:text-emerald-400">"4" (Oct 2026 Ready)</strong>
+                    </div>
+                    <div>
+                      <span className="text-neutral-500 font-sans block text-[10px]">Feature Flag:</span>
+                      <strong className="text-emerald-700 dark:text-emerald-400 truncate block">
+                        {embeddedMode === 'coexistence'
+                          ? 'whatsapp_business_app_onboarding'
+                          : embeddedMode === 'migration'
+                          ? 'whatsapp_waba_migration'
+                          : 'cloud_api'}
+                      </strong>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/40 space-y-1">
+                  <p className="font-semibold text-amber-900 dark:text-amber-200">
+                    Meta App ID &amp; Configuration ID Not Set
+                  </p>
+                  <p className="text-[11px] text-amber-800 dark:text-amber-300">
+                    Go to <strong>Admin Settings &gt; Meta App Config</strong> to configure your Meta App ID and Facebook Login Configuration ID, or use the <strong>Direct Credentials</strong> tab to connect immediately.
+                  </p>
+                </div>
+              )}
+
+              {/* Launch V4 Embedded Signup Button */}
+              <button
+                type="button"
+                onClick={handleEmbeddedSignup}
+                disabled={loading || !Boolean(metaStatus?.appId && metaStatus?.configId)}
+                className="w-full py-3.5 px-4 rounded-xl bg-[#1877F2] hover:bg-[#166fe5] text-white font-medium flex items-center justify-center space-x-2 transition-all shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer text-sm font-semibold"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    <span>Connecting with Meta Embedded Signup V4...</span>
+                  </>
+                ) : (
+                  <>
+                    <Facebook className="w-5 h-5 fill-current" />
+                    <span>
+                      {embeddedMode === 'coexistence'
+                        ? 'Launch Meta Embedded Signup V4 (Coexistence)'
+                        : embeddedMode === 'migration'
+                        ? 'Launch Meta Embedded Signup V4 (WABA Migration)'
+                        : 'Launch Meta Embedded Signup V4 (Cloud API)'}
+                    </span>
+                  </>
+                )}
+              </button>
+            </div>
+          )}
+
+          {/* TAB 2: EXISTING WABA & PHONE NUMBER MIGRATION */}
+          {activeTab === 'migration' && (
+            <div className="space-y-4">
+              {/* Migration Guidance Banner */}
+              <div className="p-3.5 rounded-2xl bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800/50 space-y-1.5">
+                <div className="flex items-center space-x-2">
+                  <ArrowRightLeft className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                  <span className="font-bold text-xs text-purple-900 dark:text-purple-200">
+                    Existing WABA &amp; Phone Number Migration Engine
+                  </span>
+                </div>
+                <p className="text-[11px] text-purple-800 dark:text-purple-300 leading-relaxed">
+                  Easily migrate an existing WhatsApp Business Account or phone number from another Business Solution Provider (Twilio, Gupshup, 360dialog, Infobip) or on-premise WhatsApp client directly into CloudWABA with zero downtime.
+                </p>
+              </div>
+
+              {/* Step 1: Input Identifiers to Inspect */}
+              <div className="p-4 rounded-2xl bg-neutral-50 dark:bg-neutral-800/40 border border-neutral-200 dark:border-neutral-700/60 space-y-3">
+                <span className="font-semibold text-xs text-neutral-800 dark:text-neutral-200 flex items-center space-x-1.5">
+                  <span className="w-5 h-5 rounded-full bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 flex items-center justify-center font-bold text-[10px]">
+                    1
+                  </span>
+                  <span>Inspect Existing WABA &amp; WhatsApp Phone on Meta</span>
+                </span>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
+                      Existing WhatsApp Business Account (WABA) ID:
+                    </label>
+                    <input
+                      type="text"
+                      value={migrationWabaId || ''}
+                      onChange={(e) => setMigrationWabaId(e.target.value)}
+                      placeholder="e.g. 109284719283746"
+                      className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-xs font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
+                      WhatsApp Phone Number ID:
+                    </label>
+                    <input
+                      type="text"
+                      value={migrationPhoneId || ''}
+                      onChange={(e) => setMigrationPhoneId(e.target.value)}
+                      placeholder="e.g. 192837465019283"
+                      className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-xs font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-neutral-700 dark:text-neutral-300 mb-1 flex items-center justify-between">
+                    <span>Meta Access Token (System User Token):</span>
+                    <span className="text-[10px] text-neutral-400 font-normal">
+                      Leave blank to use Server System Token
+                    </span>
+                  </label>
+                  <input
+                    type="password"
+                    value={migrationToken || ''}
+                    onChange={(e) => setMigrationToken(e.target.value)}
+                    placeholder="EAAB..."
+                    className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-xs font-mono"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleCheckMigration}
+                  disabled={checkingMigration || (!migrationPhoneId.trim() && !migrationWabaId.trim())}
+                  className="w-full py-2.5 px-4 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-semibold text-xs flex items-center justify-center space-x-2 transition-all cursor-pointer disabled:opacity-50"
+                >
+                  {checkingMigration ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Inspecting Meta Graph API...</span>
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw className="w-4 h-4" />
+                      <span>Check WABA Migration Eligibility</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* Step 2: Inspection Assessment Card */}
+              {migrationCheckResult && (
+                <div className="p-4 rounded-2xl bg-white dark:bg-neutral-900 border-2 border-purple-200 dark:border-purple-800/70 space-y-3.5 animate-fadeIn shadow-xs">
+                  <div className="flex items-center justify-between border-b border-neutral-100 dark:border-neutral-800 pb-2">
+                    <span className="font-bold text-xs text-neutral-900 dark:text-white flex items-center space-x-1.5">
+                      <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                      <span>WABA Migration Assessment Result</span>
+                    </span>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300">
+                      Eligible for Migration
+                    </span>
+                  </div>
+
+                  {/* WABA & Phone Details Summary */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div className="p-3 rounded-xl bg-neutral-50 dark:bg-neutral-800/50 space-y-1">
+                      <span className="text-[10px] text-neutral-500 font-semibold uppercase tracking-wider block">
+                        Account / Business Name
+                      </span>
+                      <strong className="text-neutral-900 dark:text-white text-sm block truncate">
+                        {migrationCheckResult.phone?.verifiedName ||
+                          migrationCheckResult.waba?.name ||
+                          'WhatsApp Business Account'}
+                      </strong>
+                      <span className="text-[11px] font-mono text-neutral-500">
+                        WABA ID: {migrationCheckResult.waba?.id || migrationWabaId}
+                      </span>
+                    </div>
+
+                    <div className="p-3 rounded-xl bg-neutral-50 dark:bg-neutral-800/50 space-y-1">
+                      <span className="text-[10px] text-neutral-500 font-semibold uppercase tracking-wider block">
+                        Verified WhatsApp Number
+                      </span>
+                      <strong className="text-emerald-700 dark:text-emerald-400 text-sm block font-mono">
+                        {migrationCheckResult.phone?.displayPhoneNumber ||
+                          migrationCheckResult.phone?.id ||
+                          'Phone ID ' + migrationPhoneId}
+                      </strong>
+                      <div className="flex items-center space-x-2 text-[10px]">
+                        <span className="px-1.5 py-0.2 rounded font-semibold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300">
+                          {migrationCheckResult.phone?.codeVerificationStatus || 'VERIFIED'}
+                        </span>
+                        <span className="px-1.5 py-0.2 rounded font-semibold bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300">
+                          {migrationCheckResult.phone?.qualityRating || 'GREEN'} Quality
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <p className="text-[11px] text-neutral-600 dark:text-neutral-400 bg-purple-50/50 dark:bg-purple-950/20 p-2.5 rounded-xl border border-purple-200/40">
+                    💡 <strong>Next Step:</strong> {migrationCheckResult.recommendation}
+                  </p>
+
+                  {/* 2FA PIN or OTP Challenge */}
+                  <div className="p-3.5 rounded-xl bg-neutral-50 dark:bg-neutral-800/40 border border-neutral-200 dark:border-neutral-700 space-y-2.5">
+                    <span className="font-semibold text-xs text-neutral-800 dark:text-neutral-200 flex items-center space-x-1.5">
+                      <Lock className="w-4 h-4 text-purple-600" />
+                      <span>Two-Step Verification PIN (Required to Take Over Routing)</span>
+                    </span>
+
+                    <div className="space-y-1">
+                      <input
+                        type="password"
+                        maxLength={6}
+                        value={migrationPin || ''}
+                        onChange={(e) => setMigrationPin(e.target.value.replace(/[^0-9]/g, ''))}
+                        placeholder="6-Digit Registration PIN (e.g. 123456)"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-sm font-mono tracking-widest text-center focus:ring-2 focus:ring-purple-500"
+                      />
+                      <p className="text-[10px] text-neutral-500">
+                        Enter the 6-digit PIN set on your previous BSP or client. This authenticates the number transfer to Meta Cloud API.
+                      </p>
+                    </div>
+
+                    {/* Optional OTP Verification buttons if number is unverified */}
+                    {migrationCheckResult.phone?.codeVerificationStatus !== 'VERIFIED' && (
+                      <div className="pt-2 border-t border-neutral-200 dark:border-neutral-700 space-y-2">
+                        <span className="text-[11px] font-semibold text-neutral-700 dark:text-neutral-300 block">
+                          Phone requires SMS/Voice OTP verification:
+                        </span>
+                        <div className="flex space-x-2">
+                          <button
+                            type="button"
+                            onClick={() => handleRequestMigrationOtp('SMS')}
+                            disabled={requestingOtp}
+                            className="flex-1 py-1.5 px-3 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 text-xs font-semibold cursor-pointer"
+                          >
+                            Send SMS OTP
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleRequestMigrationOtp('VOICE')}
+                            disabled={requestingOtp}
+                            className="flex-1 py-1.5 px-3 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 text-xs font-semibold cursor-pointer"
+                          >
+                            Voice Call OTP
+                          </button>
+                        </div>
+                        {otpRequested && (
+                          <div className="flex space-x-2 pt-1">
+                            <input
+                              type="text"
+                              value={migrationOtpCode || ''}
+                              onChange={(e) => setMigrationOtpCode(e.target.value)}
+                              placeholder="Enter 6-digit OTP code"
+                              className="flex-1 px-3 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-xs font-mono"
+                            />
+                            <button
+                              type="button"
+                              onClick={handleVerifyMigrationOtp}
+                              disabled={verifyingOtp}
+                              className="px-3.5 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold text-xs cursor-pointer"
+                            >
+                              {verifyingOtp ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Verify Code'}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Final Migration Trigger Button */}
+                  <button
+                    type="button"
+                    onClick={handleTriggerFinalMigration}
+                    disabled={triggeringMigration}
+                    className="w-full py-3 px-4 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold flex items-center justify-center space-x-2 transition-all shadow-md cursor-pointer disabled:opacity-50 text-xs"
+                  >
+                    {triggeringMigration ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Migrating WABA to CloudWABA Platform...</span>
+                      </>
+                    ) : (
+                      <>
+                        <ArrowRightLeft className="w-4 h-4" />
+                        <span>Trigger WABA &amp; Phone Migration to Cloud API</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 3: DIRECT META CREDENTIALS (MANUAL) */}
+          {activeTab === 'direct' && (
+            <form onSubmit={handleDirectConnect} className="space-y-4">
+              <div className="p-3.5 rounded-2xl bg-blue-50/60 dark:bg-blue-950/20 border border-blue-200/60 dark:border-blue-800/40 space-y-1">
+                <p className="font-semibold text-blue-900 dark:text-blue-300 flex items-center space-x-1.5">
+                  <ShieldCheck className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                  <span>Direct Meta WhatsApp Cloud API Credentials</span>
+                </p>
+                <p className="text-[11px] text-blue-800 dark:text-blue-300/90 leading-relaxed">
+                  Enter your Meta Phone Number ID, WABA ID, and System User Token to connect directly without popup dialogs.
                 </p>
               </div>
 
@@ -405,43 +1012,36 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
                     type="password"
                     required
                     placeholder="••••••••••••"
-                    value={phoneNumberId}
+                    value={phoneNumberId || ''}
                     onChange={(e) => setPhoneNumberId(e.target.value)}
                     className="w-full px-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white placeholder-neutral-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 font-mono text-xs"
                   />
-                  <p className="text-[10px] text-neutral-400 mt-1">
-                    Meta Portal &gt; WhatsApp &gt; API Setup &gt; Phone number ID
-                  </p>
                 </div>
 
                 <div>
                   <label className="block font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
-                    WhatsApp Business Account (WABA) ID <span className="text-red-500">*</span>
+                    WhatsApp Business Account ID (WABA ID)
                   </label>
                   <input
                     type="password"
-                    required
                     placeholder="••••••••••••"
-                    value={wabaId}
+                    value={wabaId || ''}
                     onChange={(e) => setWabaId(e.target.value)}
                     className="w-full px-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white placeholder-neutral-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 font-mono text-xs"
                   />
-                  <p className="text-[10px] text-neutral-400 mt-1">
-                    Templates aur approval result sync karne ke liye zaroori
-                  </p>
                 </div>
               </div>
 
-              {/* Permanent Access Token */}
+              {/* Token Input */}
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="font-semibold text-neutral-700 dark:text-neutral-300">
-                    Meta Permanent Access Token (System User Token) <span className="text-red-500">*</span>
+                    System User Permanent Access Token <span className="text-red-500">*</span>
                   </label>
                   <button
                     type="button"
                     onClick={() => setShowToken(!showToken)}
-                    className="text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 flex items-center space-x-1 text-[11px] cursor-pointer"
+                    className="text-[11px] text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-300 flex items-center space-x-1 cursor-pointer"
                   >
                     {showToken ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                     <span>{showToken ? 'Hide' : 'Show'}</span>
@@ -450,105 +1050,74 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
                 <input
                   type={showToken ? 'text' : 'password'}
                   required
-                  placeholder="EAAG... (Meta System User Permanent Token)"
-                  value={customToken}
+                  placeholder="EAAB..."
+                  value={customToken || ''}
                   onChange={(e) => setCustomToken(e.target.value)}
                   className="w-full px-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white placeholder-neutral-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 font-mono text-xs"
                 />
-                <p className="text-[10px] text-neutral-400 mt-1">
-                  Meta Business Manager &gt; System Users &gt; Generate Token (Permissions: whatsapp_business_messaging, whatsapp_business_management)
-                </p>
               </div>
 
-              {/* Grid 2: Display Phone & Verified Name & PIN */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {/* Grid 2: Display Phone & Business Name */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 <div>
                   <label className="block font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
-                    Real WhatsApp Number
+                    Display Mobile Number (Optional)
                   </label>
                   <input
                     type="text"
-                    placeholder="e.g. +91 9876543210"
-                    value={displayPhone}
+                    placeholder="+91 98765 43210"
+                    value={displayPhone || ''}
                     onChange={(e) => setDisplayPhone(e.target.value)}
-                    className="w-full px-3 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white placeholder-neutral-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 font-mono text-xs"
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white placeholder-neutral-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 text-xs"
                   />
                 </div>
 
                 <div>
                   <label className="block font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
-                    Verified Business Name
+                    Verified Business Name (Optional)
                   </label>
                   <input
                     type="text"
-                    placeholder="e.g. My Business Name"
-                    value={businessName}
+                    placeholder="Acme Enterprises"
+                    value={businessName || ''}
                     onChange={(e) => setBusinessName(e.target.value)}
-                    className="w-full px-3 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white placeholder-neutral-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 text-xs"
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white placeholder-neutral-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 text-xs"
                   />
-                </div>
-
-                <div>
-                  <label className="block font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
-                    6-Digit PIN <span className="text-neutral-400 font-normal">(Optional)</span>
-                  </label>
-                  <input
-                    type="text"
-                    maxLength={6}
-                    placeholder="Optional (e.g. 123456)"
-                    value={pin}
-                    onChange={(e) => setPin(e.target.value)}
-                    className="w-full px-3 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white placeholder-neutral-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 font-mono text-xs tracking-widest text-center"
-                  />
-                  <p className="text-[10px] text-neutral-400 mt-1">
-                    Meta 2-Step Security PIN (Zaroori nahi hai, ise khali chhod sakte hain)
-                  </p>
                 </div>
               </div>
 
-              {/* Diagnostics Box if test performed */}
-              {diagnostics && (
-                <div className="p-3.5 rounded-2xl bg-neutral-100 dark:bg-neutral-800/80 border border-neutral-200 dark:border-neutral-700 space-y-2">
-                  <div className="flex items-center space-x-1.5 font-semibold text-neutral-800 dark:text-neutral-200 text-xs">
-                    <Activity className="w-4 h-4 text-emerald-600" />
-                    <span>Live Meta Graph API Test Results:</span>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px]">
-                    <div className={`p-2 rounded-xl border ${diagnostics.tokenValid ? 'bg-emerald-50/80 dark:bg-emerald-950/40 border-emerald-300 text-emerald-800 dark:text-emerald-300' : 'bg-rose-50 border-rose-300 text-rose-800'}`}>
-                      <p className="font-semibold">Token Status</p>
-                      <p>{diagnostics.tokenValid ? '✅ Valid & Authorized' : '❌ Invalid or Expired'}</p>
-                    </div>
+              {/* 6-Digit PIN */}
+              <div>
+                <label className="block font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
+                  6-Digit Registration PIN (Optional)
+                </label>
+                <input
+                  type="password"
+                  maxLength={6}
+                  placeholder="123456"
+                  value={pin || ''}
+                  onChange={(e) => setPin(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white placeholder-neutral-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 font-mono text-xs text-center"
+                />
+              </div>
 
-                    <div className={`p-2 rounded-xl border ${diagnostics.phoneNumberValid ? 'bg-emerald-50/80 dark:bg-emerald-950/40 border-emerald-300 text-emerald-800 dark:text-emerald-300' : 'bg-neutral-100 border-neutral-300 text-neutral-700'}`}>
-                      <p className="font-semibold">Phone Number ID</p>
-                      <p>{diagnostics.phoneNumberValid ? `✅ Rating: ${diagnostics.qualityRating || 'GREEN'}` : 'Pending Check'}</p>
-                    </div>
-
-                    <div className={`p-2 rounded-xl border ${diagnostics.wabaValid ? 'bg-emerald-50/80 dark:bg-emerald-950/40 border-emerald-300 text-emerald-800 dark:text-emerald-300' : 'bg-neutral-100 border-neutral-300 text-neutral-700'}`}>
-                      <p className="font-semibold">WABA Account</p>
-                      <p>{diagnostics.wabaValid ? `✅ ${diagnostics.wabaName || 'Verified'}` : 'Pending Check'}</p>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Action Buttons: Test Connection & Connect Account */}
-              <div className="pt-2 flex flex-col sm:flex-row items-center gap-3">
+              {/* Action Buttons */}
+              <div className="flex flex-col sm:flex-row items-center gap-2 pt-2">
                 <button
                   type="button"
                   onClick={handleTestMetaConnection}
-                  disabled={testing || loading || !customToken.trim()}
-                  className="w-full sm:w-auto px-4 py-3 rounded-xl border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-800 dark:text-neutral-200 font-medium flex items-center justify-center space-x-2 transition-colors cursor-pointer text-xs disabled:opacity-50"
+                  disabled={testing || !customToken.trim()}
+                  className="w-full sm:w-auto px-4 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-800 dark:text-neutral-200 font-medium flex items-center justify-center space-x-1.5 transition-colors cursor-pointer disabled:opacity-50 text-xs"
                 >
                   {testing ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />
-                      <span>Testing with Meta...</span>
+                      <span>Testing Live Graph API...</span>
                     </>
                   ) : (
                     <>
                       <Activity className="w-4 h-4 text-emerald-600" />
-                      <span>Test Real Credentials with Meta</span>
+                      <span>Test Meta Connection</span>
                     </>
                   )}
                 </button>
@@ -556,12 +1125,12 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full sm:flex-1 py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium flex items-center justify-center space-x-2 transition-all shadow-sm hover:shadow-md disabled:opacity-60 cursor-pointer text-xs"
+                  className="w-full sm:flex-1 py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold flex items-center justify-center space-x-1.5 transition-colors shadow-sm cursor-pointer disabled:opacity-50 text-xs"
                 >
                   {loading ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>Connecting &amp; Registering Number...</span>
+                      <span>Connecting &amp; Registering...</span>
                     </>
                   ) : (
                     <>
@@ -572,283 +1141,6 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
                 </button>
               </div>
             </form>
-          ) : activeTab === 'embedded' ? (
-            <div className="space-y-4">
-              <div className="bg-neutral-50 dark:bg-neutral-800/40 rounded-2xl p-4 border border-neutral-200 dark:border-neutral-800 space-y-3">
-                <h4 className="text-xs font-semibold text-neutral-900 dark:text-white flex items-center space-x-2">
-                  <Shield className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                  <span>Meta Embedded Signup (Facebook Login v22.0 &bull; V4 Ready)</span>
-                </h4>
-                <p className="text-xs text-neutral-600 dark:text-neutral-300 leading-relaxed">
-                  Log in directly through Meta/Facebook to select your Meta Business Portfolio, create or choose a WhatsApp Business Account (WABA), and verify your business phone number automatically.
-                </p>
-
-                {/* Onboarding Mode Selection: Coexistence vs Standard */}
-                <div className="pt-2">
-                  <label className="block text-[11px] font-semibold text-neutral-700 dark:text-neutral-300 mb-2">
-                    Select Onboarding Flow:
-                  </label>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setEmbeddedMode('coexistence')}
-                      className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-                        embeddedMode === 'coexistence'
-                          ? 'border-emerald-500 bg-emerald-50/70 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 ring-2 ring-emerald-500/20'
-                          : 'border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 dark:hover:border-neutral-600 text-neutral-700 dark:text-neutral-300'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="font-semibold text-xs flex items-center gap-1.5">
-                          📱 Coexistence Mode
-                        </span>
-                        {embeddedMode === 'coexistence' && (
-                          <span className="text-[10px] bg-emerald-600 text-white px-1.5 py-0.5 rounded-full font-bold">
-                            Active
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-[11px] opacity-80 leading-normal">
-                        Keeps WhatsApp Business App working on mobile. Uses QR code scan &amp; <code className="bg-neutral-200 dark:bg-neutral-800 px-1 py-0.5 rounded text-[10px]">featureType: &quot;whatsapp_business_app_onboarding&quot;</code>.
-                      </p>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setEmbeddedMode('standard')}
-                      className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-                        embeddedMode === 'standard'
-                          ? 'border-blue-500 bg-blue-50/70 dark:bg-blue-950/40 text-blue-900 dark:text-blue-200 ring-2 ring-blue-500/20'
-                          : 'border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 dark:hover:border-neutral-600 text-neutral-700 dark:text-neutral-300'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="font-semibold text-xs flex items-center gap-1.5">
-                          ☁️ Standard Cloud API
-                        </span>
-                        {embeddedMode === 'standard' && (
-                          <span className="text-[10px] bg-blue-600 text-white px-1.5 py-0.5 rounded-full font-bold">
-                            Active
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-[11px] opacity-80 leading-normal">
-                        Pure Cloud API for new virtual numbers or numbers not hosted on mobile app.
-                      </p>
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {Boolean(metaStatus?.appId && metaStatus?.configId) ? (
-                <div className="p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/40 space-y-1.5 text-xs text-emerald-800 dark:text-emerald-300">
-                  <div className="flex items-center space-x-2 font-semibold">
-                    <div className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
-                    <span>Meta Embedded Signup Ready ({embeddedMode === 'coexistence' ? 'Coexistence Mode' : 'Standard'})</span>
-                  </div>
-                  <div className="text-[11px] space-y-1 font-mono text-neutral-700 dark:text-neutral-300 bg-white/70 dark:bg-neutral-900/60 p-2.5 rounded-xl border border-emerald-200/60 dark:border-emerald-900/40">
-                    <div className="flex items-center justify-between py-0.5">
-                      <span className="text-neutral-500 font-sans">App ID:</span>
-                      <MaskedIdDisplay
-                        value={metaStatus?.appId}
-                        label="Meta App ID"
-                        digitsToShow={1}
-                      />
-                    </div>
-                    <div className="flex items-center justify-between py-0.5">
-                      <span className="text-neutral-500 font-sans">Config ID:</span>
-                      <MaskedIdDisplay
-                        value={metaStatus?.configId}
-                        label="Configuration ID"
-                        digitsToShow={1}
-                      />
-                    </div>
-                    <div>
-                      sessionInfoVersion: <strong className="text-emerald-700 dark:text-emerald-400">&quot;3&quot;</strong>
-                    </div>
-                    <div>
-                      featureType:{' '}
-                      <strong className="text-emerald-700 dark:text-emerald-400">
-                        {embeddedMode === 'coexistence' ? '&quot;whatsapp_business_app_onboarding&quot;' : 'none'}
-                      </strong>
-                    </div>
-                  </div>
-                  {metaStatus?.appId === metaStatus?.configId && (
-                    <div className="p-2.5 rounded-xl bg-amber-100/80 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-800 text-[11px] text-amber-900 dark:text-amber-200 space-y-1">
-                      <div className="flex items-center space-x-1.5 font-semibold text-amber-800 dark:text-amber-300">
-                        <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                        <span>Attention: Config ID aur App ID dono same hain!</span>
-                      </div>
-                      <p className="text-[10px] leading-relaxed">
-                        Meta popup me <em>&quot;config_id is required&quot;</em> error aane ka kaaran yeh hai ki aapne App ID ko hi Config ID me paste kiya hai. Asli <strong>Configuration ID</strong> Meta Developer Console ke <strong>WhatsApp &gt; Quickstart</strong> ya <strong>Facebook Login for Business &gt; Configurations</strong> se copy karke Admin panel me update karein.
-                      </p>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/40 flex items-start space-x-2.5 text-xs text-amber-800 dark:text-amber-300">
-                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
-                  <div className="space-y-1">
-                    <p className="font-semibold text-amber-900 dark:text-amber-200">
-                      Meta App ID &amp; Configuration ID Not Set Yet
-                    </p>
-                    <p className="text-[11px] leading-relaxed text-amber-800 dark:text-amber-300/90">
-                      Embedded Signup shuru karne ke liye aapke Meta Developer App ka <strong>Meta App ID</strong> aur <strong>Facebook Login Configuration ID</strong> zaroori hai. Admin panel ke <strong>Meta App Config</strong> mein details daal kar <strong>Save</strong> karein.
-                    </p>
-                    <p className="text-[11px] text-neutral-600 dark:text-neutral-400 pt-0.5">
-                      💡 Ya fir upar <strong>Real Meta API Credentials</strong> tab par click karke direct Phone Number ID aur Token se connect kar sakte hain.
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              <button
-                type="button"
-                onClick={handleEmbeddedSignup}
-                disabled={loading || !Boolean(metaStatus?.appId && metaStatus?.configId)}
-                className="w-full py-3.5 px-4 rounded-xl bg-[#1877F2] hover:bg-[#166fe5] text-white font-medium flex items-center justify-center space-x-2 transition-all shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer text-sm"
-              >
-                {loading ? (
-                  <>
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                    <span>Connecting with Meta...</span>
-                  </>
-                ) : (
-                  <>
-                    <Facebook className="w-5 h-5 fill-current" />
-                    <span>
-                      {Boolean(metaStatus?.appId && metaStatus?.configId)
-                        ? embeddedMode === 'coexistence'
-                          ? 'Launch WhatsApp Mobile Coexistence Onboarding'
-                          : 'Connect WhatsApp with Facebook'
-                        : 'Admin Panel me Meta App ID & Config ID Save Karein'}
-                    </span>
-                  </>
-                )}
-              </button>
-            </div>
-          ) : (
-            /* Fix Error #2655093 / Unlink Old Provider Tab */
-            <div className="space-y-4">
-              <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2 font-semibold text-amber-900 dark:text-amber-200 text-sm">
-                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                    <span>Unlink Old Provider / Fix Meta Error #2655093</span>
-                  </div>
-                  <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-amber-200/70 dark:bg-amber-900 text-amber-800 dark:text-amber-300">
-                    Naya Account Model Tool
-                  </span>
-                </div>
-                <p className="text-xs text-amber-800/90 dark:text-amber-300/90 leading-relaxed">
-                  Agar aapka WhatsApp number pehle kisi doosre provider (jaise <strong>Wbbox</strong> ya purane BSP) ke paas connect tha aur aapko Meta error <strong>#2655093</strong> <em>(&quot;Phone number is already associated with another WhatsApp Business Account&quot;)</em> mil raha hai, to Meta Graph API ko purani partner subscription <code>DELETE /subscribed_apps</code> call bhejna zaroori hai.
-                </p>
-                <p className="text-[11px] text-amber-800 dark:text-amber-300">
-                  Yeh tool aapke WABA ko purane provider se azaad kar dega taaki Meta ka Naya Account Model aapke number ko seamlessly convert kar sake.
-                </p>
-              </div>
-
-              {unlinkSuccessMsg && (
-                <div className="p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-xs space-y-2">
-                  <div className="flex items-center space-x-2 font-semibold">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                    <span>Purana Provider Unlinked!</span>
-                  </div>
-                  <p className="leading-relaxed">{unlinkSuccessMsg}</p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setActiveTab('direct');
-                      setUnlinkSuccessMsg(null);
-                    }}
-                    className="mt-1 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs flex items-center space-x-1.5 transition-colors cursor-pointer"
-                  >
-                    <span>Ab WhatsApp Account Connect Karein</span>
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              )}
-
-              {unlinkHelpMsg && (
-                <div className="p-3.5 rounded-2xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 text-blue-900 dark:text-blue-200 text-xs space-y-1">
-                  <p className="font-semibold flex items-center space-x-1.5">
-                    <HelpCircle className="w-3.5 h-3.5 text-blue-600" />
-                    <span>Meta Business Suite Manual Step</span>
-                  </p>
-                  <p className="leading-relaxed">{unlinkHelpMsg}</p>
-                </div>
-              )}
-
-              <div className="space-y-3 bg-neutral-50 dark:bg-neutral-800/40 p-4 rounded-2xl border border-neutral-200 dark:border-neutral-800">
-                <div>
-                  <label className="block text-[11px] font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
-                    WhatsApp Business Account ID (WABA ID) <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={wabaId}
-                    onChange={(e) => setWabaId(e.target.value)}
-                    placeholder="e.g. 108394857291039"
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white font-mono text-xs focus:ring-2 focus:ring-amber-500 focus:outline-hidden"
-                  />
-                  <p className="text-[10px] text-neutral-500 mt-1">
-                    WABA ID aapke Meta Business Manager &gt; WhatsApp Accounts me dikhta hai.
-                  </p>
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
-                    System User Access Token <span className="text-neutral-400 font-normal">(Optional - Leave blank to use Admin Token)</span>
-                  </label>
-                  <input
-                    type="password"
-                    value={customToken}
-                    onChange={(e) => setCustomToken(e.target.value)}
-                    placeholder="EAAG... (Leave empty to use configured Meta Token)"
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white font-mono text-xs focus:ring-2 focus:ring-amber-500 focus:outline-hidden"
-                  />
-                </div>
-
-                <div className="pt-2">
-                  <button
-                    type="button"
-                    onClick={handleUnlinkOldProvider}
-                    disabled={unlinking || !wabaId.trim()}
-                    className="w-full py-3 px-4 rounded-xl bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-semibold flex items-center justify-center space-x-2 transition-colors cursor-pointer text-xs"
-                  >
-                    {unlinking ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        <span>Releasing Old Provider from Meta Graph API...</span>
-                      </>
-                    ) : (
-                      <>
-                        <AlertTriangle className="w-4 h-4" />
-                        <span>Force Unlink Old Provider (/subscribed_apps)</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-
-              {/* 3 Updates Quick Summary Card */}
-              <div className="p-3.5 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 space-y-2 text-[11px] text-neutral-600 dark:text-neutral-400">
-                <span className="font-semibold text-neutral-800 dark:text-neutral-200 block text-xs">
-                  📌 WhatsApp Meta 2026 Rules Summary:
-                </span>
-                <ul className="space-y-1 list-disc pl-4 leading-relaxed">
-                  <li>
-                    <strong>Naya Account Model:</strong> Meta aapka purana WABA delete nahi karega; same WABA ID convert hoti hai.
-                  </li>
-                  <li>
-                    <strong>Embedded Signup V4:</strong> V2 band ho chuka hai. Hamara system v22.0 SDK ke sath full V4 compliant hai.
-                  </li>
-                  <li>
-                    <strong>14-Day Coexistence Rule:</strong> Co-existence connect karne ke baad mobile me WhatsApp Business app ko har 14 din me 1 baar open zaroor karein taaki link auto-disconnect na ho.
-                  </li>
-                </ul>
-              </div>
-            </div>
           )}
         </div>
       </div>

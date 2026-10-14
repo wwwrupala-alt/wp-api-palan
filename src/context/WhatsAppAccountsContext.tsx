@@ -39,7 +39,42 @@ interface WhatsAppAccountsContextType {
   loading: boolean;
   metaStatus: MetaConfigStatus | null;
   setActiveAccount: (account: WhatsAppAccount | null) => void;
-  connectViaEmbeddedSignup: (options?: { isCoexistence?: boolean; featureType?: string }) => Promise<void>;
+  connectViaEmbeddedSignup: (options?: {
+    isCoexistence?: boolean;
+    featureType?: string;
+    sessionInfoVersion?: '4' | '3' | '2';
+    migrationMode?: boolean;
+  }) => Promise<void>;
+  checkWabaMigration: (params: {
+    wabaId?: string;
+    phoneNumberId?: string;
+    customToken?: string;
+  }) => Promise<{
+    success: boolean;
+    eligible?: boolean;
+    waba?: any;
+    phone?: any;
+    phoneNumbers?: any[];
+    migrationStatus?: string;
+    recommendation?: string;
+    error?: string;
+  }>;
+  triggerWabaMigration: (params: {
+    wabaId: string;
+    phoneNumberId: string;
+    pin?: string;
+    action?: 'register_and_migrate' | 'request_code' | 'verify_code';
+    codeMethod?: 'SMS' | 'VOICE';
+    otpCode?: string;
+    customToken?: string;
+  }) => Promise<{
+    success: boolean;
+    migrated?: boolean;
+    step?: string;
+    message?: string;
+    account?: any;
+    error?: string;
+  }>;
   connectManualAccount: (params: {
     phoneNumberId: string;
     wabaId?: string;
@@ -59,10 +94,6 @@ interface WhatsAppAccountsContextType {
     customToken?: string;
   }) => Promise<{ success: boolean; error?: string }>;
   syncAccountWithMeta: (account: WhatsAppAccount) => Promise<{ success: boolean; error?: string }>;
-  forceUnsubscribeOldApp: (params: {
-    wabaId: string;
-    customToken?: string;
-  }) => Promise<{ success: boolean; message?: string; error?: string; help?: string }>;
   disconnectAccount: (accountId: string) => Promise<void>;
   reconnectAccount: (accountId: string) => Promise<void>;
   deleteAccount: (accountId: string) => Promise<void>;
@@ -220,8 +251,13 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
     }
   }, [metaStatus]);
 
-  // Connect WhatsApp via Meta Embedded Signup (Supports Coexistence Mode & Standard Cloud API)
-  const connectViaEmbeddedSignup = async (options?: { isCoexistence?: boolean; featureType?: string }): Promise<void> => {
+  // Connect WhatsApp via Meta Embedded Signup V4 (Supports Coexistence Mode, Standard Cloud API & WABA Migration)
+  const connectViaEmbeddedSignup = async (options?: {
+    isCoexistence?: boolean;
+    featureType?: string;
+    sessionInfoVersion?: '4' | '3' | '2';
+    migrationMode?: boolean;
+  }): Promise<void> => {
     const effectiveOrgId = getEffectiveOrgId();
     if (!effectiveOrgId) throw new Error('Organization not found. Please re-login.');
 
@@ -270,7 +306,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
         try {
           const payload = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
           if (payload?.type === 'WA_EMBEDDED_SIGNUP') {
-            console.log('[Meta Embedded Signup Event]', payload);
+            console.log('[Meta Embedded Signup V4 Event]', payload);
             if (payload.data?.waba_id) {
               capturedWabaId = payload.data.waba_id;
             }
@@ -278,7 +314,10 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
               capturedPhoneId = payload.data.phone_number_id;
             }
             if (payload.event === 'CANCEL') {
-              console.log('[Meta Embedded Signup] User cancelled signup.');
+              console.log('[Meta Embedded Signup V4] User cancelled signup.');
+            }
+            if (payload.event === 'FINISH') {
+              console.log('[Meta Embedded Signup V4] Completed with data:', payload.data);
             }
           }
         } catch {
@@ -316,11 +355,14 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
         // Coexistence vs Standard: featureType determines whether Meta opens the WhatsApp Business App mobile onboarding branch
         const isCoexistence = options?.isCoexistence !== false;
         const featureType = options?.featureType || (isCoexistence ? 'whatsapp_business_app_onboarding' : undefined);
+        const targetVersion = options?.sessionInfoVersion || '4';
 
         const extrasPayload: Record<string, unknown> = {
-          sessionInfoVersion: '3',
+          sessionInfoVersion: targetVersion,
+          version: targetVersion === '4' ? 4 : 3,
           setup: {
             external_id: effectiveOrgId,
+            ...(options?.migrationMode ? { allow_migration: true } : {}),
           },
         };
 
@@ -531,43 +573,6 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
     }
   };
 
-  const forceUnsubscribeOldApp = async (params: {
-    wabaId: string;
-    customToken?: string;
-  }): Promise<{ success: boolean; message?: string; error?: string; help?: string }> => {
-    try {
-      const effectiveOrgId = getEffectiveOrgId();
-      const res = await fetch('/api/meta/force-unsubscribe-old-app', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          wabaId: params.wabaId.trim(),
-          customToken: params.customToken?.trim(),
-          organizationId: effectiveOrgId,
-        }),
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.success) {
-        return {
-          success: false,
-          error: data.error || 'Failed to unsubscribe old provider from WABA.',
-          help: data.help,
-        };
-      }
-
-      return {
-        success: true,
-        message: data.message || 'Successfully unlinked old provider!',
-      };
-    } catch (err: any) {
-      return {
-        success: false,
-        error: err?.message || 'Network error while unlinking old provider.',
-      };
-    }
-  };
-
   const disconnectAccount = async (accountId: string) => {
     const effectiveOrgId = getEffectiveOrgId();
     if (!effectiveOrgId) return;
@@ -597,6 +602,60 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
     }
   };
 
+  const checkWabaMigration = async (params: {
+    wabaId?: string;
+    phoneNumberId?: string;
+    customToken?: string;
+  }) => {
+    const effectiveOrgId = getEffectiveOrgId();
+    try {
+      const res = await fetch('/api/meta/waba-migration/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...params,
+          organizationId: effectiveOrgId,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { success: false, error: data.error || 'Failed to check WABA migration eligibility.' };
+      }
+      return data;
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Network error checking WABA migration.' };
+    }
+  };
+
+  const triggerWabaMigration = async (params: {
+    wabaId: string;
+    phoneNumberId: string;
+    pin?: string;
+    action?: 'register_and_migrate' | 'request_code' | 'verify_code';
+    codeMethod?: 'SMS' | 'VOICE';
+    otpCode?: string;
+    customToken?: string;
+  }) => {
+    const effectiveOrgId = getEffectiveOrgId();
+    try {
+      const res = await fetch('/api/meta/waba-migration/trigger', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...params,
+          organizationId: effectiveOrgId,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { success: false, error: data.error || 'Failed to trigger WABA migration.' };
+      }
+      return data;
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Network error triggering WABA migration.' };
+    }
+  };
+
   const deleteAccount = async (accountId: string) => {
     const effectiveOrgId = getEffectiveOrgId();
     if (!effectiveOrgId) return;
@@ -617,11 +676,12 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
         metaStatus,
         setActiveAccount,
         connectViaEmbeddedSignup,
+        checkWabaMigration,
+        triggerWabaMigration,
         connectManualAccount,
         testMetaCredentials,
         registerPhoneNumber,
         syncAccountWithMeta,
-        forceUnsubscribeOldApp,
         disconnectAccount,
         reconnectAccount,
         deleteAccount,

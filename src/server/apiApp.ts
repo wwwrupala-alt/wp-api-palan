@@ -15,13 +15,14 @@ import {
   handleSendCampaign,
   handleRegisterPhone,
   handleTestConnection,
+  handleCheckWabaMigration,
+  handleTriggerWabaMigration,
   handleWebhookVerification,
   handleWebhookPost,
   handleGetWebhookLogs,
   handleSaveAdminMetaConfig,
   handleUploadMedia,
   processIncomingWhatsAppStatusUpdate,
-  handleForceUnsubscribeOldApp,
 } from './metaService.ts';
 import {
   handleCancelScheduledCampaign,
@@ -131,9 +132,9 @@ apiApp.post('/api/meta/embedded-signup-exchange', handleEmbeddedSignupExchange);
 apiApp.post('/api/meta/verify-account', handleVerifyAccount);
 apiApp.post('/api/meta/sync-account', handleSyncMetaAccount);
 apiApp.post('/api/meta/test-connection', handleTestConnection);
-apiApp.post('/api/meta/force-unsubscribe-old-app', handleForceUnsubscribeOldApp);
-apiApp.post('/api/meta/fix-stuck-waba', handleForceUnsubscribeOldApp);
 apiApp.post('/api/meta/register-phone', handleRegisterPhone);
+apiApp.post('/api/meta/waba-migration/check', handleCheckWabaMigration);
+apiApp.post('/api/meta/waba-migration/trigger', handleTriggerWabaMigration);
 apiApp.get('/api/meta/templates', handleGetTemplates);
 apiApp.post('/api/meta/templates', handleCreateTemplate);
 apiApp.delete('/api/meta/templates', handleDeleteTemplate);

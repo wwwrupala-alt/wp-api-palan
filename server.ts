@@ -12,7 +12,18 @@ const __dirname = path.dirname(__filename);
 
 async function startServer() {
   const app = express();
-  const PORT = Number(process.env.PORT) || 3000;
+  
+  // Resolve port: respect CLI argument --port, DEFAULT_APP_PORT, or default 3000 (never 8080 which is reserved for nginx)
+  let PORT = 3000;
+  const portArgIdx = process.argv.indexOf('--port');
+  if (portArgIdx !== -1 && process.argv[portArgIdx + 1]) {
+    PORT = Number(process.argv[portArgIdx + 1]);
+  } else if (process.env.DEFAULT_APP_PORT) {
+    PORT = Number(process.env.DEFAULT_APP_PORT);
+  } else if (process.env.PORT && process.env.PORT !== '8080') {
+    PORT = Number(process.env.PORT);
+  }
+
   const isProduction = process.env.NODE_ENV === 'production';
 
   // 1. Mount API backend endpoints FIRST before any static or SPA fallback

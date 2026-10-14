@@ -1526,6 +1526,350 @@ export async function handleRegisterPhone(req: Request, res: Response) {
   }
 }
 
+// Handler: Check Existing WABA and Phone Number Migration Eligibility
+export async function handleCheckWabaMigration(req: Request, res: Response) {
+  try {
+    const { wabaId, phoneNumberId, customToken, organizationId } = req.body;
+    const config = await getEffectiveMetaConfig(organizationId);
+    const token = customToken || (req.headers['x-meta-token'] as string) || config.systemToken;
+
+    if (!token) {
+      return res.status(400).json({
+        error: 'Meta Access Token or System User Token is required to inspect existing WABA and Phone status.',
+        code: 'TOKEN_REQUIRED',
+      });
+    }
+
+    if (!wabaId && !phoneNumberId) {
+      return res.status(400).json({
+        error: 'Either WABA ID or Phone Number ID must be provided to check migration.',
+        code: 'IDENTIFIER_REQUIRED',
+      });
+    }
+
+    let phoneDetails: any = null;
+    let wabaDetails: any = null;
+    let phoneList: any[] = [];
+    const errors: string[] = [];
+
+    const cleanPhoneId = phoneNumberId ? String(phoneNumberId).trim() : '';
+    const cleanWabaId = wabaId ? String(wabaId).trim() : '';
+
+    // 1. Inspect Phone Number ID if provided
+    if (cleanPhoneId) {
+      try {
+        const phoneUrl = `https://graph.facebook.com/${config.graphVersion}/${cleanPhoneId}?fields=id,verified_name,display_phone_number,quality_rating,code_verification_status,status,account_mode,name_status,messaging_limit_tier&access_token=${token}`;
+        const phoneRes = await fetch(phoneUrl);
+        const phoneData = await phoneRes.json();
+
+        if (phoneRes.ok && !phoneData.error) {
+          phoneDetails = {
+            id: phoneData.id,
+            displayPhoneNumber: phoneData.display_phone_number,
+            verifiedName: phoneData.verified_name,
+            qualityRating: phoneData.quality_rating || 'GREEN',
+            codeVerificationStatus: phoneData.code_verification_status || 'VERIFIED',
+            status: phoneData.status || 'CONNECTED',
+            accountMode: phoneData.account_mode || 'LIVE',
+            nameStatus: phoneData.name_status || 'APPROVED',
+            messagingLimitTier: phoneData.messaging_limit_tier || 'TIER_250',
+          };
+        } else if (phoneData.error) {
+          errors.push(`Phone Error: ${phoneData.error.message || 'Could not verify Phone Number ID'}`);
+        }
+      } catch (err: any) {
+        errors.push(`Phone Network Error: ${err?.message || 'Failed to contact Meta API'}`);
+      }
+    }
+
+    // 2. Inspect WABA if provided
+    if (cleanWabaId) {
+      try {
+        const wabaUrl = `https://graph.facebook.com/${config.graphVersion}/${cleanWabaId}?fields=id,name,timezone_id,currency,message_template_namespace,on_behalf_of_business_info&access_token=${token}`;
+        const wabaRes = await fetch(wabaUrl);
+        const wabaData = await wabaRes.json();
+
+        if (wabaRes.ok && !wabaData.error) {
+          wabaDetails = {
+            id: wabaData.id,
+            name: wabaData.name,
+            currency: wabaData.currency || 'USD',
+            timezoneId: wabaData.timezone_id || '1',
+            messageTemplateNamespace: wabaData.message_template_namespace,
+          };
+
+          // Fetch phones list for this WABA
+          const phonesUrl = `https://graph.facebook.com/${config.graphVersion}/${cleanWabaId}/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating,code_verification_status,status&access_token=${token}`;
+          const phonesRes = await fetch(phonesUrl);
+          const phonesData = await phonesRes.json();
+          if (phonesRes.ok && Array.isArray(phonesData.data)) {
+            phoneList = phonesData.data;
+            if (!phoneDetails && phoneList.length > 0) {
+              const p0 = phoneList[0];
+              phoneDetails = {
+                id: p0.id,
+                displayPhoneNumber: p0.display_phone_number,
+                verifiedName: p0.verified_name,
+                qualityRating: p0.quality_rating || 'GREEN',
+                codeVerificationStatus: p0.code_verification_status || 'VERIFIED',
+                status: p0.status || 'CONNECTED',
+              };
+            }
+          }
+        } else if (wabaData.error) {
+          errors.push(`WABA Error: ${wabaData.error.message || 'Could not verify WABA ID'}`);
+        }
+      } catch (err: any) {
+        errors.push(`WABA Network Error: ${err?.message || 'Failed to contact Meta API'}`);
+      }
+    }
+
+    if (!phoneDetails && !wabaDetails) {
+      return res.status(400).json({
+        success: false,
+        error: errors.join(' | ') || 'Could not find WABA or Phone Number with the provided credentials on Meta.',
+        code: 'NOT_FOUND',
+      });
+    }
+
+    // Assess migration status
+    let migrationStatus: 'ready' | 'requires_pin' | 'requires_otp' | 'already_active' = 'ready';
+    let recommendation = '';
+
+    if (phoneDetails) {
+      if (phoneDetails.codeVerificationStatus === 'VERIFIED') {
+        migrationStatus = 'requires_pin';
+        recommendation = 'This WhatsApp phone number is verified on Meta. Enter the 6-digit two-step verification PIN configured on the previous BSP/device to migrate and activate routing on CloudWABA.';
+      } else {
+        migrationStatus = 'requires_otp';
+        recommendation = 'This phone number requires an OTP SMS or Voice call verification challenge before migration can complete.';
+      }
+    } else {
+      migrationStatus = 'ready';
+      recommendation = `WABA "${wabaDetails?.name || cleanWabaId}" is found with ${phoneList.length} numbers. Select a number or trigger migration with PIN.`;
+    }
+
+    return res.json({
+      success: true,
+      eligible: true,
+      waba: wabaDetails || { id: cleanWabaId },
+      phone: phoneDetails,
+      phoneNumbers: phoneList,
+      migrationStatus,
+      recommendation,
+      metaGraphVersion: config.graphVersion,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Error checking WABA migration';
+    return res.status(500).json({ error: message, code: 'SERVER_ERROR' });
+  }
+}
+
+// Handler: Trigger WABA and Phone Migration to Cloud API
+export async function handleTriggerWabaMigration(req: Request, res: Response) {
+  try {
+    const {
+      wabaId,
+      phoneNumberId,
+      pin,
+      action = 'register_and_migrate',
+      codeMethod = 'SMS',
+      otpCode,
+      customToken,
+      organizationId,
+    } = req.body;
+
+    const config = await getEffectiveMetaConfig(organizationId);
+    const token = customToken || (req.headers['x-meta-token'] as string) || config.systemToken;
+
+    if (!token) {
+      return res.status(400).json({ error: 'Meta Access Token is required to execute WABA migration.', code: 'TOKEN_REQUIRED' });
+    }
+    if (!phoneNumberId) {
+      return res.status(400).json({ error: 'Phone Number ID is required to migrate.', code: 'PHONE_NUMBER_ID_REQUIRED' });
+    }
+
+    // Step 1: Request OTP code (if action === 'request_code')
+    if (action === 'request_code') {
+      const codeUrl = `https://graph.facebook.com/${config.graphVersion}/${phoneNumberId}/request_code`;
+      
+      // Meta Graph API /request_code specification: accepts code_method and language (do NOT send messaging_product)
+      const selectedMethod = (codeMethod || 'SMS').toUpperCase();
+      const codeRes = await fetch(codeUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          code_method: selectedMethod,
+          language: 'en_US',
+        }),
+      });
+      const codeData = await codeRes.json();
+
+      if (!codeRes.ok || codeData.error) {
+        const rawMsg = codeData.error?.message || 'Failed to request verification code from Meta.';
+        const userMsg = codeData.error?.error_user_msg || '';
+        const subcode = codeData.error?.error_subcode || codeData.error?.code;
+
+        let friendlyError = userMsg || rawMsg;
+
+        // Meta specific known error codes for WhatsApp request_code
+        if (rawMsg.includes('133010') || rawMsg.toLowerCase().includes('two-step') || rawMsg.toLowerCase().includes('pin')) {
+          friendlyError = 'Is number par Two-Step PIN pehle se active hai. OTP ki zaroorat nahi hai! Neeche apna 6-digit PIN daal kar seedha "Trigger WABA & Phone Migration" button dabayein.';
+        } else if (rawMsg.includes('133005') || rawMsg.toLowerCase().includes('too many') || rawMsg.toLowerCase().includes('limit')) {
+          friendlyError = 'Meta ne OTP limit lagayi hai (Too many attempts). Kripya 10 minute ruk kar dobara koshish karein ya "Voice Call OTP" chunein.';
+        } else if (rawMsg.includes('133006') || rawMsg.toLowerCase().includes('already registered')) {
+          friendlyError = 'Yeh number pehle se WhatsApp par active hai. Agar purane provider se shift kar rahe hain to 6-digit PIN daal kar seedha "Trigger WABA Migration" dabayein.';
+        } else if (rawMsg.includes('OAuth') || codeData.error?.code === 200 || codeData.error?.code === 10) {
+          friendlyError = `Meta Permission Error: Aapke Access Token me 'whatsapp_business_management' permission nahi hai. Error: ${rawMsg}`;
+        }
+
+        addWebhookLog({
+          event: 'WABA Migration OTP Request Failed',
+          origin: 'Meta Cloud API',
+          details: `Phone ${phoneNumberId} request_code failed (${selectedMethod}): ${rawMsg} (subcode: ${subcode})`,
+          status: 'error',
+          rawPayload: codeData,
+        });
+
+        return res.status(400).json({
+          error: friendlyError,
+          rawError: rawMsg,
+          code: 'REQUEST_CODE_FAILED',
+          details: codeData.error,
+        });
+      }
+
+      addWebhookLog({
+        event: 'WABA Migration OTP Sent',
+        origin: 'Meta Cloud API',
+        details: `Verification OTP successfully dispatched via ${selectedMethod} to Phone ${phoneNumberId}`,
+        status: 'success',
+      });
+
+      return res.json({
+        success: true,
+        step: 'code_requested',
+        message: `Meta verification code sent successfully via ${selectedMethod}! Kripya apne mobile par aaya OTP code darj karein.`,
+      });
+    }
+
+    // Step 2: Verify OTP code (if action === 'verify_code')
+    if (action === 'verify_code') {
+      if (!otpCode) {
+        return res.status(400).json({ error: 'OTP code is required.', code: 'OTP_REQUIRED' });
+      }
+      const verifyUrl = `https://graph.facebook.com/${config.graphVersion}/${phoneNumberId}/verify_code`;
+      const verifyRes = await fetch(verifyUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          code: String(otpCode).trim(),
+        }),
+      });
+      const verifyData = await verifyRes.json();
+      if (!verifyRes.ok || verifyData.error) {
+        return res.status(400).json({
+          error: verifyData.error?.message || 'Failed to verify OTP code with Meta.',
+          code: 'VERIFY_CODE_FAILED',
+          details: verifyData.error,
+        });
+      }
+      return res.json({
+        success: true,
+        step: 'code_verified',
+        message: 'Phone number successfully verified! Now enter 6-digit PIN to finalize migration.',
+      });
+    }
+
+    // Step 3: Register phone number with Meta Cloud API to migrate routing from old BSP/client
+    const registrationPin = pin ? String(pin).trim() : '123456';
+    const regUrl = `https://graph.facebook.com/${config.graphVersion}/${phoneNumberId}/register`;
+    const regRes = await fetch(regUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        pin: registrationPin,
+      }),
+    });
+    const regData = await regRes.json();
+
+    if (!regRes.ok || regData.error) {
+      let errMsg = regData.error?.message || 'Meta phone registration & migration failed.';
+      if (errMsg.includes('SMB') || errMsg.toLowerCase().includes('smb')) {
+        errMsg = 'Meta Rule: Register endpoint is not available for SMB businesses. Yeh account SMB business category me hai. Kripya upar pehla tab "Embedded Signup V4" chunein aur Facebook login popup ke through connect karein!';
+      }
+      addWebhookLog({
+        event: 'WABA Migration Registration Failed',
+        origin: 'Meta Cloud API',
+        details: `Failed migrating Phone ${phoneNumberId}: ${errMsg}`,
+        status: 'error',
+        rawPayload: regData,
+      });
+      return res.status(400).json({
+        error: errMsg,
+        code: 'MIGRATION_REGISTRATION_FAILED',
+        details: regData.error,
+      });
+    }
+
+    // Step 4: Subscribe WABA to webhook application
+    if (wabaId) {
+      try {
+        await fetch(`https://graph.facebook.com/${config.graphVersion}/${wabaId}/subscribed_apps`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      } catch (subErr) {
+        console.warn('WABA subscribed_apps notice during migration:', subErr);
+      }
+    }
+
+    // Step 5: Fetch fresh metadata and persist in Firestore
+    let syncResult: any = null;
+    if (organizationId) {
+      syncResult = await fetchAndSyncMetaAccount({
+        organizationId,
+        token,
+        phoneNumberId,
+        wabaId,
+        pin: registrationPin,
+      });
+    }
+
+    addWebhookLog({
+      event: 'WABA & Phone Number Migrated Successfully',
+      origin: 'WABA Migration',
+      details: `Successfully migrated WABA ${wabaId || 'WABA'} / Phone ${phoneNumberId} to CloudWABA Platform.`,
+      status: 'success',
+    });
+
+    return res.json({
+      success: true,
+      migrated: true,
+      message: 'WABA and WhatsApp Phone Number successfully migrated to Cloud API!',
+      account: syncResult?.account || {
+        phoneNumberId,
+        wabaId,
+        connectionStatus: 'connected',
+        webhookStatus: 'active',
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Error executing WABA migration';
+    return res.status(500).json({ error: message, code: 'SERVER_ERROR' });
+  }
+}
+
 // Handler: Deep Verification of Meta Credentials (Token, Phone Number ID, WABA ID)
 export async function handleTestConnection(req: Request, res: Response) {
   try {
@@ -1570,13 +1914,7 @@ export async function handleTestConnection(req: Request, res: Response) {
           diagnostics.qualityRating = phoneData.quality_rating || 'UNKNOWN';
           diagnostics.codeVerificationStatus = phoneData.code_verification_status || 'NOT_VERIFIED';
         } else {
-          const errCode = phoneData.error?.error_subcode || phoneData.error?.code;
-          const errMsg = phoneData.error?.message || 'Invalid Phone Number ID';
-          if (errCode === 2655093 || errMsg.includes('2655093') || errMsg.toLowerCase().includes('already registered')) {
-            diagnostics.errors.push(`[Meta Error #2655093]: Number is still attached to previous provider (Wbbox). Click "Fix Error #2655093 / Unlink Old Provider" to release it.`);
-          } else {
-            diagnostics.errors.push(`Phone Number: ${errMsg}`);
-          }
+          diagnostics.errors.push(`Phone Number: ${phoneData.error?.message || 'Invalid Phone Number ID'}`);
         }
       } catch (err) {
         diagnostics.errors.push(`Phone check error: ${err instanceof Error ? err.message : 'Network error'}`);
@@ -1595,8 +1933,7 @@ export async function handleTestConnection(req: Request, res: Response) {
           diagnostics.wabaValid = true;
           diagnostics.wabaName = wabaData.name || '';
         } else {
-          const errMsg = wabaData.error?.message || 'Invalid WABA ID';
-          diagnostics.errors.push(`WABA ID: ${errMsg}`);
+          diagnostics.errors.push(`WABA ID: ${wabaData.error?.message || 'Invalid WABA ID'}`);
         }
       } catch (err) {
         diagnostics.errors.push(`WABA check error: ${err instanceof Error ? err.message : 'Network error'}`);
@@ -1611,84 +1948,6 @@ export async function handleTestConnection(req: Request, res: Response) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to test connection with Meta';
-    return res.status(500).json({ success: false, error: message });
-  }
-}
-
-// Handler: Force Unsubscribe Old App / Fix Error #2655093 (DELETE /{wabaId}/subscribed_apps)
-export async function handleForceUnsubscribeOldApp(req: Request, res: Response) {
-  try {
-    const { wabaId, customToken, organizationId } = req.body;
-    if (!wabaId || typeof wabaId !== 'string' || !wabaId.trim()) {
-      return res.status(400).json({
-        success: false,
-        error: 'WABA ID (WhatsApp Business Account ID) is required to release old provider.',
-      });
-    }
-
-    const cleanWabaId = wabaId.trim();
-    const config = await getEffectiveMetaConfig(organizationId);
-    const token = (customToken || config.systemToken).trim();
-
-    if (!token) {
-      return res.status(400).json({
-        success: false,
-        error: 'A valid System User Access Token or Meta Token is required to unlink the old provider from Graph API.',
-      });
-    }
-
-    const url = `https://graph.facebook.com/${config.graphVersion}/${encodeURIComponent(cleanWabaId)}/subscribed_apps`;
-
-    // 1. DELETE /subscribed_apps removes previous partner hooks (Wbbox, etc.)
-    const delRes = await fetch(url, {
-      method: 'DELETE',
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
-
-    const delData = await delRes.json().catch(() => ({}));
-
-    if (!delRes.ok) {
-      const errMsg = delData?.error?.message || 'Meta Graph API returned an error while releasing the WABA.';
-      const isSubcode2655093 =
-        delData?.error?.error_subcode === 2655093 ||
-        delData?.error?.code === 2655093 ||
-        errMsg.includes('2655093');
-
-      addWebhookLog({
-        event: 'Unsubscribe Old App Failed',
-        origin: 'Meta Cloud API /subscribed_apps',
-        details: `WABA ${cleanWabaId}: ${errMsg}`,
-        status: 'error',
-        rawPayload: delData,
-      });
-
-      return res.status(delRes.status >= 400 && delRes.status < 500 ? 400 : 500).json({
-        success: false,
-        error: errMsg,
-        isSubcode2655093,
-        details: delData?.error,
-        help: 'If Meta rejects DELETE subscribed_apps, please log in to Meta Business Suite > Settings > WhatsApp Accounts > Partners and remove the previous provider.',
-      });
-    }
-
-    addWebhookLog({
-      event: 'Unsubscribed Old App (Error #2655093 Fix)',
-      origin: 'Meta Cloud API /subscribed_apps',
-      details: `Successfully cleared subscribed_apps for WABA ${cleanWabaId}. Old partner link unlinked!`,
-      status: 'success',
-      rawPayload: delData,
-    });
-
-    return res.json({
-      success: true,
-      message: `Successfully unlinked previous partner/Wbbox subscription from WABA ${cleanWabaId}! The account is now free for new connection.`,
-      wabaId: cleanWabaId,
-      result: delData,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to release old app subscription';
     return res.status(500).json({ success: false, error: message });
   }
 }
@@ -2511,7 +2770,7 @@ export function handleWebhookPost(req: Request, res: Response) {
     }
 
     // 3. Handle official Meta Template Status Updates (APPROVED, REJECTED, PAUSED)
-    if (field === 'message_template_status_update' || (value.event && !value.event.startsWith('ACCOUNT_') && !value.event.startsWith('PARTNER_'))) {
+    if (field === 'message_template_status_update' || value.event) {
       const tplEvent = value.event || 'UPDATED';
       const tplName = value.message_template_name || value.template_name || 'Template';
       const reason = value.reason ? ` - Reason: ${value.reason}` : '';
@@ -2523,65 +2782,6 @@ export function handleWebhookPost(req: Request, res: Response) {
         status: tplEvent === 'APPROVED' ? 'success' : tplEvent === 'REJECTED' ? 'error' : 'warning',
         rawPayload: value,
       });
-    }
-
-    // 4. Handle Meta Account Updates & Coexistence Lifecycle (ACCOUNT_OFFBOARDED, ACCOUNT_RECONNECTED, PARTNER_ADDED, PARTNER_REMOVED)
-    if (
-      field === 'account_update' ||
-      value.account_update ||
-      value.event === 'ACCOUNT_OFFBOARDED' ||
-      value.event === 'ACCOUNT_RECONNECTED' ||
-      value.event === 'PARTNER_ADDED' ||
-      value.event === 'PARTNER_REMOVED' ||
-      field === 'phone_number_name_update' ||
-      field === 'phone_number_quality_update'
-    ) {
-      const eventType = value.event || value.account_update?.event || (field ? field.toUpperCase() : 'ACCOUNT_UPDATE');
-      const phoneOrWaba = value.phone_number || value.phone_number_id || value.waba_id || 'WhatsApp Account';
-      const isOffboarded = eventType === 'ACCOUNT_OFFBOARDED';
-      const isReconnected = eventType === 'ACCOUNT_RECONNECTED';
-      const partnerDetail = value.partner_name || value.partner_id ? ` (Partner: ${value.partner_name || value.partner_id})` : '';
-
-      addWebhookLog({
-        event: `Meta Account: ${eventType}`,
-        origin: 'WhatsApp Coexistence / Account Update',
-        details: `${phoneOrWaba} - Event: ${eventType}${partnerDetail}. ${
-          isOffboarded
-            ? 'Account disconnected (check 14-day WhatsApp mobile app inactivity or partner change).'
-            : isReconnected
-            ? 'Account re-connected successfully.'
-            : ''
-        }`,
-        status: isOffboarded ? 'warning' : 'success',
-        rawPayload: value,
-      });
-
-      // Update Firestore if account phone number is known
-      const phoneIdToUpdate = value.phone_number_id || (value.phone_number ? String(value.phone_number).replace(/[^0-9]/g, '') : null);
-      if (phoneIdToUpdate) {
-        (async () => {
-          try {
-            const orgsSnap = await getDocs(collection(serverDb, 'organizations'));
-            for (const orgDoc of orgsSnap.docs) {
-              const accRef = doc(serverDb, 'organizations', orgDoc.id, 'whatsappAccounts', phoneIdToUpdate);
-              const accSnap = await getDoc(accRef);
-              if (accSnap.exists()) {
-                await updateDoc(accRef, {
-                  connectionStatus: isOffboarded ? 'disconnected' : isReconnected ? 'connected' : accSnap.data().connectionStatus,
-                  lastAccountUpdateEvent: eventType,
-                  lastAccountUpdateAt: new Date().toISOString(),
-                  coexistenceNote: isOffboarded
-                    ? 'Disconnected by Meta. If using Coexistence mode, please open WhatsApp Business on your mobile phone to refresh.'
-                    : undefined,
-                });
-                break;
-              }
-            }
-          } catch (updateErr) {
-            console.warn('[Webhook] Failed to auto-update Firestore account on account_update event:', updateErr);
-          }
-        })();
-      }
     }
   }
 
