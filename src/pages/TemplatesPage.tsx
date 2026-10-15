@@ -44,7 +44,7 @@ import type { Template, TemplateComponent } from '../types/index.ts';
 
 export const TemplatesPage: React.FC = () => {
   const { organization } = useAuth();
-  const { activeAccount } = useWhatsAppAccounts();
+  const { activeAccount, accounts } = useWhatsAppAccounts();
   const toast = useToast();
 
   const [templates, setTemplates] = useState<Template[]>([]);
@@ -60,6 +60,7 @@ export const TemplatesPage: React.FC = () => {
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [selectedHeaderFormat, setSelectedHeaderFormat] = useState<string>('ALL');
   const [selectedLanguage, setSelectedLanguage] = useState<string>('ALL');
+  const [selectedAccountFilter, setSelectedAccountFilter] = useState<string>('ALL');
   const [sortBy, setSortBy] = useState<'newest' | 'oldest' | 'name-asc' | 'name-desc'>('newest');
   const [searchQuery, setSearchQuery] = useState('');
   const [showFilterPanel, setShowFilterPanel] = useState(true);
@@ -215,6 +216,7 @@ export const TemplatesPage: React.FC = () => {
     (selectedCategory !== 'ALL' ? 1 : 0) +
     (selectedHeaderFormat !== 'ALL' ? 1 : 0) +
     (selectedLanguage !== 'ALL' ? 1 : 0) +
+    (selectedAccountFilter !== 'ALL' ? 1 : 0) +
     (searchQuery.trim() ? 1 : 0);
 
   const resetAllFilters = () => {
@@ -222,6 +224,7 @@ export const TemplatesPage: React.FC = () => {
     setSelectedCategory('ALL');
     setSelectedHeaderFormat('ALL');
     setSelectedLanguage('ALL');
+    setSelectedAccountFilter('ALL');
     setSearchQuery('');
     setSortBy('newest');
   };
@@ -246,7 +249,16 @@ export const TemplatesPage: React.FC = () => {
       // 4. Language Filter
       if (selectedLanguage !== 'ALL' && t.language !== selectedLanguage) return false;
 
-      // 5. Search Query
+      // 5. WhatsApp Account Filter
+      if (selectedAccountFilter !== 'ALL') {
+        if (selectedAccountFilter === 'ACTIVE') {
+          if (activeAccount && t.whatsAppAccountId && t.whatsAppAccountId !== activeAccount.id) return false;
+        } else if (t.whatsAppAccountId && t.whatsAppAccountId !== selectedAccountFilter) {
+          return false;
+        }
+      }
+
+      // 6. Search Query
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         const bodyComp = t.components?.find((c) => c.type === 'BODY');
@@ -542,7 +554,33 @@ export const TemplatesPage: React.FC = () => {
             )}
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 text-xs">
+            {/* WhatsApp Account Filter */}
+            {accounts.length > 0 && (
+              <div>
+                <label className="block text-[11px] font-semibold text-neutral-600 dark:text-neutral-400 mb-1">
+                  WhatsApp Account
+                </label>
+                <select
+                  value={selectedAccountFilter}
+                  onChange={(e) => setSelectedAccountFilter(e.target.value)}
+                  className="w-full px-2.5 py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white text-xs cursor-pointer focus:ring-1 focus:ring-emerald-500 font-medium"
+                >
+                  <option value="ALL">All Accounts ({templates.length})</option>
+                  {activeAccount && (
+                    <option value="ACTIVE">
+                      Active: {activeAccount.displayPhoneNumber}
+                    </option>
+                  )}
+                  {accounts.map((acc) => (
+                    <option key={acc.id} value={acc.id}>
+                      {acc.displayPhoneNumber} ({acc.verifiedName})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             {/* Category Filter */}
             <div>
               <label className="block text-[11px] font-semibold text-neutral-600 dark:text-neutral-400 mb-1">
@@ -620,6 +658,20 @@ export const TemplatesPage: React.FC = () => {
           {activeFiltersCount > 0 && (
             <div className="flex flex-wrap items-center gap-1.5 pt-1">
               <span className="text-[10.5px] font-medium text-neutral-400">Active Filters:</span>
+              {selectedAccountFilter !== 'ALL' && (
+                <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 text-[10.5px] font-semibold">
+                  <Smartphone className="w-3 h-3" />
+                  <span>
+                    Account:{' '}
+                    {selectedAccountFilter === 'ACTIVE'
+                      ? activeAccount?.displayPhoneNumber || 'Active'
+                      : accounts.find((a) => a.id === selectedAccountFilter)?.displayPhoneNumber || selectedAccountFilter}
+                  </span>
+                  <button onClick={() => setSelectedAccountFilter('ALL')} className="hover:opacity-75 cursor-pointer">
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              )}
               {selectedTab !== 'ALL' && (
                 <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 text-[10.5px]">
                   <span>Status: {selectedTab}</span>

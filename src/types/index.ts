@@ -213,6 +213,7 @@ export interface Campaign {
   id: string;
   name: string;
   whatsAppAccountId: string;
+  phoneNumberId?: string;
   templateId: string;
   templateName?: string;
   templateCategory?: string;

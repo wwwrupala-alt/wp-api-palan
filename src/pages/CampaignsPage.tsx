@@ -55,7 +55,7 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
   onNavigateToDrip,
 }) => {
   const { organization } = useAuth();
-  const { activeAccount } = useWhatsAppAccounts();
+  const { activeAccount, accounts } = useWhatsAppAccounts();
   const toast = useToast();
 
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
@@ -67,6 +67,7 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
   // Search & Filter State
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [accountFilter, setAccountFilter] = useState<string>('all');
 
   // Multi-Select State
   const [selectedCampaignIds, setSelectedCampaignIds] = useState<string[]>([]);
@@ -374,7 +375,7 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
     };
   }, [organization?.id]);
 
-  // Filtered campaigns based on search query and status filter
+  // Filtered campaigns based on search query, status filter, and WhatsApp account
   const filteredCampaigns = useMemo(() => {
     return campaigns.filter((c) => {
       const matchesSearch =
@@ -384,9 +385,17 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
 
       const matchesStatus = statusFilter === 'all' || c.status === statusFilter;
 
-      return matchesSearch && matchesStatus;
+      const matchesAccount =
+        accountFilter === 'all' ||
+        (accountFilter === 'active' &&
+          activeAccount &&
+          (c.whatsAppAccountId === activeAccount.id || c.phoneNumberId === activeAccount.phoneNumberId)) ||
+        c.whatsAppAccountId === accountFilter ||
+        c.phoneNumberId === accountFilter;
+
+      return matchesSearch && matchesStatus && matchesAccount;
     });
-  }, [campaigns, searchQuery, statusFilter]);
+  }, [campaigns, searchQuery, statusFilter, accountFilter, activeAccount]);
 
   // Checkbox handlers
   const isAllSelected =
@@ -722,21 +731,47 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
             )}
           </div>
 
-          <div className="flex items-center space-x-2 w-full sm:w-auto">
-            <Filter className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
-            <select
-              value={statusFilter || 'all'}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="w-full sm:w-auto px-3 py-2 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs text-neutral-800 dark:text-neutral-200 focus:outline-hidden focus:ring-2 focus:ring-emerald-500"
-            >
-              <option value="all">All Statuses ({campaigns.length})</option>
-              <option value="scheduled">⏰ Scheduled ({campaigns.filter((c) => c.status === 'scheduled').length})</option>
-              <option value="completed">Completed ({campaigns.filter((c) => c.status === 'completed').length})</option>
-              <option value="sending">Sending ({campaigns.filter((c) => c.status === 'sending').length})</option>
-              <option value="cancelled">Cancelled ({campaigns.filter((c) => c.status === 'cancelled').length})</option>
-              <option value="draft">Draft ({campaigns.filter((c) => c.status === 'draft').length})</option>
-              <option value="failed">Failed ({campaigns.filter((c) => c.status === 'failed').length})</option>
-            </select>
+          <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+            {accounts.length > 0 && (
+              <div className="flex items-center space-x-1.5 w-full sm:w-auto">
+                <Smartphone className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <select
+                  value={accountFilter}
+                  onChange={(e) => setAccountFilter(e.target.value)}
+                  className="w-full sm:w-auto px-3 py-2 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs text-neutral-800 dark:text-neutral-200 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 font-medium cursor-pointer"
+                  title="Filter campaigns by sending WhatsApp number"
+                >
+                  <option value="all">All WhatsApp Numbers ({campaigns.length})</option>
+                  {activeAccount && (
+                    <option value="active">
+                      Active: {activeAccount.displayPhoneNumber} ({activeAccount.verifiedName})
+                    </option>
+                  )}
+                  {accounts.map((acc) => (
+                    <option key={acc.id} value={acc.id}>
+                      {acc.displayPhoneNumber} - {acc.verifiedName}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <div className="flex items-center space-x-1.5 w-full sm:w-auto">
+              <Filter className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
+              <select
+                value={statusFilter || 'all'}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="w-full sm:w-auto px-3 py-2 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs text-neutral-800 dark:text-neutral-200 focus:outline-hidden focus:ring-2 focus:ring-emerald-500"
+              >
+                <option value="all">All Statuses ({campaigns.length})</option>
+                <option value="scheduled">⏰ Scheduled ({campaigns.filter((c) => c.status === 'scheduled').length})</option>
+                <option value="completed">Completed ({campaigns.filter((c) => c.status === 'completed').length})</option>
+                <option value="sending">Sending ({campaigns.filter((c) => c.status === 'sending').length})</option>
+                <option value="cancelled">Cancelled ({campaigns.filter((c) => c.status === 'cancelled').length})</option>
+                <option value="draft">Draft ({campaigns.filter((c) => c.status === 'draft').length})</option>
+                <option value="failed">Failed ({campaigns.filter((c) => c.status === 'failed').length})</option>
+              </select>
+            </div>
           </div>
         </div>
       )}
@@ -850,6 +885,23 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
                             </span>
                           )}
                         </div>
+                        {/* WhatsApp Account Badge */}
+                        {(() => {
+                          const matchedAcc = accounts.find(
+                            (a) => a.id === c.whatsAppAccountId || a.phoneNumberId === c.phoneNumberId
+                          );
+                          const numDisplay = matchedAcc
+                            ? `${matchedAcc.displayPhoneNumber} (${matchedAcc.verifiedName})`
+                            : c.phoneNumberId
+                            ? `Phone ID: ${c.phoneNumberId}`
+                            : null;
+                          return numDisplay ? (
+                            <div className="flex items-center space-x-1 text-[10px] text-neutral-500 dark:text-neutral-400 font-normal mt-0.5">
+                              <Smartphone className="w-2.5 h-2.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                              <span className="truncate max-w-[220px]">From: {numDisplay}</span>
+                            </div>
+                          ) : null;
+                        })()}
                       </td>
                       <td className="py-3.5 px-4 text-neutral-600 dark:text-neutral-300 font-mono text-[11px]">
                         {c.templateName}
