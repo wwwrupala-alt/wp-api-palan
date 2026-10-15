@@ -94,6 +94,7 @@ interface WhatsAppAccountsContextType {
     customToken?: string;
   }) => Promise<{ success: boolean; error?: string }>;
   syncAccountWithMeta: (account: WhatsAppAccount) => Promise<{ success: boolean; error?: string }>;
+  updateAccountToken: (accountId: string, token: string) => Promise<{ success: boolean; error?: string }>;
   disconnectAccount: (accountId: string) => Promise<void>;
   reconnectAccount: (accountId: string) => Promise<void>;
   deleteAccount: (accountId: string) => Promise<void>;
@@ -413,6 +414,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
                   connectionStatus: 'connected',
                   webhookStatus: 'active',
                   qualityRating: data.qualityRating || 'GREEN',
+                  customToken: data.customToken || undefined,
                   createdAt: new Date().toISOString(),
                   updatedAt: new Date().toISOString(),
                 };
@@ -656,6 +658,40 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
     }
   };
 
+  const updateAccountToken = async (
+    accountId: string,
+    token: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    const effectiveOrgId = getEffectiveOrgId();
+    if (!effectiveOrgId) return { success: false, error: 'Organization not found' };
+
+    const cleanToken = token.trim();
+    const accountRef = doc(db, 'organizations', effectiveOrgId, 'whatsappAccounts', accountId);
+
+    try {
+      await updateDoc(accountRef, {
+        customToken: cleanToken || null,
+        updatedAt: new Date().toISOString(),
+      });
+
+      // Synchronize backend server
+      await fetch('/api/meta/update-account-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          organizationId: effectiveOrgId,
+          phoneNumberId: accountId,
+          customToken: cleanToken,
+        }),
+      });
+
+      return { success: true };
+    } catch (err: any) {
+      handleFirestoreError(err, OperationType.UPDATE, `organizations/${effectiveOrgId}/whatsappAccounts/${accountId}`);
+      return { success: false, error: err?.message || 'Failed to update account token' };
+    }
+  };
+
   const deleteAccount = async (accountId: string) => {
     const effectiveOrgId = getEffectiveOrgId();
     if (!effectiveOrgId) return;
@@ -682,6 +718,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
         testMetaCredentials,
         registerPhoneNumber,
         syncAccountWithMeta,
+        updateAccountToken,
         disconnectAccount,
         reconnectAccount,
         deleteAccount,

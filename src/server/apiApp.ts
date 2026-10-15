@@ -17,6 +17,7 @@ import {
   handleTestConnection,
   handleCheckWabaMigration,
   handleTriggerWabaMigration,
+  handleUpdateAccountToken,
   handleWebhookVerification,
   handleWebhookPost,
   handleGetWebhookLogs,
@@ -135,6 +136,7 @@ apiApp.post('/api/meta/test-connection', handleTestConnection);
 apiApp.post('/api/meta/register-phone', handleRegisterPhone);
 apiApp.post('/api/meta/waba-migration/check', handleCheckWabaMigration);
 apiApp.post('/api/meta/waba-migration/trigger', handleTriggerWabaMigration);
+apiApp.post('/api/meta/update-account-token', handleUpdateAccountToken);
 apiApp.get('/api/meta/templates', handleGetTemplates);
 apiApp.post('/api/meta/templates', handleCreateTemplate);
 apiApp.delete('/api/meta/templates', handleDeleteTemplate);

@@ -13,11 +13,13 @@ import {
   Check,
   HelpCircle,
   Zap,
+  Key,
 } from 'lucide-react';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
 import { useToast } from '../context/ToastContext.tsx';
 import type { WhatsAppAccount } from '../types/index.ts';
 import { parseMessagingLimitTier } from '../lib/metaLimits.ts';
+import { UpdateAccountTokenModal } from '../components/UpdateAccountTokenModal.tsx';
 
 interface WhatsAppAccountsPageProps {
   onOpenConnectModal: () => void;
@@ -41,6 +43,7 @@ export const WhatsAppAccountsPage: React.FC<WhatsAppAccountsPageProps> = ({
   const [copiedToken, setCopiedToken] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
+  const [tokenModalAccount, setTokenModalAccount] = useState<WhatsAppAccount | null>(null);
 
   const copyToClipboard = (text: string, isUrl: boolean) => {
     navigator.clipboard.writeText(text);
@@ -354,6 +357,15 @@ export const WhatsAppAccountsPage: React.FC<WhatsAppAccountsPageProps> = ({
                       />
                       <span>Sync with Meta</span>
                     </button>
+
+                    <button
+                      onClick={() => setTokenModalAccount(acc)}
+                      className="px-3 py-1.5 rounded-lg border border-amber-200 dark:border-amber-800/80 bg-amber-50/50 dark:bg-amber-950/30 hover:bg-amber-100/60 dark:hover:bg-amber-950/60 text-amber-800 dark:text-amber-300 text-xs font-medium flex items-center space-x-1.5 transition-colors cursor-pointer"
+                      title="Update Access Token or fix Meta permission #200"
+                    >
+                      <Key className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                      <span>Update Token</span>
+                    </button>
                   </div>
 
                   <button
@@ -428,6 +440,14 @@ export const WhatsAppAccountsPage: React.FC<WhatsAppAccountsPageProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Update Token & Fix Permission #200 Modal */}
+      <UpdateAccountTokenModal
+        isOpen={Boolean(tokenModalAccount)}
+        onClose={() => setTokenModalAccount(null)}
+        account={tokenModalAccount}
+        onSuccess={refreshMetaStatus}
+      />
     </div>
   );
 };

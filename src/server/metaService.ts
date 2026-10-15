@@ -331,12 +331,30 @@ export async function handleEmbeddedSignupExchange(req: Request, res: Response) 
         qualityRating: qualityRating,
         connectionStatus: 'connected',
         webhookStatus: 'active',
+        customToken: accessToken,
         updatedAt: new Date().toISOString(),
       });
       firestoreUpdated = fsRes.success;
+
+      // Automatically persist exchanged token in organization's metaAppConfig for seamless template & campaign sync
+      try {
+        const orgRef = doc(serverDb, 'organizations', organizationId);
+        await setDoc(
+          orgRef,
+          {
+            metaAppConfig: {
+              systemUserToken: accessToken,
+              wabaId: wabaId || undefined,
+              updatedAt: new Date().toISOString(),
+            },
+          },
+          { merge: true }
+        );
+      } catch (orgErr) {
+        console.warn('[EmbeddedSignupExchange] Auto-saved token to organization notice:', orgErr);
+      }
     }
 
-    // Return safe data only - NEVER expose accessToken
     return res.json({
       success: true,
       wabaId: wabaId || 'waba_connected',
@@ -346,6 +364,7 @@ export async function handleEmbeddedSignupExchange(req: Request, res: Response) 
       qualityRating: qualityRating,
       connectionStatus: 'connected',
       webhookStatus: 'active',
+      customToken: accessToken,
       firestoreUpdated,
     });
   } catch (error) {
@@ -495,7 +514,8 @@ export async function handleSyncMetaAccount(req: Request, res: Response) {
 export async function handleGetTemplates(req: Request, res: Response) {
   try {
     const wabaId = (req.query.wabaId as string) || '';
-    const config = getMetaConfig();
+    const organizationId = (req.query.organizationId as string) || (req.headers['x-organization-id'] as string) || '';
+    const config = await getEffectiveMetaConfig(organizationId);
     const token =
       (req.headers['x-meta-token'] as string) ||
       (req.query.customToken as string) ||
@@ -517,10 +537,23 @@ export async function handleGetTemplates(req: Request, res: Response) {
     const templatesData = await templatesRes.json();
 
     if (!templatesRes.ok || templatesData.error) {
+      const err = templatesData.error;
+      const isPermission200 = err?.code === 200;
+      let detailedMsg = err?.message || 'Failed to fetch templates from Meta.';
+      if (isPermission200) {
+        detailedMsg = `(#200) You do not have permission to access this field. Meta requires 'whatsapp_business_management' permission with Advanced Access or assigning your System User to this WABA in Meta Business Suite.`;
+      }
       return res.status(400).json({
-        error: templatesData.error?.message || 'Failed to fetch templates from Meta.',
-        code: 'TEMPLATES_FETCH_FAILED',
-        details: templatesData.error,
+        error: detailedMsg,
+        code: isPermission200 ? 'META_PERMISSION_200' : 'TEMPLATES_FETCH_FAILED',
+        isPermissionError: isPermission200,
+        details: err,
+        resolutionSteps: isPermission200 ? [
+          'Meta App Roles: If your Meta App is in Development Mode, add the client Facebook user as a Tester/Developer in developers.facebook.com > Roles.',
+          'Advanced Access: In developers.facebook.com > App Review > Permissions, grant Advanced Access to whatsapp_business_management and whatsapp_business_messaging.',
+          'System User Asset: In business.facebook.com > Settings > Users > System Users > Select user > Add Assets > WhatsApp Accounts > Select this WABA > Enable Full Control.',
+          'Custom System User Token: You can also update the account with a permanent System User Token in the WhatsApp Accounts page.'
+        ] : undefined,
       });
     }
 
@@ -1870,6 +1903,61 @@ export async function handleTriggerWabaMigration(req: Request, res: Response) {
   }
 }
 
+// Handler: Update token for a connected WhatsApp Account
+export async function handleUpdateAccountToken(req: Request, res: Response) {
+  try {
+    const { organizationId, phoneNumberId, customToken } = req.body;
+    if (!organizationId || !phoneNumberId) {
+      return res.status(400).json({
+        success: false,
+        error: 'organizationId and phoneNumberId are required to update account token.',
+      });
+    }
+
+    const cleanToken = customToken ? customToken.trim() : null;
+
+    // Update WhatsApp account document in Firestore
+    await updateFirestoreWhatsAppAccount(organizationId, phoneNumberId, {
+      customToken: cleanToken,
+      updatedAt: new Date().toISOString(),
+    });
+
+    // If cleanToken provided, also persist in organization metaAppConfig
+    if (cleanToken) {
+      try {
+        const orgRef = doc(serverDb, 'organizations', organizationId);
+        await setDoc(
+          orgRef,
+          {
+            metaAppConfig: {
+              systemUserToken: cleanToken,
+              updatedAt: new Date().toISOString(),
+            },
+          },
+          { merge: true }
+        );
+      } catch (orgErr) {
+        console.warn('[UpdateAccountToken] Organization metaAppConfig update notice:', orgErr);
+      }
+    }
+
+    addWebhookLog({
+      event: 'Account Token Updated',
+      origin: 'Security Settings',
+      details: `Updated token for Phone Number ID ${phoneNumberId} in organization ${organizationId}.`,
+      status: 'success',
+    });
+
+    return res.json({
+      success: true,
+      message: 'WhatsApp account access token updated successfully!',
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to update token';
+    return res.status(500).json({ success: false, error: message });
+  }
+}
+
 // Handler: Deep Verification of Meta Credentials (Token, Phone Number ID, WABA ID)
 export async function handleTestConnection(req: Request, res: Response) {
   try {
@@ -1884,7 +1972,6 @@ export async function handleTestConnection(req: Request, res: Response) {
         code: 'TOKEN_REQUIRED',
       });
     }
-
     const diagnostics = {
       tokenValid: false,
       tokenType: 'System User Token',
@@ -1894,15 +1981,21 @@ export async function handleTestConnection(req: Request, res: Response) {
       qualityRating: '',
       codeVerificationStatus: '',
       wabaValid: false,
+      wabaId: wabaId || '',
+      detectedWabaId: '',
       wabaName: '',
       templateCount: 0,
+      templatesAccessible: false,
       errors: [] as string[],
+      resolutionHint: '',
     };
 
-    // 1. Verify Phone Number ID
+    let effectiveWabaId = wabaId;
+
+    // 1. Verify Phone Number ID & Discover Parent WABA ID
     if (phoneNumberId) {
       try {
-        const phoneUrl = `https://graph.facebook.com/${config.graphVersion}/${phoneNumberId}?fields=verified_name,display_phone_number,quality_rating,code_verification_status&access_token=${token}`;
+        const phoneUrl = `https://graph.facebook.com/${config.graphVersion}/${phoneNumberId}?fields=verified_name,display_phone_number,quality_rating,code_verification_status,whatsapp_business_account&access_token=${token}`;
         const phoneRes = await fetch(phoneUrl);
         const phoneData = await phoneRes.json();
 
@@ -1913,6 +2006,13 @@ export async function handleTestConnection(req: Request, res: Response) {
           diagnostics.verifiedName = phoneData.verified_name || '';
           diagnostics.qualityRating = phoneData.quality_rating || 'UNKNOWN';
           diagnostics.codeVerificationStatus = phoneData.code_verification_status || 'NOT_VERIFIED';
+
+          if (phoneData.whatsapp_business_account?.id) {
+            diagnostics.detectedWabaId = phoneData.whatsapp_business_account.id;
+            if (!effectiveWabaId || effectiveWabaId === 'waba_connected' || effectiveWabaId !== diagnostics.detectedWabaId) {
+              console.log(`[handleTestConnection] Discovered real WABA ID ${diagnostics.detectedWabaId} from Phone Number ID ${phoneNumberId}`);
+            }
+          }
         } else {
           diagnostics.errors.push(`Phone Number: ${phoneData.error?.message || 'Invalid Phone Number ID'}`);
         }
@@ -1921,26 +2021,76 @@ export async function handleTestConnection(req: Request, res: Response) {
       }
     }
 
-    // 2. Verify WABA ID
-    if (wabaId) {
+    // 2. Verify WABA ID (test provided ID, or try detected WABA ID from phone number)
+    const testWabaCandidate = async (candidateId: string) => {
       try {
-        const wabaUrl = `https://graph.facebook.com/${config.graphVersion}/${wabaId}?fields=id,name,currency,message_template_namespace&access_token=${token}`;
+        const wabaUrl = `https://graph.facebook.com/${config.graphVersion}/${candidateId}?fields=id,name,currency,message_template_namespace&access_token=${token}`;
         const wabaRes = await fetch(wabaUrl);
         const wabaData = await wabaRes.json();
 
         if (wabaRes.ok && !wabaData.error) {
           diagnostics.tokenValid = true;
           diagnostics.wabaValid = true;
+          diagnostics.wabaId = candidateId;
           diagnostics.wabaName = wabaData.name || '';
+          return true;
         } else {
-          diagnostics.errors.push(`WABA ID: ${wabaData.error?.message || 'Invalid WABA ID'}`);
+          return wabaData.error?.message || 'WABA not accessible';
         }
       } catch (err) {
-        diagnostics.errors.push(`WABA check error: ${err instanceof Error ? err.message : 'Network error'}`);
+        return err instanceof Error ? err.message : 'Network error';
+      }
+    };
+
+    if (effectiveWabaId) {
+      const wabaResult = await testWabaCandidate(effectiveWabaId);
+      if (wabaResult === true) {
+        // Validated successfully
+      } else if (diagnostics.detectedWabaId && diagnostics.detectedWabaId !== effectiveWabaId) {
+        // Provided ID failed, but we found a different real WABA ID directly from the phone number node!
+        const autoDetectedResult = await testWabaCandidate(diagnostics.detectedWabaId);
+        if (autoDetectedResult === true) {
+          effectiveWabaId = diagnostics.detectedWabaId;
+          diagnostics.resolutionHint = `Auto-corrected WABA ID: The previous ID was not recognized as a WABA. Automatically switched to real WABA ID ${diagnostics.detectedWabaId}.`;
+        } else {
+          diagnostics.errors.push(`WABA ID (${effectiveWabaId}): ${wabaResult}`);
+          diagnostics.resolutionHint = `Missing Asset Assignment: In Meta Business Settings > System Users > Add Assets > WhatsApp Accounts, assign Full Control for this WABA to your System User.`;
+        }
+      } else {
+        diagnostics.errors.push(`WABA ID (${effectiveWabaId}): ${wabaResult}`);
+        if (typeof wabaResult === 'string' && wabaResult.includes('Unsupported get request')) {
+          diagnostics.resolutionHint = `Meta Error: "Object does not exist or missing permissions". Either: 1) System User ko Meta Business Settings > System Users > Add Assets me WhatsApp Account ka 'Full Control' assign nahi kiya gaya hai, ya 2) Yeh ID WABA ID nahi balki Business Portfolio ID hai.`;
+        }
+      }
+    } else if (diagnostics.detectedWabaId) {
+      effectiveWabaId = diagnostics.detectedWabaId;
+      await testWabaCandidate(diagnostics.detectedWabaId);
+    }
+
+    // 3. Verify Message Templates Permission & Scopes
+    if (diagnostics.wabaValid && effectiveWabaId) {
+      try {
+        const tplCheckUrl = `https://graph.facebook.com/${config.graphVersion}/${effectiveWabaId}/message_templates?limit=5&access_token=${token}`;
+        const tplRes = await fetch(tplCheckUrl);
+        const tplData = await tplRes.json();
+        if (tplRes.ok && !tplData.error) {
+          diagnostics.templatesAccessible = true;
+          diagnostics.templateCount = tplData.data?.length || 0;
+        } else if (tplData.error?.code === 200) {
+          diagnostics.templatesAccessible = false;
+          diagnostics.errors.push(
+            `Template Access (#200): Token lacks 'whatsapp_business_management' permission with Advanced Access, or your System User is not assigned Asset access in Meta Business Suite.`
+          );
+        } else {
+          diagnostics.templatesAccessible = false;
+          diagnostics.errors.push(`Template check: ${tplData.error?.message || 'Permission denied'}`);
+        }
+      } catch {
+        diagnostics.templatesAccessible = false;
       }
     }
 
-    const overallSuccess = (diagnostics.phoneNumberValid || !phoneNumberId) && (diagnostics.wabaValid || !wabaId) && diagnostics.tokenValid;
+    const overallSuccess = (diagnostics.phoneNumberValid || !phoneNumberId) && (diagnostics.wabaValid || !effectiveWabaId) && diagnostics.tokenValid && diagnostics.templatesAccessible;
 
     return res.json({
       success: overallSuccess,

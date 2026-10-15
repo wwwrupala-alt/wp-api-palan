@@ -23,6 +23,10 @@ import {
   SlidersHorizontal,
   RotateCcw,
   Sparkles,
+  Key,
+  Shield,
+  AlertTriangle,
+  HelpCircle,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -35,6 +39,7 @@ import {
 } from '../lib/services.ts';
 import { TemplateBuilderModal } from '../components/TemplateBuilderModal.tsx';
 import { MiniTemplatePhonePreview } from '../components/MiniTemplatePhonePreview.tsx';
+import { UpdateAccountTokenModal } from '../components/UpdateAccountTokenModal.tsx';
 import type { Template, TemplateComponent } from '../types/index.ts';
 
 export const TemplatesPage: React.FC = () => {
@@ -46,6 +51,9 @@ export const TemplatesPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
+  const [isUpdateTokenModalOpen, setIsUpdateTokenModalOpen] = useState(false);
+  const [isPermission200Error, setIsPermission200Error] = useState(false);
+  const [showErrorGuide, setShowErrorGuide] = useState(false);
 
   // Filter States
   const [selectedTab, setSelectedTab] = useState<string>('ALL');
@@ -95,6 +103,7 @@ export const TemplatesPage: React.FC = () => {
     }
     setSyncing(true);
     setSyncMsg(null);
+    setIsPermission200Error(false);
     try {
       const count = await syncTemplatesFromMeta(
         organization.id,
@@ -104,11 +113,20 @@ export const TemplatesPage: React.FC = () => {
       );
       const msg = `Successfully synced ${count} template(s) from Meta WhatsApp Platform.`;
       setSyncMsg(msg);
+      setIsPermission200Error(false);
       toast.showSuccess('Templates Synced', msg);
-      setTimeout(() => setSyncMsg(null), 3000);
+      setTimeout(() => setSyncMsg(null), 3500);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : 'Failed to sync templates from Meta.';
       setSyncMsg(errMsg);
+      if (
+        errMsg.includes('#200') ||
+        errMsg.includes('permission') ||
+        errMsg.includes('access this field') ||
+        errMsg.includes('OAuthException')
+      ) {
+        setIsPermission200Error(true);
+      }
       toast.showError('Template Sync Failed', err);
     } finally {
       setSyncing(false);
@@ -311,6 +329,15 @@ export const TemplatesPage: React.FC = () => {
 
         <div className="flex items-center space-x-2">
           <button
+            onClick={() => setIsUpdateTokenModalOpen(true)}
+            disabled={!activeAccount}
+            className="px-3.5 py-2 rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-950/40 text-xs font-semibold text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/60 disabled:opacity-50 transition-colors flex items-center space-x-1.5 cursor-pointer"
+            title="Update Access Token or fix Meta permission #200"
+          >
+            <Key className="w-3.5 h-3.5 text-amber-600" />
+            <span>Fix Token / Permissions</span>
+          </button>
+          <button
             onClick={handleSyncFromMeta}
             disabled={syncing || !activeAccount}
             className="px-3.5 py-2 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-50 dark:hover:bg-neutral-700 disabled:opacity-50 transition-colors flex items-center space-x-1.5 cursor-pointer"
@@ -333,7 +360,74 @@ export const TemplatesPage: React.FC = () => {
         </div>
       </div>
 
-      {syncMsg && (
+      {/* Meta Permission #200 Resolution Banner */}
+      {isPermission200Error && (
+        <div className="p-4 sm:p-5 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800/80 shadow-xs space-y-3 animate-fadeIn">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <div className="flex items-start space-x-3">
+              <div className="w-9 h-9 rounded-xl bg-amber-100 dark:bg-amber-900/60 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0 mt-0.5">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-neutral-900 dark:text-white flex items-center space-x-2">
+                  <span>Meta Permission Issue Detected (#200)</span>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] bg-amber-200/80 dark:bg-amber-900/80 text-amber-900 dark:text-amber-200 font-bold uppercase">
+                    OAuthException
+                  </span>
+                </h3>
+                <p className="text-xs text-neutral-600 dark:text-neutral-300 mt-0.5">
+                  Meta ne message templates access karne se rok diya: <em>&quot;(#200) You do not have permission to access this field.&quot;</em>
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center space-x-2 shrink-0 self-end sm:self-center">
+              <button
+                onClick={() => setIsUpdateTokenModalOpen(true)}
+                className="px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shadow-xs transition-colors flex items-center space-x-1.5 cursor-pointer"
+              >
+                <Key className="w-3.5 h-3.5" />
+                <span>Update / Fix Token</span>
+              </button>
+              <button
+                onClick={() => setShowErrorGuide(!showErrorGuide)}
+                className="px-3 py-2 rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-neutral-800 text-neutral-800 dark:text-neutral-200 text-xs font-semibold hover:bg-amber-50 dark:hover:bg-neutral-700 transition-colors flex items-center space-x-1 cursor-pointer"
+              >
+                <HelpCircle className="w-3.5 h-3.5 text-amber-600" />
+                <span>{showErrorGuide ? 'Hide Guide' : 'Step-by-Step Fix'}</span>
+              </button>
+            </div>
+          </div>
+
+          {showErrorGuide && (
+            <div className="pt-3 border-t border-amber-200 dark:border-amber-800/60 text-xs space-y-2.5 text-neutral-700 dark:text-neutral-300">
+              <p className="font-semibold text-neutral-900 dark:text-white">
+                💡 Ye error tab aata hai jab Meta App me permissions ya Business Manager me Asset Assign nahi hota:
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[11.5px]">
+                <div className="p-3 rounded-xl bg-white dark:bg-neutral-900 border border-amber-200 dark:border-amber-900/50 space-y-1">
+                  <span className="font-bold text-amber-800 dark:text-amber-300 block">
+                    1. Meta Business Suite &gt; System User:
+                  </span>
+                  <p className="text-neutral-600 dark:text-neutral-400">
+                    <code>business.facebook.com</code> me Settings &gt; System Users &gt; Add Assets &gt; WhatsApp Accounts me jakar is user ke WABA ko <strong>Full Control</strong> dekar naya permanent token generate karein aur &quot;Update / Fix Token&quot; button se paste karein.
+                  </p>
+                </div>
+                <div className="p-3 rounded-xl bg-white dark:bg-neutral-900 border border-amber-200 dark:border-amber-900/50 space-y-1">
+                  <span className="font-bold text-amber-800 dark:text-amber-300 block">
+                    2. Meta Developer App &gt; Roles:
+                  </span>
+                  <p className="text-neutral-600 dark:text-neutral-400">
+                    Agar aapka Meta App Development Mode me hai, to <code>developers.facebook.com</code> me App Roles me client ke Facebook profile ko <strong>Tester</strong> add karein. Ya App Review me <strong>Advanced Access</strong> approve karein.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {syncMsg && !isPermission200Error && (
         <div className="p-3.5 rounded-xl bg-neutral-100 dark:bg-neutral-800/80 border border-neutral-200 dark:border-neutral-700 text-xs text-neutral-800 dark:text-neutral-200 flex items-center space-x-2">
           <AlertCircle className="w-4 h-4 text-emerald-600 shrink-0" />
           <span>{syncMsg}</span>
@@ -1040,6 +1134,17 @@ export const TemplatesPage: React.FC = () => {
           customToken={activeAccount?.customToken}
         />
       )}
+
+      {/* Update Account Token & Permission #200 Fix Modal */}
+      <UpdateAccountTokenModal
+        isOpen={isUpdateTokenModalOpen}
+        onClose={() => setIsUpdateTokenModalOpen(false)}
+        account={activeAccount}
+        onSuccess={() => {
+          setIsPermission200Error(false);
+          handleSyncFromMeta();
+        }}
+      />
     </div>
   );
 };
