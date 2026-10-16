@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import {
   MessageSquare,
   Search,
@@ -36,11 +36,19 @@ import type { Conversation, Message, Template, BotButton } from '../types/index.
 
 export const InboxPage: React.FC = () => {
   const { organization, userProfile } = useAuth();
-  const { activeAccount } = useWhatsAppAccounts();
+  const { activeAccount, accounts } = useWhatsAppAccounts();
   const toast = useToast();
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConv, setSelectedConv] = useState<Conversation | null>(null);
+  const [accountFilter, setAccountFilter] = useState<string>(activeAccount?.id || 'all');
+
+  // Auto-sync account filter when active WhatsApp account is changed in header
+  useEffect(() => {
+    if (activeAccount?.id) {
+      setAccountFilter(activeAccount.id);
+    }
+  }, [activeAccount?.id]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
 
@@ -270,18 +278,73 @@ export const InboxPage: React.FC = () => {
     }
   };
 
-  const filteredConversations = conversations.filter(
-    (c) =>
-      c.contactName.toLowerCase().includes(search.toLowerCase()) ||
-      c.contactPhone.includes(search) ||
-      c.lastMessage.toLowerCase().includes(search.toLowerCase())
-  );
+  // Scope conversations by active WhatsApp account
+  const scopedConversations = useMemo(() => {
+    if (accountFilter === 'all') return conversations;
+    const targetAccountId = accountFilter === 'active' ? activeAccount?.id : accountFilter;
+    if (!targetAccountId) return conversations;
+    const targetAcc = accounts.find((a) => a.id === targetAccountId);
+    return conversations.filter(
+      (c) =>
+        !c.whatsAppAccountId || // legacy conversations
+        c.whatsAppAccountId === targetAccountId ||
+        (targetAcc && (c as any).phoneNumberId === targetAcc.phoneNumberId)
+    );
+  }, [conversations, accountFilter, activeAccount, accounts]);
+
+  const filteredConversations = useMemo(() => {
+    return scopedConversations.filter(
+      (c) =>
+        c.contactName.toLowerCase().includes(search.toLowerCase()) ||
+        c.contactPhone.includes(search) ||
+        c.lastMessage.toLowerCase().includes(search.toLowerCase())
+    );
+  }, [scopedConversations, search]);
+
+  // Keep selected conversation aligned with filtered conversations
+  useEffect(() => {
+    if (filteredConversations.length > 0) {
+      if (!selectedConv || !filteredConversations.some((c) => c.id === selectedConv.id)) {
+        setSelectedConv(filteredConversations[0]);
+      }
+    } else {
+      setSelectedConv(null);
+    }
+  }, [filteredConversations, selectedConv]);
 
   return (
     <div className="h-[calc(100vh-4rem)] flex flex-col md:flex-row overflow-hidden bg-white dark:bg-neutral-900 border-t border-neutral-200 dark:border-neutral-800 animate-fadeIn">
       {/* Left Column: Conversation List */}
       <div className="w-full md:w-80 lg:w-96 border-r border-neutral-200 dark:border-neutral-800 flex flex-col shrink-0 bg-neutral-50/50 dark:bg-neutral-900/60">
         <div className="p-3.5 border-b border-neutral-200 dark:border-neutral-800 space-y-2">
+          {/* WhatsApp Account Filter */}
+          {accounts.length > 0 && (
+            <div className="flex items-center space-x-1.5 pb-0.5">
+              <Smartphone className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <select
+                aria-label="Filter inbox by WhatsApp number"
+                value={accountFilter}
+                onChange={(e) => setAccountFilter(e.target.value)}
+                className="w-full px-2.5 py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-[11px] font-semibold text-neutral-800 dark:text-neutral-200 focus:outline-hidden cursor-pointer"
+                title="Filter inbox by WhatsApp Number"
+              >
+                {activeAccount && (
+                  <option value={activeAccount.id}>
+                    Active: {activeAccount.displayPhoneNumber} ({activeAccount.verifiedName})
+                  </option>
+                )}
+                {accounts
+                  .filter((acc) => acc.id !== activeAccount?.id)
+                  .map((acc) => (
+                    <option key={acc.id} value={acc.id}>
+                      {acc.displayPhoneNumber} - {acc.verifiedName}
+                    </option>
+                  ))}
+                <option value="all">🌐 All WhatsApp Numbers (Combined) ({conversations.length})</option>
+              </select>
+            </div>
+          )}
+
           {/* Quick Simulation / Test Chatbot Button */}
           <button
             onClick={() => setIsSimulateModalOpen(true)}

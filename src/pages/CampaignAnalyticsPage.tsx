@@ -62,14 +62,22 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
   onNavigateToCampaigns,
 }) => {
   const { organization } = useAuth();
-  const { metaStatus, activeAccount } = useWhatsAppAccounts();
+  const { metaStatus, activeAccount, accounts } = useWhatsAppAccounts();
   const toast = useToast();
 
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [selectedCampaignId, setSelectedCampaignId] = useState<string>(initialCampaignId || '');
+  const [accountFilter, setAccountFilter] = useState<string>(activeAccount?.id || 'all');
   const [recipients, setRecipients] = useState<CampaignRecipient[]>([]);
   const [loadingCampaigns, setLoadingCampaigns] = useState(true);
   const [loadingRecipients, setLoadingRecipients] = useState(false);
+
+  // Auto-sync account filter when active WhatsApp account is changed in the header
+  useEffect(() => {
+    if (activeAccount?.id) {
+      setAccountFilter(activeAccount.id);
+    }
+  }, [activeAccount?.id]);
 
   // Filters & Search
   const [searchQuery, setSearchQuery] = useState('');
@@ -107,11 +115,6 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
       (data) => {
         setCampaigns(data);
         setLoadingCampaigns(false);
-        // Default to first campaign or initialCampaignId
-        if (!selectedCampaignId && data.length > 0) {
-          const match = initialCampaignId ? data.find((c) => c.id === initialCampaignId) : null;
-          setSelectedCampaignId(match ? match.id : data[0].id);
-        }
       },
       (err) => {
         console.warn('Error loading campaigns:', err);
@@ -119,7 +122,32 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
       }
     );
     return () => unsub();
-  }, [organization?.id, initialCampaignId]);
+  }, [organization?.id]);
+
+  // Available campaigns scoped to selected account
+  const availableCampaigns = useMemo(() => {
+    if (accountFilter === 'all') return campaigns;
+    const targetAccountId = accountFilter === 'active' ? activeAccount?.id : accountFilter;
+    if (!targetAccountId) return campaigns;
+    const targetAcc = accounts.find((a) => a.id === targetAccountId);
+    return campaigns.filter(
+      (c) =>
+        c.whatsAppAccountId === targetAccountId ||
+        (targetAcc && c.phoneNumberId === targetAcc.phoneNumberId)
+    );
+  }, [campaigns, accountFilter, activeAccount, accounts]);
+
+  // Auto-select latest campaign when availableCampaigns changes
+  useEffect(() => {
+    if (availableCampaigns.length > 0) {
+      if (!selectedCampaignId || !availableCampaigns.some((c) => c.id === selectedCampaignId)) {
+        const match = initialCampaignId ? availableCampaigns.find((c) => c.id === initialCampaignId) : null;
+        setSelectedCampaignId(match ? match.id : availableCampaigns[0].id);
+      }
+    } else {
+      setSelectedCampaignId('');
+    }
+  }, [availableCampaigns, selectedCampaignId, initialCampaignId]);
 
   // Selected Campaign Object
   const currentCampaign = useMemo(() => {
@@ -573,9 +601,36 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
           </p>
         </div>
 
-        {/* Campaign Switcher & Export Actions */}
+        {/* Account Selector + Campaign Switcher & Export Actions */}
         <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
-          {campaigns.length > 0 && (
+          {accounts.length > 0 && (
+            <div className="flex items-center space-x-1.5 w-full sm:w-auto">
+              <Smartphone className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400 shrink-0" />
+              <select
+                aria-label="Filter Campaigns by WhatsApp Number"
+                value={accountFilter}
+                onChange={(e) => setAccountFilter(e.target.value)}
+                className="w-full sm:w-auto px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs text-neutral-900 dark:text-white font-medium focus:ring-2 focus:ring-purple-500 focus:outline-hidden cursor-pointer"
+                title="Filter reports by sending WhatsApp number"
+              >
+                {activeAccount && (
+                  <option value={activeAccount.id}>
+                    Selected: {activeAccount.displayPhoneNumber} ({activeAccount.verifiedName})
+                  </option>
+                )}
+                {accounts
+                  .filter((acc) => acc.id !== activeAccount?.id)
+                  .map((acc) => (
+                    <option key={acc.id} value={acc.id}>
+                      {acc.displayPhoneNumber} - {acc.verifiedName}
+                    </option>
+                  ))}
+                <option value="all">🌐 All WhatsApp Numbers (Combined) ({campaigns.length})</option>
+              </select>
+            </div>
+          )}
+
+          {availableCampaigns.length > 0 ? (
             <div className="relative flex-1 md:flex-none">
               <select
                 aria-label="Select WhatsApp Campaign"
@@ -586,12 +641,16 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
                 }}
                 className="w-full md:w-64 px-3.5 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs text-neutral-900 dark:text-white font-medium focus:ring-2 focus:ring-purple-500 focus:outline-hidden cursor-pointer"
               >
-                {campaigns.map((c) => (
+                {availableCampaigns.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name} ({c.status.toUpperCase()})
                   </option>
                 ))}
               </select>
+            </div>
+          ) : (
+            <div className="px-3.5 py-2 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-100 dark:bg-neutral-800 text-xs text-neutral-500">
+              No campaigns for this number
             </div>
           )}
 
@@ -698,6 +757,22 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
             </div>
 
             <div className="flex flex-wrap items-center gap-4 sm:gap-6 text-xs text-neutral-600 dark:text-neutral-400">
+              {(() => {
+                const sendingAcc = accounts.find(
+                  (a) =>
+                    a.id === currentCampaign?.whatsAppAccountId ||
+                    a.phoneNumberId === currentCampaign?.phoneNumberId
+                );
+                return (
+                  <div>
+                    <span className="block text-[10px] uppercase font-semibold text-neutral-400">Sending WhatsApp Number</span>
+                    <span className="inline-flex items-center space-x-1 font-mono text-emerald-700 dark:text-emerald-300 font-bold bg-emerald-50 dark:bg-emerald-950/60 px-2.5 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-800 text-[11px] mt-0.5">
+                      <Smartphone className="w-3 h-3 text-emerald-600" />
+                      <span>{sendingAcc ? `${sendingAcc.displayPhoneNumber} (${sendingAcc.verifiedName})` : currentCampaign?.phoneNumberId || 'Default Account'}</span>
+                    </span>
+                  </div>
+                );
+              })()}
               <div>
                 <span className="block text-[10px] uppercase font-semibold text-neutral-400">Template</span>
                 <span className="font-mono text-neutral-900 dark:text-neutral-200 font-semibold">

@@ -60,7 +60,14 @@ export const TemplatesPage: React.FC = () => {
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [selectedHeaderFormat, setSelectedHeaderFormat] = useState<string>('ALL');
   const [selectedLanguage, setSelectedLanguage] = useState<string>('ALL');
-  const [selectedAccountFilter, setSelectedAccountFilter] = useState<string>('ALL');
+  const [selectedAccountFilter, setSelectedAccountFilter] = useState<string>(activeAccount?.id || 'ACTIVE');
+
+  // Auto-sync account filter when active WhatsApp account is changed in the header
+  useEffect(() => {
+    if (activeAccount?.id) {
+      setSelectedAccountFilter(activeAccount.id);
+    }
+  }, [activeAccount?.id]);
   const [sortBy, setSortBy] = useState<'newest' | 'oldest' | 'name-asc' | 'name-desc'>('newest');
   const [searchQuery, setSearchQuery] = useState('');
   const [showFilterPanel, setShowFilterPanel] = useState(true);
@@ -251,10 +258,14 @@ export const TemplatesPage: React.FC = () => {
 
       // 5. WhatsApp Account Filter
       if (selectedAccountFilter !== 'ALL') {
-        if (selectedAccountFilter === 'ACTIVE') {
-          if (activeAccount && t.whatsAppAccountId && t.whatsAppAccountId !== activeAccount.id) return false;
-        } else if (t.whatsAppAccountId && t.whatsAppAccountId !== selectedAccountFilter) {
-          return false;
+        const targetId = selectedAccountFilter === 'ACTIVE' ? activeAccount?.id : selectedAccountFilter;
+        if (targetId) {
+          const targetAcc = accounts.find((a) => a.id === targetId);
+          if (t.whatsAppAccountId) {
+            if (t.whatsAppAccountId !== targetId) return false;
+          } else if (targetAcc?.wabaId && (t as any).wabaId && (t as any).wabaId !== targetAcc.wabaId) {
+            return false;
+          }
         }
       }
 
@@ -566,17 +577,19 @@ export const TemplatesPage: React.FC = () => {
                   onChange={(e) => setSelectedAccountFilter(e.target.value)}
                   className="w-full px-2.5 py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white text-xs cursor-pointer focus:ring-1 focus:ring-emerald-500 font-medium"
                 >
-                  <option value="ALL">All Accounts ({templates.length})</option>
                   {activeAccount && (
-                    <option value="ACTIVE">
-                      Active: {activeAccount.displayPhoneNumber}
+                    <option value={activeAccount.id}>
+                      Selected: {activeAccount.displayPhoneNumber} ({activeAccount.verifiedName})
                     </option>
                   )}
-                  {accounts.map((acc) => (
-                    <option key={acc.id} value={acc.id}>
-                      {acc.displayPhoneNumber} ({acc.verifiedName})
-                    </option>
-                  ))}
+                  {accounts
+                    .filter((acc) => acc.id !== activeAccount?.id)
+                    .map((acc) => (
+                      <option key={acc.id} value={acc.id}>
+                        {acc.displayPhoneNumber} ({acc.verifiedName})
+                      </option>
+                    ))}
+                  <option value="ALL">🌐 All WhatsApp Accounts (Combined) ({templates.length})</option>
                 </select>
               </div>
             )}

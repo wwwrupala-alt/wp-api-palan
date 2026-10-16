@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   Smartphone,
   Users,
@@ -85,12 +85,24 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
     };
   }, [organization?.id]);
 
-  // Aggregate metrics strictly from real records
-  const totalSent = campaigns.reduce((acc, c) => acc + (c.stats?.sent || 0), 0);
-  const totalDelivered = campaigns.reduce((acc, c) => acc + (c.stats?.delivered || 0), 0);
-  const totalRead = campaigns.reduce((acc, c) => acc + (c.stats?.read || 0), 0);
-  const totalFailed = campaigns.reduce((acc, c) => acc + (c.stats?.failed || 0), 0);
-  const activeCampaignsCount = campaigns.filter(
+  const [dashboardScope, setDashboardScope] = useState<'active' | 'all'>('active');
+
+  // Multi-Account scoped campaigns
+  const scopedCampaigns = useMemo(() => {
+    if (dashboardScope === 'all' || !activeAccount) return campaigns;
+    return campaigns.filter(
+      (c) =>
+        c.whatsAppAccountId === activeAccount.id ||
+        c.phoneNumberId === activeAccount.phoneNumberId
+    );
+  }, [campaigns, dashboardScope, activeAccount]);
+
+  // Aggregate metrics strictly from real records for the selected scope
+  const totalSent = scopedCampaigns.reduce((acc, c) => acc + (c.stats?.sent || 0), 0);
+  const totalDelivered = scopedCampaigns.reduce((acc, c) => acc + (c.stats?.delivered || 0), 0);
+  const totalRead = scopedCampaigns.reduce((acc, c) => acc + (c.stats?.read || 0), 0);
+  const totalFailed = scopedCampaigns.reduce((acc, c) => acc + (c.stats?.failed || 0), 0);
+  const activeCampaignsCount = scopedCampaigns.filter(
     (c) => c.status === 'sending' || c.status === 'scheduled'
   ).length;
 
@@ -194,6 +206,46 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
               className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium transition-colors"
             >
               New Campaign
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Scope Selector (Multi-Account) */}
+      {accounts.length > 1 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 text-xs shadow-2xs">
+          <div className="flex items-center space-x-2">
+            <Smartphone className="w-4 h-4 text-emerald-600" />
+            <span className="font-semibold text-neutral-800 dark:text-neutral-200">
+              Metrics Filter:
+            </span>
+            <span className="text-neutral-500">
+              {dashboardScope === 'active' && activeAccount
+                ? `Showing exclusively for ${activeAccount.displayPhoneNumber} (${activeAccount.verifiedName})`
+                : 'Showing combined metrics across all connected WhatsApp numbers'}
+            </span>
+          </div>
+
+          <div className="inline-flex items-center p-1 rounded-xl bg-neutral-100 dark:bg-neutral-800">
+            <button
+              onClick={() => setDashboardScope('active')}
+              className={`px-3 py-1 rounded-lg font-semibold text-xs transition-colors cursor-pointer ${
+                dashboardScope === 'active'
+                  ? 'bg-white dark:bg-neutral-900 text-emerald-600 dark:text-emerald-400 shadow-2xs'
+                  : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900'
+              }`}
+            >
+              Selected Number ({activeAccount?.displayPhoneNumber || 'Active'})
+            </button>
+            <button
+              onClick={() => setDashboardScope('all')}
+              className={`px-3 py-1 rounded-lg font-semibold text-xs transition-colors cursor-pointer ${
+                dashboardScope === 'all'
+                  ? 'bg-white dark:bg-neutral-900 text-emerald-600 dark:text-emerald-400 shadow-2xs'
+                  : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900'
+              }`}
+            >
+              All Numbers Combined ({accounts.length})
             </button>
           </div>
         </div>

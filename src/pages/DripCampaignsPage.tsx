@@ -23,6 +23,7 @@ import {
   Calendar,
   Layers,
   ChevronRight,
+  Smartphone,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -46,13 +47,21 @@ export const DripCampaignsPage: React.FC<DripCampaignsPageProps> = ({
   onNavigateToCampaigns,
 }) => {
   const { organization } = useAuth();
-  const { activeAccount } = useWhatsAppAccounts();
+  const { activeAccount, accounts } = useWhatsAppAccounts();
   const toast = useToast();
 
   const [campaigns, setCampaigns] = useState<DripCampaign[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'paused' | 'completed' | 'draft'>('all');
+  const [accountFilter, setAccountFilter] = useState<string>(activeAccount?.id || 'all');
+
+  // Auto-sync account filter when active WhatsApp account is changed in header
+  useEffect(() => {
+    if (activeAccount?.id) {
+      setAccountFilter(activeAccount.id);
+    }
+  }, [activeAccount?.id]);
 
   // Modals state
   const [createModalOpen, setCreateModalOpen] = useState(false);
@@ -85,9 +94,22 @@ export const DripCampaignsPage: React.FC<DripCampaignsPageProps> = ({
     return () => unsub();
   }, [organization?.id]);
 
+  // Scope campaigns by active WhatsApp account
+  const scopedCampaigns = useMemo(() => {
+    if (accountFilter === 'all') return campaigns;
+    const targetAccountId = accountFilter === 'active' ? activeAccount?.id : accountFilter;
+    if (!targetAccountId) return campaigns;
+    const targetAcc = accounts.find((a) => a.id === targetAccountId);
+    return campaigns.filter(
+      (c) =>
+        c.whatsAppAccountId === targetAccountId ||
+        (targetAcc && (c as any).phoneNumberId === targetAcc.phoneNumberId)
+    );
+  }, [campaigns, accountFilter, activeAccount, accounts]);
+
   // Filtered campaigns
   const filteredCampaigns = useMemo(() => {
-    return campaigns.filter((c) => {
+    return scopedCampaigns.filter((c) => {
       const q = searchQuery.toLowerCase().trim();
       const matchSearch =
         q === '' ||
@@ -97,19 +119,19 @@ export const DripCampaignsPage: React.FC<DripCampaignsPageProps> = ({
       const matchStatus = statusFilter === 'all' || c.status === statusFilter;
       return matchSearch && matchStatus;
     });
-  }, [campaigns, searchQuery, statusFilter]);
+  }, [scopedCampaigns, searchQuery, statusFilter]);
 
   // Overall KPI statistics
   const kpiStats = useMemo(() => {
-    const total = campaigns.length;
-    const active = campaigns.filter((c) => c.status === 'active').length;
-    const enrolled = campaigns.reduce((acc, c) => acc + (c.enrolledCount || 0), 0);
-    const activeSubs = campaigns.reduce((acc, c) => acc + (c.activeSubscribers || 0), 0);
-    const completedSubs = campaigns.reduce((acc, c) => acc + (c.completedSubscribers || 0), 0);
-    const totalMessages = campaigns.reduce((acc, c) => acc + (c.stats?.totalMessagesSent || 0), 0);
+    const total = scopedCampaigns.length;
+    const active = scopedCampaigns.filter((c) => c.status === 'active').length;
+    const enrolled = scopedCampaigns.reduce((acc, c) => acc + (c.enrolledCount || 0), 0);
+    const activeSubs = scopedCampaigns.reduce((acc, c) => acc + (c.activeSubscribers || 0), 0);
+    const completedSubs = scopedCampaigns.reduce((acc, c) => acc + (c.completedSubscribers || 0), 0);
+    const totalMessages = scopedCampaigns.reduce((acc, c) => acc + (c.stats?.totalMessagesSent || 0), 0);
 
     return { total, active, enrolled, activeSubs, completedSubs, totalMessages };
-  }, [campaigns]);
+  }, [scopedCampaigns]);
 
   // Toggle active/paused status
   const handleToggleStatus = async (camp: DripCampaign) => {
@@ -315,7 +337,7 @@ export const DripCampaignsPage: React.FC<DripCampaignsPageProps> = ({
             }`}
           >
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span>Active ({campaigns.filter((c) => c.status === 'active').length})</span>
+            <span>Active ({scopedCampaigns.filter((c) => c.status === 'active').length})</span>
           </button>
           <button
             type="button"
@@ -326,19 +348,48 @@ export const DripCampaignsPage: React.FC<DripCampaignsPageProps> = ({
                 : 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 hover:bg-amber-100'
             }`}
           >
-            Paused ({campaigns.filter((c) => c.status === 'paused').length})
+            Paused ({scopedCampaigns.filter((c) => c.status === 'paused').length})
           </button>
         </div>
 
-        <div className="relative w-full sm:w-72">
-          <Search className="w-4 h-4 absolute left-3 top-2.5 text-neutral-400" />
-          <input
-            type="text"
-            value={searchQuery || ''}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search drip sequences..."
-            className="w-full pl-9 pr-3 py-1.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs focus:ring-2 focus:ring-emerald-500"
-          />
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+          {accounts.length > 0 && (
+            <div className="flex items-center space-x-1.5 w-full sm:w-auto">
+              <Smartphone className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+              <select
+                aria-label="Filter drip by WhatsApp number"
+                value={accountFilter}
+                onChange={(e) => setAccountFilter(e.target.value)}
+                className="w-full sm:w-auto px-3 py-1.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs text-neutral-800 dark:text-neutral-200 font-semibold focus:ring-2 focus:ring-emerald-500 cursor-pointer"
+                title="Filter drip sequences by WhatsApp number"
+              >
+                {activeAccount && (
+                  <option value={activeAccount.id}>
+                    Active: {activeAccount.displayPhoneNumber} ({activeAccount.verifiedName})
+                  </option>
+                )}
+                {accounts
+                  .filter((acc) => acc.id !== activeAccount?.id)
+                  .map((acc) => (
+                    <option key={acc.id} value={acc.id}>
+                      {acc.displayPhoneNumber} - {acc.verifiedName}
+                    </option>
+                  ))}
+                <option value="all">🌐 All WhatsApp Numbers (Combined) ({campaigns.length})</option>
+              </select>
+            </div>
+          )}
+
+          <div className="relative w-full sm:w-64">
+            <Search className="w-4 h-4 absolute left-3 top-2 text-neutral-400" />
+            <input
+              type="text"
+              value={searchQuery || ''}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search drip sequences..."
+              className="w-full pl-9 pr-3 py-1.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs focus:ring-2 focus:ring-emerald-500"
+            />
+          </div>
         </div>
       </div>
 
