@@ -225,7 +225,10 @@ export function subscribeTemplates(
 export async function syncTemplatesFromMeta(orgId: string, wabaId: string, accountId: string, customToken?: string) {
   const url = `/api/meta/templates?wabaId=${encodeURIComponent(wabaId)}&organizationId=${encodeURIComponent(orgId)}${customToken ? `&customToken=${encodeURIComponent(customToken)}` : ''}`;
   const res = await fetch(url, {
-    headers: customToken ? { 'x-meta-token': customToken } : {},
+    headers: {
+      ...(customToken ? { 'x-meta-token': customToken } : {}),
+      'x-organization-id': orgId,
+    },
   });
   const data = await parseJsonResponse(res, 'Failed to sync templates from Meta.');
 

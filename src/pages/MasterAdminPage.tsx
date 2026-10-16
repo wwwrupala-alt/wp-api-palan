@@ -42,6 +42,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useToast } from '../context/ToastContext.tsx';
+import { MasterApiHealthDashboard } from '../components/MasterApiHealthDashboard.tsx';
 import type { SaaSPlan, AuditLog } from '../types/index.ts';
 
 interface AdminTenantItem {
@@ -73,7 +74,7 @@ export const MasterAdminPage: React.FC = () => {
   const { impersonateAdmin, impersonateUser, userProfile, getServerNow } = useAuth();
   const toast = useToast();
 
-  const [activeTab, setActiveTab] = useState<'admins' | 'plans' | 'features' | 'audit' | 'system'>('admins');
+  const [activeTab, setActiveTab] = useState<'admins' | 'plans' | 'features' | 'audit' | 'health'>('admins');
   const [loading, setLoading] = useState(true);
 
   // Overview metrics
@@ -770,22 +771,29 @@ export const MasterAdminPage: React.FC = () => {
           <span className="text-[10px] text-emerald-600 font-semibold">{overview.totalDelivered} Delivered</span>
         </div>
 
-        <div className="p-4 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 space-y-1 shadow-xs">
-          <span className="text-neutral-500 font-medium">System Health</span>
-          <p className="text-sm font-bold text-emerald-600 flex items-center space-x-1 mt-1">
+        <div
+          onClick={() => setActiveTab('health')}
+          className="p-4 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 space-y-1 shadow-xs hover:border-emerald-400 dark:hover:border-emerald-700 transition-all cursor-pointer group"
+          title="Click to view real-time API health and webhook observability"
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-neutral-500 font-medium">API Health</span>
+            <span className="text-[10px] text-emerald-600 font-bold group-hover:underline">Monitor &rarr;</span>
+          </div>
+          <p className="text-sm font-bold text-emerald-600 flex items-center space-x-1.5 mt-1">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            <span>100% Operational</span>
+            <span>Observability Live</span>
           </p>
-          <span className="text-[10px] text-neutral-400 font-mono">v3.2.0 Enterprise</span>
+          <span className="text-[10px] text-neutral-400 font-mono">Webhooks &bull; Meta API</span>
         </div>
       </div>
 
       {/* Tabs Navigation */}
-      <div className="flex border-b border-neutral-200 dark:border-neutral-800 space-x-6 text-xs font-semibold">
+      <div className="flex border-b border-neutral-200 dark:border-neutral-800 space-x-6 text-xs font-semibold overflow-x-auto pb-px">
         <button
           type="button"
           onClick={() => setActiveTab('admins')}
-          className={`pb-3 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer ${
+          className={`pb-3 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer shrink-0 ${
             activeTab === 'admins'
               ? 'border-amber-600 text-amber-600 dark:border-amber-400 dark:text-amber-400'
               : 'border-transparent text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-300'
@@ -798,7 +806,7 @@ export const MasterAdminPage: React.FC = () => {
         <button
           type="button"
           onClick={() => setActiveTab('plans')}
-          className={`pb-3 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer ${
+          className={`pb-3 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer shrink-0 ${
             activeTab === 'plans'
               ? 'border-amber-600 text-amber-600 dark:border-amber-400 dark:text-amber-400'
               : 'border-transparent text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-300'
@@ -811,7 +819,7 @@ export const MasterAdminPage: React.FC = () => {
         <button
           type="button"
           onClick={() => setActiveTab('features')}
-          className={`pb-3 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer ${
+          className={`pb-3 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer shrink-0 ${
             activeTab === 'features'
               ? 'border-amber-600 text-amber-600 dark:border-amber-400 dark:text-amber-400'
               : 'border-transparent text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-300'
@@ -824,7 +832,7 @@ export const MasterAdminPage: React.FC = () => {
         <button
           type="button"
           onClick={() => setActiveTab('audit')}
-          className={`pb-3 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer ${
+          className={`pb-3 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer shrink-0 ${
             activeTab === 'audit'
               ? 'border-amber-600 text-amber-600 dark:border-amber-400 dark:text-amber-400'
               : 'border-transparent text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-300'
@@ -832,6 +840,22 @@ export const MasterAdminPage: React.FC = () => {
         >
           <Terminal className="w-4 h-4" />
           <span>System Audit Logs ({auditLogs.length})</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('health')}
+          className={`pb-3 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer shrink-0 ${
+            activeTab === 'health'
+              ? 'border-emerald-600 text-emerald-600 dark:border-emerald-400 dark:text-emerald-400 font-bold'
+              : 'border-transparent text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-300'
+          }`}
+        >
+          <Activity className="w-4 h-4 text-emerald-500 animate-pulse" />
+          <span>API Health &amp; Observability</span>
+          <span className="px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
+            REALTIME
+          </span>
         </button>
       </div>
 
@@ -1504,6 +1528,9 @@ export const MasterAdminPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* TAB 5: REAL-TIME API HEALTH & OBSERVABILITY */}
+      {activeTab === 'health' && <MasterApiHealthDashboard />}
 
       {/* MODAL: CREATE NEW ADMIN (PROVISIONS 100% FRESH 0-DATA TENANT) */}
       {isCreateAdminOpen && (

@@ -17,10 +17,12 @@ import {
   handleTestConnection,
   handleCheckWabaMigration,
   handleTriggerWabaMigration,
-  handleUpdateAccountToken,
   handleWebhookVerification,
   handleWebhookPost,
   handleGetWebhookLogs,
+  handleGetApiHealth,
+  handlePingWebhookTest,
+  handleClearWebhookLogs,
   handleSaveAdminMetaConfig,
   handleUploadMedia,
   processIncomingWhatsAppStatusUpdate,
@@ -117,6 +119,13 @@ apiApp.post('/api/master/plans', handleSaveMasterPlan);
 apiApp.get('/api/master/audit-logs', handleGetMasterAuditLogs);
 apiApp.get('/api/master/features', handleGetMasterFeatures);
 apiApp.post('/api/master/features', handleUpdateMasterFeatures);
+apiApp.get('/api/master/api-health', handleGetApiHealth);
+apiApp.post('/api/master/api-health/ping-webhook', handlePingWebhookTest);
+apiApp.post('/api/master/api-health/clear-logs', handleClearWebhookLogs);
+apiApp.get('/api/admin/api-health', handleGetApiHealth);
+apiApp.post('/api/admin/api-health/ping-webhook', handlePingWebhookTest);
+apiApp.post('/api/admin/api-health/clear-logs', handleClearWebhookLogs);
+apiApp.get('/api/meta/api-health', handleGetApiHealth);
 
 // Tenant-level User Management
 apiApp.get('/api/admin/users', handleGetAdminUsers);
@@ -130,13 +139,13 @@ apiApp.post('/api/admin/impersonate', handleAdminImpersonate);
 apiApp.get('/api/meta/status', handleGetMetaStatus);
 apiApp.post('/api/meta/admin-config', handleSaveAdminMetaConfig);
 apiApp.post('/api/meta/embedded-signup-exchange', handleEmbeddedSignupExchange);
+apiApp.post('/api/meta/exchange-code', handleEmbeddedSignupExchange);
 apiApp.post('/api/meta/verify-account', handleVerifyAccount);
 apiApp.post('/api/meta/sync-account', handleSyncMetaAccount);
 apiApp.post('/api/meta/test-connection', handleTestConnection);
 apiApp.post('/api/meta/register-phone', handleRegisterPhone);
 apiApp.post('/api/meta/waba-migration/check', handleCheckWabaMigration);
 apiApp.post('/api/meta/waba-migration/trigger', handleTriggerWabaMigration);
-apiApp.post('/api/meta/update-account-token', handleUpdateAccountToken);
 apiApp.get('/api/meta/templates', handleGetTemplates);
 apiApp.post('/api/meta/templates', handleCreateTemplate);
 apiApp.delete('/api/meta/templates', handleDeleteTemplate);
