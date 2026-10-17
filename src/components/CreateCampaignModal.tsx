@@ -31,13 +31,14 @@ import {
 } from 'lucide-react';
 import type { Campaign, Template, Contact, ContactGroup, WhatsAppAccount } from '../types/index.ts';
 import { useToast } from '../context/ToastContext.tsx';
-import { createCampaign, launchCampaign, uploadMediaFile } from '../lib/services.ts';
+import { createCampaign, launchCampaign, uploadMediaFile, syncTemplatesFromMeta } from '../lib/services.ts';
 
 interface CreateCampaignModalProps {
   isOpen: boolean;
   onClose: () => void;
   organizationId: string;
   activeAccount: WhatsAppAccount | null;
+  accounts?: WhatsAppAccount[];
   templates: Template[];
   contacts: Contact[];
   groups: ContactGroup[];
@@ -50,6 +51,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
   onClose,
   organizationId,
   activeAccount,
+  accounts = [],
   templates,
   contacts,
   groups,
@@ -57,6 +59,74 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
   initialCloneCampaign,
 }) => {
   const toast = useToast();
+
+  // Selected WhatsApp Account for Sending
+  const availableAccounts = useMemo(() => {
+    if (accounts && accounts.length > 0) return accounts;
+    if (activeAccount) return [activeAccount];
+    return [];
+  }, [accounts, activeAccount]);
+
+  const [selectedAccountId, setSelectedAccountId] = useState<string>(
+    initialCloneCampaign?.whatsAppAccountId || activeAccount?.id || ''
+  );
+
+  const currentAccount = useMemo(() => {
+    return (
+      availableAccounts.find((a) => a.id === selectedAccountId) ||
+      activeAccount ||
+      availableAccounts[0] ||
+      null
+    );
+  }, [availableAccounts, selectedAccountId, activeAccount]);
+
+  // Sync state for Meta templates
+  const [isSyncingTemplates, setIsSyncingTemplates] = useState(false);
+
+  // Sync selectedAccountId if activeAccount changes or modal reopens
+  useEffect(() => {
+    if (isOpen) {
+      if (initialCloneCampaign?.whatsAppAccountId) {
+        setSelectedAccountId(initialCloneCampaign.whatsAppAccountId);
+      } else if (activeAccount?.id && !selectedAccountId) {
+        setSelectedAccountId(activeAccount.id);
+      }
+    }
+  }, [isOpen, initialCloneCampaign, activeAccount?.id]);
+
+  const handleAccountChange = (newAccId: string) => {
+    setSelectedAccountId(newAccId);
+    setSelectedTemplateId('');
+    setTemplateVariables({});
+  };
+
+  const handleSyncTemplates = async () => {
+    if (!organizationId || !currentAccount) {
+      toast.showWarning('No Account', 'Please select a WhatsApp sender account first.');
+      return;
+    }
+    if (!currentAccount.wabaId) {
+      toast.showWarning('Missing WABA ID', 'This account has no WABA ID configured for template sync.');
+      return;
+    }
+    setIsSyncingTemplates(true);
+    try {
+      const count = await syncTemplatesFromMeta(
+        organizationId,
+        currentAccount.wabaId,
+        currentAccount.id,
+        currentAccount.customToken
+      );
+      toast.showSuccess(
+        'Templates Synced',
+        `Successfully synced ${count} template(s) from Meta for ${currentAccount.displayPhoneNumber}.`
+      );
+    } catch (err: any) {
+      toast.showError('Sync Failed', err?.message || 'Could not sync templates from Meta.');
+    } finally {
+      setIsSyncingTemplates(false);
+    }
+  };
 
   // Campaign basics
   const [campName, setCampName] = useState('');
@@ -228,9 +298,58 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [mobileActiveTab, setMobileActiveTab] = useState<'setup' | 'preview'>('setup');
 
-  // Parse template components
-  const approvedTemplates = templates.filter((t) => t.status === 'APPROVED');
-  const selectedTemplate = templates.find((t) => t.id === selectedTemplateId || t.metaTemplateId === selectedTemplateId);
+  // Parse template components - strictly filtered by the selected WhatsApp Account
+  const approvedTemplates = useMemo(() => {
+    if (!currentAccount) {
+      return templates.filter((t) => t.status === 'APPROVED');
+    }
+
+    return templates.filter((t) => {
+      if (t.status !== 'APPROVED') return false;
+
+      // 1. Direct match on account ID, phone number ID, or WABA ID
+      if (t.whatsAppAccountId) {
+        return (
+          t.whatsAppAccountId === currentAccount.id ||
+          t.whatsAppAccountId === currentAccount.phoneNumberId ||
+          t.whatsAppAccountId === currentAccount.wabaId
+        );
+      }
+
+      // 2. Check wabaId property on template
+      if ((t as any).wabaId && currentAccount.wabaId) {
+        return (t as any).wabaId === currentAccount.wabaId;
+      }
+
+      // 3. Fallback: If template has no explicit account ID, and there's only 1 account, allow it
+      if (!t.whatsAppAccountId && availableAccounts.length <= 1) {
+        return true;
+      }
+
+      return false;
+    });
+  }, [templates, currentAccount, availableAccounts.length]);
+
+  // Ensure selectedTemplateId stays synchronized with the current account's approved templates
+  useEffect(() => {
+    if (!isOpen) return;
+    if (approvedTemplates.length > 0) {
+      const exists = approvedTemplates.some(
+        (t) => t.id === selectedTemplateId || t.metaTemplateId === selectedTemplateId
+      );
+      if (!exists) {
+        setSelectedTemplateId(approvedTemplates[0].id);
+        setTemplateVariables({});
+      }
+    } else {
+      setSelectedTemplateId('');
+      setTemplateVariables({});
+    }
+  }, [isOpen, approvedTemplates, selectedTemplateId]);
+
+  const selectedTemplate =
+    approvedTemplates.find((t) => t.id === selectedTemplateId || t.metaTemplateId === selectedTemplateId) ||
+    templates.find((t) => t.id === selectedTemplateId || t.metaTemplateId === selectedTemplateId);
 
   const headerComponent = selectedTemplate?.components?.find((c) => c.type === 'HEADER');
   const bodyComponent = selectedTemplate?.components?.find((c) => c.type === 'BODY');
@@ -362,7 +481,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
     });
 
     try {
-      const res = await uploadMediaFile(file, activeAccount?.customToken);
+      const res = await uploadMediaFile(file, currentAccount?.customToken);
       setUploadedCampaignMedia(res);
       setCampaignMediaUrl(res.url);
     } catch (err: any) {
@@ -374,7 +493,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
 
   // Send Test Message
   const handleSendTestMessage = async () => {
-    if (!activeAccount || !selectedTemplate || !testPhone.trim()) {
+    if (!currentAccount || !selectedTemplate || !testPhone.trim()) {
       const msg = 'Please specify a test phone number with country code and select an approved template.';
       setTestStatus(msg);
       toast.showWarning('Missing Details', msg);
@@ -397,13 +516,13 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(activeAccount.customToken ? { 'x-meta-token': activeAccount.customToken } : {}),
+          ...(currentAccount.customToken ? { 'x-meta-token': currentAccount.customToken } : {}),
         },
         body: JSON.stringify({
-          phoneNumberId: activeAccount.phoneNumberId,
+          phoneNumberId: currentAccount.phoneNumberId,
           recipientPhone: testPhone.trim(),
           type: 'template',
-          customToken: activeAccount.customToken,
+          customToken: currentAccount.customToken,
           variableValues: variablePayload,
           template: {
             name: selectedTemplate.name,
@@ -433,7 +552,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
   // Launch Campaign
   const handleLaunchCampaign = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!organizationId || !activeAccount || !selectedTemplate) {
+    if (!organizationId || !currentAccount || !selectedTemplate) {
       const msg = 'Active WhatsApp account and approved template are required.';
       setErrorMsg(msg);
       toast.showWarning('Prerequisites Missing', msg);
@@ -483,8 +602,8 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
         const scheduledIso = new Date(scheduledDateTime).toISOString();
         const campaignPayload = {
           name: campaignName,
-          whatsAppAccountId: activeAccount.id,
-          phoneNumberId: activeAccount.phoneNumberId,
+          whatsAppAccountId: currentAccount.id,
+          phoneNumberId: currentAccount.phoneNumberId,
           templateId: selectedTemplate.id,
           templateName: selectedTemplate.name,
           templateCategory: selectedTemplate.category,
@@ -497,7 +616,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
           scheduledAt: scheduledIso,
           scheduleData: {
             organizationId,
-            phoneNumberId: activeAccount.phoneNumberId,
+            phoneNumberId: currentAccount.phoneNumberId,
             template: {
               name: selectedTemplate.name,
               language: selectedTemplate.language || 'en_US',
@@ -511,7 +630,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
                 body_1: c.name || campaignVariables.body_1 || 'Customer',
               },
             })),
-            customToken: activeAccount.customToken,
+            customToken: currentAccount.customToken,
             variableValues: campaignVariables,
             campaignName,
             scheduledAt: scheduledIso,
@@ -532,7 +651,8 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
         // Immediate Launch
         const campaignPayload = {
           name: campaignName,
-          whatsAppAccountId: activeAccount.id,
+          whatsAppAccountId: currentAccount.id,
+          phoneNumberId: currentAccount.phoneNumberId,
           templateId: selectedTemplate.id,
           templateName: selectedTemplate.name,
           templateCategory: selectedTemplate.category,
@@ -550,7 +670,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
         await launchCampaign(
           organizationId,
           campaignId,
-          activeAccount.phoneNumberId,
+          currentAccount.phoneNumberId,
           {
             name: selectedTemplate.name,
             language: selectedTemplate.language || 'en_US',
@@ -564,7 +684,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
               body_1: c.name || campaignVariables.body_1 || 'Customer',
             },
           })),
-          activeAccount.customToken,
+          currentAccount.customToken,
           campaignVariables,
           campaignPayload.name
         );
@@ -690,67 +810,153 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
         <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 divide-y lg:divide-y-0 lg:divide-x divide-neutral-200 dark:border-neutral-800 min-h-0 overflow-hidden">
           {/* Left Column: Form & Settings (7 cols on desktop, full-width on mobile setup tab) */}
           <div className={`${mobileActiveTab === 'setup' ? 'block' : 'hidden'} lg:block lg:col-span-7 p-4 sm:p-5 space-y-4 overflow-y-auto`}>
-            {/* Step 1: Campaign Name & WhatsApp Number */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
-                  1. Campaign Details
-                </label>
-                {activeAccount && (
-                  <span className="text-[11px] text-neutral-500 flex items-center space-x-1">
-                    <span>From:</span>
-                    <strong className="text-neutral-800 dark:text-neutral-200 font-mono">
-                      {activeAccount.displayPhoneNumber}
-                    </strong>
-                  </span>
+            {/* Step 1: WhatsApp Sender Number & Campaign Title */}
+            <div className="space-y-3.5 p-3.5 rounded-2xl bg-neutral-50/80 dark:bg-neutral-800/40 border border-neutral-200/80 dark:border-neutral-800">
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold uppercase tracking-wider text-neutral-600 dark:text-neutral-300 flex items-center space-x-1.5">
+                    <Smartphone className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                    <span>1. WhatsApp Sender Number</span>
+                    <span className="text-red-500">*</span>
+                  </label>
+                  {currentAccount?.messagingLimitLabel && (
+                    <span className="text-[10.5px] font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 px-2 py-0.5 rounded-md flex items-center space-x-1">
+                      <Zap className="w-3 h-3 text-amber-500 shrink-0" />
+                      <span>24h Limit: {currentAccount.messagingLimitLabel}</span>
+                    </span>
+                  )}
+                </div>
+
+                {availableAccounts.length > 1 ? (
+                  <div className="space-y-1">
+                    <select
+                      value={selectedAccountId}
+                      onChange={(e) => handleAccountChange(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs font-semibold text-neutral-900 dark:text-white focus:ring-2 focus:ring-emerald-500 focus:outline-hidden cursor-pointer"
+                    >
+                      {availableAccounts.map((acc) => (
+                        <option key={acc.id} value={acc.id}>
+                          {acc.displayPhoneNumber} {acc.verifiedName ? `(${acc.verifiedName})` : ''} • Limit: {acc.messagingLimitLabel || '250 / 24h'}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-[10.5px] text-neutral-500 dark:text-neutral-400">
+                      Templates below will automatically filter to match this sender number.
+                    </p>
+                  </div>
+                ) : currentAccount ? (
+                  <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700">
+                    <div className="flex items-center space-x-2">
+                      <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                      <span className="font-mono font-bold text-xs text-neutral-900 dark:text-white">
+                        {currentAccount.displayPhoneNumber}
+                      </span>
+                      {currentAccount.verifiedName && (
+                        <span className="text-[11px] text-neutral-500">
+                          ({currentAccount.verifiedName})
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-[10.5px] font-semibold text-emerald-600 dark:text-emerald-400 flex items-center space-x-1">
+                      <CheckCircle2 className="w-3 h-3" />
+                      <span>Sender Connected</span>
+                    </span>
+                  </div>
+                ) : (
+                  <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 text-xs text-amber-800 dark:text-amber-300">
+                    No WhatsApp account connected. Please connect a number first.
+                  </div>
                 )}
               </div>
 
-              <input
-                type="text"
-                placeholder="e.g. Diwali Mega Sale Offer / Urgent Payment Reminder"
-                value={campName || ''}
-                onChange={(e) => setCampName(e.target.value)}
-                className="w-full min-h-[44px] px-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-sm sm:text-xs text-neutral-900 dark:text-white placeholder-neutral-400 focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
-              />
+              <div className="space-y-1.5 pt-1">
+                <label className="text-xs font-semibold text-neutral-700 dark:text-neutral-300">
+                  Campaign Title / Name <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Diwali Mega Sale Offer / Urgent Payment Reminder"
+                  value={campName || ''}
+                  onChange={(e) => setCampName(e.target.value)}
+                  className="w-full min-h-[42px] px-3.5 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs text-neutral-900 dark:text-white placeholder-neutral-400 focus:ring-2 focus:ring-emerald-500 focus:outline-hidden font-medium"
+                />
+              </div>
             </div>
 
-            {/* Step 2: Meta Approved Template Selection */}
+            {/* Step 2: Meta Approved Template Selection (strictly filtered for the sender number) */}
             <div className="space-y-3">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between flex-wrap gap-2">
                 <label className="text-xs font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400 flex items-center space-x-1.5">
                   <FileText className="w-3.5 h-3.5 text-emerald-500" />
-                  <span>2. Select Meta Approved Template</span>
+                  <span>2. Meta Approved Template</span>
                   <span className="text-red-500">*</span>
                 </label>
-                <span className="text-[11px] text-neutral-500">
-                  {approvedTemplates.length} approved templates ready
-                </span>
+                <div className="flex items-center space-x-2">
+                  <span className="text-[11px] text-neutral-500 font-medium">
+                    {approvedTemplates.length} approved for <strong className="font-mono text-neutral-700 dark:text-neutral-300">{currentAccount?.displayPhoneNumber || 'number'}</strong>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleSyncTemplates}
+                    disabled={isSyncingTemplates}
+                    title="Sync latest approved templates from Meta for this WhatsApp number"
+                    className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[10.5px] font-semibold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900 border border-emerald-200 dark:border-emerald-800 cursor-pointer disabled:opacity-50 transition-colors shadow-2xs"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isSyncingTemplates ? 'animate-spin' : ''}`} />
+                    <span>{isSyncingTemplates ? 'Syncing...' : 'Sync Meta'}</span>
+                  </button>
+                </div>
               </div>
 
               {approvedTemplates.length === 0 ? (
-                <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/40 text-xs text-amber-800 dark:text-amber-300 space-y-1">
-                  <p className="font-semibold">No APPROVED WhatsApp Templates Found</p>
-                  <p className="text-[11px]">
-                    Go to the <strong>Templates</strong> section to create or sync templates approved by Meta before launching a broadcast.
-                  </p>
+                <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/40 text-xs text-amber-800 dark:text-amber-300 space-y-2">
+                  <div className="flex items-start space-x-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-semibold text-xs">
+                        No APPROVED WhatsApp Templates Found for {currentAccount?.displayPhoneNumber || 'this Number'}
+                      </p>
+                      <p className="text-[11px] mt-0.5 text-neutral-600 dark:text-neutral-300 leading-relaxed">
+                        Meta templates are linked directly to your WhatsApp Business Account (WABA). Is number ke approved templates abhi sync nahi hain. Agar aapne Meta WhatsApp Manager me templates create ya approve karwaye hain, toh niche button se sync karein:
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center space-x-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={handleSyncTemplates}
+                      disabled={isSyncingTemplates}
+                      className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs cursor-pointer disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isSyncingTemplates ? 'animate-spin' : ''}`} />
+                      <span>{isSyncingTemplates ? 'Syncing Templates from Meta...' : 'Sync Templates from Meta Now'}</span>
+                    </button>
+                  </div>
                 </div>
               ) : (
-                <select
-                  value={selectedTemplateId || ''}
-                  onChange={(e) => {
-                    setSelectedTemplateId(e.target.value);
-                    setTemplateVariables({});
-                  }}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs text-neutral-900 dark:text-white font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-hidden cursor-pointer"
-                >
-                  <option value="">-- Choose Approved Template --</option>
-                  {approvedTemplates.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name} • {t.category} ({t.language})
-                    </option>
-                  ))}
-                </select>
+                <div className="space-y-1.5">
+                  <select
+                    value={selectedTemplateId || ''}
+                    onChange={(e) => {
+                      setSelectedTemplateId(e.target.value);
+                      setTemplateVariables({});
+                    }}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs text-neutral-900 dark:text-white font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-hidden cursor-pointer"
+                  >
+                    <option value="">-- Choose Approved Template ({currentAccount?.displayPhoneNumber || 'Sender'}) --</option>
+                    {approvedTemplates.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name} • {t.category} ({t.language})
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[10.5px] text-neutral-500 dark:text-neutral-400 flex items-center space-x-1">
+                    <Info className="w-3 h-3 text-neutral-400 shrink-0" />
+                    <span>
+                      Ye dropdown sirf <strong>{currentAccount?.displayPhoneNumber}</strong> ke Meta-approved templates hi show kar raha hai.
+                    </span>
+                  </p>
+                </div>
               )}
 
               {/* Header Media: Direct PC / Device Upload or URL */}
@@ -1383,14 +1589,14 @@ Rahul: 919974428034
                 {/* WhatsApp Chat Header */}
                 <div className="bg-[#008069] dark:bg-[#1f2c34] text-white px-3 py-2 pt-4 flex items-center space-x-2 shadow-xs z-10 shrink-0">
                   <div className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center text-[11px] font-bold text-white shrink-0">
-                    {activeAccount?.verifiedName?.[0] || 'W'}
+                    {currentAccount?.verifiedName?.[0] || 'W'}
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-[11px] font-bold truncate leading-tight">
-                      {activeAccount?.verifiedName || 'CloudWABA Official'}
+                      {currentAccount?.verifiedName || currentAccount?.displayPhoneNumber || 'CloudWABA Official'}
                     </p>
                     <p className="text-[9px] text-emerald-100 truncate opacity-90 leading-tight">
-                      Official WhatsApp Business
+                      {currentAccount?.displayPhoneNumber || 'Official WhatsApp Business'}
                     </p>
                   </div>
                 </div>
@@ -1508,10 +1714,10 @@ Rahul: 919974428034
                 </strong>
               </span>
 
-              {activeAccount && (
+              {currentAccount && (
                 <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-neutral-200/80 dark:bg-neutral-700/70 text-neutral-700 dark:text-neutral-300">
                   <Zap className="w-3 h-3 text-amber-500" />
-                  <span>24h Limit: {activeAccount.messagingLimitLabel || '250 / 24h'}</span>
+                  <span>24h Limit: {currentAccount.messagingLimitLabel || '250 / 24h'}</span>
                 </span>
               )}
             </div>

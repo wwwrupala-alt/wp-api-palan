@@ -1444,6 +1444,7 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
           }}
           organizationId={organization.id}
           activeAccount={activeAccount}
+          accounts={accounts}
           templates={templates}
           contacts={contacts}
           groups={groups}
