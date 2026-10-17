@@ -2699,6 +2699,23 @@ export async function processIncomingWhatsAppStatusUpdate(statusObj: any, metada
           }
         }
 
+        // Store Meta Conversation-Based Pricing (CBP) details
+        if (statusObj?.pricing) {
+          updateFields.isBillable = Boolean(statusObj.pricing.billable);
+          updateFields.pricingModel = statusObj.pricing.pricing_model || 'CBP';
+          if (statusObj.pricing.category) {
+            updateFields.category = String(statusObj.pricing.category).toUpperCase();
+          }
+        }
+
+        const resolvedCat = (updateFields.category || existingData?.category || 'UTILITY').toUpperCase();
+        if (status === 'delivered' || status === 'read' || (status === 'sent' && !existingData?.cost)) {
+          updateFields.cost = resolvedCat.includes('MARKETING') ? 0.7843 : 0.115;
+          updateFields.currency = 'INR';
+        } else if (status === 'failed') {
+          updateFields.cost = 0;
+        }
+
         // Timeline entry
         let desc = `Message ${status}`;
         if (status === 'sent') desc = 'Message sent via Meta Cloud API';

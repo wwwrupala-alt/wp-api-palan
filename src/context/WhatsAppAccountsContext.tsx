@@ -106,6 +106,14 @@ interface WhatsAppAccountsContextType {
     accountId: string,
     status: 'LINKED' | 'NOT_SET'
   ) => Promise<{ success: boolean; error?: string }>;
+  updateAccountBillingInfo: (
+    accountId: string,
+    info: {
+      businessPortfolioId?: string;
+      paymentAccountId?: string;
+      wabaId?: string;
+    }
+  ) => Promise<{ success: boolean; error?: string }>;
   disconnectAccount: (accountId: string) => Promise<void>;
   reconnectAccount: (accountId: string) => Promise<void>;
   deleteAccount: (accountId: string) => Promise<void>;
@@ -671,6 +679,44 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
     }
   };
 
+  const updateAccountBillingInfo = async (
+    accountId: string,
+    info: {
+      businessPortfolioId?: string;
+      paymentAccountId?: string;
+      wabaId?: string;
+    }
+  ): Promise<{ success: boolean; error?: string }> => {
+    const effectiveOrgId = getEffectiveOrgId();
+    if (!effectiveOrgId) return { success: false, error: 'Organization not found' };
+
+    const accountRef = doc(db, 'organizations', effectiveOrgId, 'whatsappAccounts', accountId);
+    try {
+      const updateData: Record<string, any> = {
+        updatedAt: new Date().toISOString(),
+      };
+      if (info.businessPortfolioId !== undefined) {
+        updateData.businessPortfolioId = info.businessPortfolioId.trim();
+        updateData.businessId = info.businessPortfolioId.trim();
+      }
+      if (info.paymentAccountId !== undefined) {
+        updateData.paymentAccountId = info.paymentAccountId.trim();
+        updateData.primaryFundingId = info.paymentAccountId.trim();
+        if (info.paymentAccountId.trim()) {
+          updateData.paymentMethodStatus = 'LINKED';
+        }
+      }
+      if (info.wabaId !== undefined) {
+        updateData.wabaId = info.wabaId.trim();
+      }
+      await updateDoc(accountRef, updateData);
+      return { success: true };
+    } catch (err: any) {
+      handleFirestoreError(err, OperationType.UPDATE, `organizations/${effectiveOrgId}/whatsappAccounts/${accountId}`);
+      return { success: false, error: err?.message || 'Failed to update billing info' };
+    }
+  };
+
   const disconnectAccount = async (accountId: string) => {
     const effectiveOrgId = getEffectiveOrgId();
     if (!effectiveOrgId) return;
@@ -783,6 +829,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
         updateAccountToken,
         logAccountRecharge,
         setPaymentMethodStatus,
+        updateAccountBillingInfo,
         disconnectAccount,
         reconnectAccount,
         deleteAccount,

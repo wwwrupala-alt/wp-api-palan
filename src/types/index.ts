@@ -123,6 +123,7 @@ export interface WhatsAppAccount {
   nameStatus?: string;
   currency?: string;
   primaryFundingId?: string;
+  paymentAccountId?: string;
   paymentMethodStatus?: 'LINKED' | 'NOT_SET' | 'EXEMPT';
   paymentMethodType?: string;
   prepaidBalance?: {

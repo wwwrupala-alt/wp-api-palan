@@ -19,13 +19,15 @@ import {
   Wallet,
   Building2,
   DollarSign,
+  Settings,
 } from 'lucide-react';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
 import { useToast } from '../context/ToastContext.tsx';
 import type { WhatsAppAccount } from '../types/index.ts';
 import { parseMessagingLimitTier } from '../lib/metaLimits.ts';
 import { UpdateAccountTokenModal } from '../components/UpdateAccountTokenModal.tsx';
-import { AccountBillingModal } from '../components/AccountBillingModal.tsx';
+import { ConfigureBillingIdsModal } from '../components/ConfigureBillingIdsModal.tsx';
+import { buildMetaBillingHubUrl } from '../utils/metaBilling.ts';
 
 interface WhatsAppAccountsPageProps {
   onOpenConnectModal: () => void;
@@ -50,7 +52,7 @@ export const WhatsAppAccountsPage: React.FC<WhatsAppAccountsPageProps> = ({
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
   const [tokenModalAccount, setTokenModalAccount] = useState<WhatsAppAccount | null>(null);
-  const [billingModalAccount, setBillingModalAccount] = useState<WhatsAppAccount | null>(null);
+  const [configureBillingAccount, setConfigureBillingAccount] = useState<WhatsAppAccount | null>(null);
 
   const copyToClipboard = (text: string, isUrl: boolean) => {
     navigator.clipboard.writeText(text);
@@ -390,75 +392,69 @@ export const WhatsAppAccountsPage: React.FC<WhatsAppAccountsPageProps> = ({
                   );
                 })()}
 
-                {/* WhatsApp Messaging Payment & Direct Recharge Link */}
+                {/* 1 Button: Customer's Own Real Meta Billing Hub Link */}
                 {(() => {
-                  const hasPayment =
-                    acc.paymentMethodStatus === 'LINKED' ||
-                    Boolean(acc.primaryFundingId) ||
-                    Boolean(acc.prepaidBalance && acc.prepaidBalance.amount > 0);
-                  const wabaPaymentUrl = `https://business.facebook.com/wa/manage/payment_methods/?waba_id=${encodeURIComponent(
-                    acc.wabaId
-                  )}`;
+                  const portfolioId = acc.businessPortfolioId || acc.businessId;
+                  const billingHubUrl = buildMetaBillingHubUrl({
+                    wabaId: acc.wabaId,
+                    businessPortfolioId: acc.businessPortfolioId,
+                    businessId: acc.businessId,
+                    paymentAccountId: acc.paymentAccountId,
+                    primaryFundingId: acc.primaryFundingId,
+                  });
+
                   return (
-                    <div className="p-3.5 rounded-xl bg-gradient-to-r from-emerald-50/60 via-teal-50/40 to-neutral-50/60 dark:from-emerald-950/20 dark:via-teal-950/15 dark:to-neutral-900 border border-emerald-200/80 dark:border-emerald-800/60 space-y-2.5">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-1.5">
+                    <div className="p-3.5 rounded-xl bg-gradient-to-r from-emerald-50/70 via-teal-50/40 to-neutral-50/60 dark:from-emerald-950/25 dark:via-teal-950/20 dark:to-neutral-900 border border-emerald-200/80 dark:border-emerald-800/60 space-y-2">
+                      <div className="flex items-center justify-between text-xs">
+                        <div className="flex items-center space-x-1.5 font-bold text-neutral-900 dark:text-white">
                           <CreditCard className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                          <span className="text-xs font-bold text-neutral-900 dark:text-white">
-                            Messaging Payment &amp; Balance
-                          </span>
+                          <span>Meta WhatsApp Payment &amp; Billing</span>
                         </div>
-                        <span
-                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                            hasPayment
-                              ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800'
-                              : 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300 border border-rose-300 dark:border-rose-800'
-                          }`}
+                        <button
+                          type="button"
+                          onClick={() => setConfigureBillingAccount(acc)}
+                          className="text-[11px] font-medium text-emerald-700 dark:text-emerald-400 hover:underline flex items-center space-x-1 cursor-pointer"
+                          title="View / Configure Customer Portfolio ID or Payment Account ID"
                         >
-                          {hasPayment ? 'Payment Linked' : 'No Payment Added'}
-                        </span>
+                          <Settings className="w-3 h-3" />
+                          <span>Edit IDs</span>
+                        </button>
                       </div>
 
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
-                        <div>
-                          <p className="text-[11px] text-neutral-600 dark:text-neutral-400 leading-tight">
-                            Currency: <strong>{acc.currency || 'INR'} (₹)</strong> &bull; Meta auto-debits card or wallet per conversation.
-                          </p>
-                          {acc.prepaidBalance && acc.prepaidBalance.amount > 0 ? (
-                            <p className="text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold font-mono mt-0.5">
-                              Tracked Balance: ₹{acc.prepaidBalance.amount.toLocaleString()}
-                            </p>
-                          ) : (
-                            <p className="text-[10px] text-neutral-400 mt-0.5">
-                              Click below to check live ledger or add funds on Meta.
-                            </p>
-                          )}
-                        </div>
+                      {/* 1 Direct Button to Customer's Own Meta Billing Hub */}
+                      <div className="flex items-center gap-2">
+                        <a
+                          href={billingHubUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex-1 py-2 px-3.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-semibold text-xs inline-flex items-center justify-center space-x-2 shadow-2xs transition-colors cursor-pointer"
+                          title="Open official Meta Billing Hub to add payment method (UPI / Card) or prepaid recharge"
+                        >
+                          <CreditCard className="w-3.5 h-3.5 shrink-0" />
+                          <span>Add Payment / Funds on Meta</span>
+                          <ExternalLink className="w-3 h-3 shrink-0 opacity-80" />
+                        </a>
 
-                        <div className="flex items-center space-x-2 shrink-0">
-                          {/* Direct Link to Meta Payment Add */}
-                          <a
-                            href={wabaPaymentUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs inline-flex items-center space-x-1.5 shadow-2xs transition-colors"
-                            title="Direct link to add payment method or recharge balance on Meta"
-                          >
-                            <CreditCard className="w-3.5 h-3.5" />
-                            <span>💳 Add Payment / Recharge</span>
-                            <ExternalLink className="w-3 h-3" />
-                          </a>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(billingHubUrl);
+                            toast.showSuccess('Link Copied', 'Direct Meta Billing Hub URL copied to clipboard');
+                          }}
+                          className="p-2 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-white dark:bg-neutral-800 hover:bg-emerald-50 dark:hover:bg-neutral-700 text-emerald-700 dark:text-emerald-300 transition-colors cursor-pointer shrink-0"
+                          title="Copy direct billing link"
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
 
-                          {/* Check Balance & Billing Hub Modal */}
-                          <button
-                            type="button"
-                            onClick={() => setBillingModalAccount(acc)}
-                            className="px-2.5 py-1.5 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-white dark:bg-neutral-800 hover:bg-emerald-50 dark:hover:bg-neutral-700 text-emerald-700 dark:text-emerald-300 font-semibold text-xs transition-colors cursor-pointer"
-                            title="Check live balance on Meta, log recharge & view message pricing"
-                          >
-                            <span>Check Balance</span>
-                          </button>
-                        </div>
+                      <div className="flex items-center justify-between text-[10px] text-neutral-500 dark:text-neutral-400 pt-0.5">
+                        <span className="truncate">
+                          Portfolio ID: <strong className="font-mono text-neutral-700 dark:text-neutral-300">{portfolioId || 'Auto / Linked'}</strong>
+                        </span>
+                        <span className="truncate ml-2">
+                          WABA: <strong className="font-mono text-neutral-700 dark:text-neutral-300">{acc.wabaId}</strong>
+                        </span>
                       </div>
                     </div>
                   );
@@ -502,12 +498,12 @@ export const WhatsAppAccountsPage: React.FC<WhatsAppAccountsPageProps> = ({
                     </button>
 
                     <button
-                      onClick={() => setBillingModalAccount(acc)}
+                      onClick={() => setConfigureBillingAccount(acc)}
                       className="px-3 py-1.5 rounded-lg border border-emerald-200 dark:border-emerald-800/80 bg-emerald-50/50 dark:bg-emerald-950/30 hover:bg-emerald-100/60 dark:hover:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 text-xs font-medium flex items-center space-x-1.5 transition-colors cursor-pointer"
-                      title="View Business Portfolio Verification, Payment Method & Balance Details"
+                      title="View & Configure Business Portfolio ID, WABA ID & Meta Billing Hub Link"
                     >
-                      <CreditCard className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                      <span>Billing &amp; Portfolio</span>
+                      <Settings className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                      <span>Billing IDs</span>
                     </button>
 
                     <button
@@ -601,11 +597,11 @@ export const WhatsAppAccountsPage: React.FC<WhatsAppAccountsPageProps> = ({
         onSuccess={refreshMetaStatus}
       />
 
-      {/* Meta WhatsApp Billing, Payment Methods & Business Portfolio Modal */}
-      <AccountBillingModal
-        isOpen={Boolean(billingModalAccount)}
-        onClose={() => setBillingModalAccount(null)}
-        account={billingModalAccount}
+      {/* Meta Billing & Portfolio IDs Configuration Modal */}
+      <ConfigureBillingIdsModal
+        isOpen={Boolean(configureBillingAccount)}
+        onClose={() => setConfigureBillingAccount(null)}
+        account={configureBillingAccount}
       />
     </div>
   );

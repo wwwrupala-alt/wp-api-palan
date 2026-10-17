@@ -176,6 +176,7 @@ export async function fetchAndSyncMetaAccount(params: {
     businessPortfolioName?: string;
     currency?: string;
     primaryFundingId?: string;
+    paymentAccountId?: string;
     paymentMethodStatus?: string;
     connectionStatus: string;
     webhookStatus: string;
@@ -391,6 +392,7 @@ export async function fetchAndSyncMetaAccount(params: {
     businessPortfolioName: resolvedBusinessPortfolioName,
     currency: resolvedCurrency,
     primaryFundingId: resolvedPrimaryFundingId,
+    paymentAccountId: resolvedPrimaryFundingId,
     paymentMethodStatus: resolvedPaymentMethodStatus,
     connectionStatus: 'connected',
     webhookStatus: 'active',
@@ -441,6 +443,7 @@ export async function fetchAndSyncMetaAccount(params: {
       businessPortfolioName: resolvedBusinessPortfolioName,
       currency: resolvedCurrency,
       primaryFundingId: resolvedPrimaryFundingId,
+      paymentAccountId: resolvedPrimaryFundingId,
       paymentMethodStatus: resolvedPaymentMethodStatus,
       connectionStatus: 'connected',
       webhookStatus: 'active',

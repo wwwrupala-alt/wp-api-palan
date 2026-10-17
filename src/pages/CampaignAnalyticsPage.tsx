@@ -33,6 +33,7 @@ import {
   UserCheck,
   Image as ImageIcon,
   FileText,
+  DollarSign,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -42,7 +43,14 @@ import {
   subscribeCampaignRecipients,
   subscribeTemplates,
   fetchCampaignAnalyticsApi,
+  updateCampaignRecipientStatus,
+  reconcileCampaignDelivery,
 } from '../lib/services.ts';
+import {
+  calculateMessageCharge,
+  resolveTemplateCategory,
+  META_INDIA_RATES,
+} from '../utils/metaPricing.ts';
 import { MiniTemplatePhonePreview } from '../components/MiniTemplatePhonePreview.tsx';
 import type {
   Campaign,
@@ -420,6 +428,64 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
       buttonClicks: 0,
     };
   }, [recipients, currentCampaign]);
+
+  // Meta Official Charges & Pricing Calculation (User Request)
+  const campaignCategory = useMemo(() => {
+    return resolveTemplateCategory(
+      currentCampaign?.templateName || currentCampaign?.templateId,
+      effectiveTemplate?.category
+    );
+  }, [currentCampaign?.templateName, currentCampaign?.templateId, effectiveTemplate?.category]);
+
+  const pricingRate = useMemo(() => {
+    return META_INDIA_RATES[campaignCategory] || META_INDIA_RATES.UTILITY;
+  }, [campaignCategory]);
+
+  const ratePerMessage = pricingRate.rateINR;
+
+  const totalCampaignSpend = useMemo(() => {
+    // Meta charges conversation fee per delivered message
+    return realStats.delivered * ratePerMessage;
+  }, [realStats.delivered, ratePerMessage]);
+
+  const pendingSentRecipients = useMemo(() => {
+    return recipients.filter((r) => r.currentStatus === 'sent');
+  }, [recipients]);
+
+  const [reconciling, setReconciling] = useState(false);
+
+  const handleReconcilePendingToDelivered = async () => {
+    if (!organization?.id || !selectedCampaignId || pendingSentRecipients.length === 0) return;
+    setReconciling(true);
+    try {
+      const ids = pendingSentRecipients.map((r) => r.id);
+      await reconcileCampaignDelivery(organization.id, selectedCampaignId, ids);
+      toast.showSuccess(
+        'Delivery Reconciled',
+        `${ids.length} sent messages successfully reconciled & updated to Delivered.`
+      );
+    } catch (err: any) {
+      toast.showError('Reconcile Failed', err?.message || 'Could not reconcile delivery');
+    } finally {
+      setReconciling(false);
+    }
+  };
+
+  const handleMarkSingleDelivered = async (r: CampaignRecipient) => {
+    if (!organization?.id || !selectedCampaignId) return;
+    try {
+      await updateCampaignRecipientStatus(
+        organization.id,
+        selectedCampaignId,
+        r.id,
+        'delivered',
+        'Delivery confirmed on recipient handset'
+      );
+      toast.showSuccess('Status Updated', `Message to ${r.customerName} marked as Delivered`);
+    } catch (err: any) {
+      toast.showError('Update Failed', err?.message || 'Could not update status');
+    }
+  };
 
   // Filter and search recipients
   const filteredRecipients = useMemo(() => {
@@ -885,6 +951,59 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
               <span className="text-[10px] text-amber-600 dark:text-amber-400 font-semibold block">
                 {realStats.replyRate}% Reply Rate
               </span>
+            </div>
+          </div>
+
+          {/* Section 2.5: Real Meta Conversation Charges & Total Campaign Spend (User Request) */}
+          <div className="p-4 sm:p-5 rounded-2xl border border-emerald-200/90 dark:border-emerald-800/80 bg-gradient-to-r from-emerald-50/90 via-teal-50/50 to-neutral-50/80 dark:from-emerald-950/30 dark:via-teal-950/20 dark:to-neutral-900 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-start sm:items-center space-x-3.5">
+              <div className="p-3 rounded-2xl bg-emerald-600 text-white shadow-xs shrink-0 mt-0.5 sm:mt-0">
+                <DollarSign className="w-6 h-6" />
+              </div>
+              <div className="space-y-1">
+                <div className="flex items-center space-x-2 flex-wrap gap-y-1">
+                  <span className="text-xs font-bold uppercase tracking-wider text-emerald-900 dark:text-emerald-300">
+                    Real Meta Campaign Charge (Total Spent)
+                  </span>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700">
+                    {campaignCategory} Template
+                  </span>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-white/80 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300 border border-neutral-200 dark:border-neutral-700">
+                    Meta CBP (India Rate)
+                  </span>
+                </div>
+                <div className="flex items-baseline space-x-2">
+                  <span className="text-2xl sm:text-3xl font-black text-neutral-900 dark:text-white">
+                    ₹{totalCampaignSpend.toFixed(3)}
+                  </span>
+                  <span className="text-xs font-semibold text-neutral-600 dark:text-neutral-400">
+                    INR ({realStats.delivered} delivered &times; {pricingRate.label} per msg)
+                  </span>
+                </div>
+                <p className="text-[11px] text-neutral-600 dark:text-neutral-400 leading-snug">
+                  Official Meta Cloud API rate in India is <strong>{pricingRate.label}</strong> per delivered {campaignCategory.toLowerCase()} conversation. Undelivered/failed messages are <strong>₹0.00</strong> (never charged).
+                </p>
+              </div>
+            </div>
+
+            {/* Quick Delivery Reconcile Action */}
+            <div className="flex items-center space-x-2 self-start md:self-center shrink-0">
+              {pendingSentRecipients.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleReconcilePendingToDelivered}
+                  disabled={reconciling}
+                  className="px-3.5 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 active:bg-purple-800 text-white text-xs font-semibold flex items-center space-x-1.5 shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+                  title="If messages were delivered on mobile but webhook had slight latency, click to reconcile"
+                >
+                  <CheckCheck className="w-4 h-4" />
+                  <span>
+                    {reconciling
+                      ? 'Reconciling...'
+                      : `Reconcile Mobile Deliveries (Mark ${pendingSentRecipients.length} Delivered)`}
+                  </span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -1374,6 +1493,20 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
                     <span className="text-[10px] opacity-75">({tab.count})</span>
                   </button>
                 ))}
+
+                {/* Batch Reconcile Mobile Deliveries Button */}
+                {pendingSentRecipients.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleReconcilePendingToDelivered}
+                    disabled={reconciling}
+                    className="ml-auto px-2.5 py-1.5 rounded-lg bg-purple-50 hover:bg-purple-100 dark:bg-purple-950/40 dark:hover:bg-purple-900/50 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 text-xs font-semibold flex items-center space-x-1.5 transition-colors cursor-pointer"
+                    title="Click if mobile received messages but webhook had slight latency"
+                  >
+                    <CheckCheck className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
+                    <span>Sync Delivered ({pendingSentRecipients.length})</span>
+                  </button>
+                )}
               </div>
             </div>
 
@@ -1406,6 +1539,7 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
                       <th className="py-3 px-4">Customer</th>
                       <th className="py-3 px-4">WhatsApp Message ID</th>
                       <th className="py-3 px-4">Current Status</th>
+                      <th className="py-3 px-4">Meta Charge (₹)</th>
                       <th className="py-3 px-4">Sent Time</th>
                       <th className="py-3 px-4">Delivered Time</th>
                       <th className="py-3 px-4">Read Time</th>
@@ -1486,6 +1620,32 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
                           )}
                         </td>
 
+                        {/* Real Meta Message Charge (User Request) */}
+                        <td className="py-3.5 px-4 font-mono text-[11px]">
+                          {(() => {
+                            const charge = calculateMessageCharge(r.currentStatus, campaignCategory);
+                            return (
+                              <div className="flex items-center space-x-1.5">
+                                <span
+                                  className={`font-bold ${
+                                    charge.isBillable
+                                      ? 'text-emerald-700 dark:text-emerald-400'
+                                      : 'text-neutral-400'
+                                  }`}
+                                  title={charge.rateText}
+                                >
+                                  {charge.formatted}
+                                </span>
+                                {charge.isBillable && (
+                                  <span className="px-1.5 py-0.2 rounded text-[9px] font-semibold bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/50">
+                                    {campaignCategory === 'UTILITY' ? 'Utility' : 'Marketing'}
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })()}
+                        </td>
+
                         {/* Sent Time */}
                         <td className="py-3.5 px-4 text-neutral-600 dark:text-neutral-300 font-mono text-[11px]">
                           {formatTime(r.sentAt)}
@@ -1528,6 +1688,19 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
                         {/* Actions */}
                         <td className="py-3.5 px-4 text-right">
                           <div className="flex items-center justify-end space-x-1.5">
+                            {/* 1-Click Mark Delivered if mobile received it */}
+                            {r.currentStatus === 'sent' && (
+                              <button
+                                type="button"
+                                onClick={() => handleMarkSingleDelivered(r)}
+                                title="Mark message as delivered (verified on mobile)"
+                                className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border border-purple-200 dark:border-purple-800/80 bg-purple-50 dark:bg-purple-950/40 text-[11px] font-semibold text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/60 transition-colors cursor-pointer"
+                              >
+                                <CheckCheck className="w-3 h-3 text-purple-600 dark:text-purple-400" />
+                                <span>Mark Delivered</span>
+                              </button>
+                            )}
+
                             <button
                               type="button"
                               onClick={() => {
@@ -1717,12 +1890,64 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
                                 'modal_wamid'
                               )
                             }
-                            className="ml-2 text-neutral-400 hover:text-neutral-600 p-1"
+                            className="ml-2 text-neutral-400 hover:text-neutral-600 p-1 cursor-pointer"
+                            title="Copy WAMID"
                           >
                             <Copy className="w-3.5 h-3.5" />
                           </button>
                         )}
                       </div>
+                    </div>
+
+                    {/* Meta Official Message Charge & Category Card (User Request) */}
+                    <div className="p-3.5 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-emerald-800 dark:text-emerald-300 uppercase tracking-wider">
+                          Meta Official Message Charge
+                        </span>
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300">
+                          {campaignCategory}
+                        </span>
+                      </div>
+                      {(() => {
+                        const charge = calculateMessageCharge(selectedRecipientForModal.currentStatus, campaignCategory);
+                        return (
+                          <div className="flex items-center justify-between">
+                            <span className="text-lg font-black text-emerald-700 dark:text-emerald-300">
+                              {charge.formatted} <span className="text-xs font-normal text-neutral-500">INR</span>
+                            </span>
+                            <span className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                              {charge.isBillable ? 'Billable Conversation (CBP)' : 'No Charge (Failed / Pending)'}
+                            </span>
+                          </div>
+                        );
+                      })()}
+                      {selectedRecipientForModal.currentStatus === 'sent' && (
+                        <div className="pt-2 border-t border-emerald-200/60 dark:border-emerald-800/50 flex items-center justify-between">
+                          <span className="text-[11px] text-neutral-600 dark:text-neutral-400">
+                            Delivered on mobile handset?
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              handleMarkSingleDelivered(selectedRecipientForModal);
+                              setSelectedRecipientForModal((prev) =>
+                                prev
+                                  ? {
+                                      ...prev,
+                                      currentStatus: 'delivered',
+                                      deliveredAt: new Date().toISOString(),
+                                    }
+                                  : null
+                              );
+                            }}
+                            className="px-2.5 py-1 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-[11px] font-bold flex items-center space-x-1 cursor-pointer transition-colors"
+                          >
+                            <CheckCheck className="w-3 h-3" />
+                            <span>Mark Delivered</span>
+                          </button>
+                        </div>
+                      )}
                     </div>
 
                     {/* Delivery Timestamps */}

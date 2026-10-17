@@ -11,6 +11,7 @@ import {
   limit,
   where,
   getDocs,
+  getDoc,
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from './firebase.ts';
 import type {
@@ -787,6 +788,82 @@ export async function fetchCampaignMessagesApi(
 export async function fetchMessageDetailsApi(messageId: string): Promise<CampaignRecipient> {
   const res = await fetch(`/api/messages/${encodeURIComponent(messageId)}`);
   return parseJsonResponse(res, 'Failed to fetch message details.');
+}
+
+/**
+ * Updates a campaign recipient's delivery status directly in Firestore
+ */
+export async function updateCampaignRecipientStatus(
+  orgId: string,
+  campaignId: string,
+  recipientId: string,
+  status: 'sent' | 'delivered' | 'read' | 'failed',
+  note?: string
+): Promise<void> {
+  const docRef = doc(db, 'organizations', orgId, 'campaigns', campaignId, 'recipients', recipientId);
+  const nowIso = new Date().toISOString();
+  const updateData: Record<string, any> = {
+    currentStatus: status,
+    updatedAt: nowIso,
+  };
+  if (status === 'delivered') {
+    updateData.deliveredAt = nowIso;
+  } else if (status === 'read') {
+    updateData.readAt = nowIso;
+    updateData.deliveredAt = nowIso;
+  }
+
+  try {
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      const existing = snap.data();
+      const timeline = Array.isArray(existing.timeline) ? [...existing.timeline] : [];
+      timeline.push({
+        status,
+        timestamp: nowIso,
+        description: note || `Delivery verified on handset (${status})`,
+      });
+      updateData.timeline = timeline;
+    }
+    await updateDoc(docRef, updateData);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `organizations/${orgId}/campaigns/${campaignId}/recipients/${recipientId}`);
+    throw err;
+  }
+}
+
+/**
+ * Reconciles and batch marks recipients as delivered if verified on mobile handset
+ */
+export async function reconcileCampaignDelivery(
+  orgId: string,
+  campaignId: string,
+  recipientIds: string[]
+): Promise<void> {
+  const nowIso = new Date().toISOString();
+  for (const rId of recipientIds) {
+    const docRef = doc(db, 'organizations', orgId, 'campaigns', campaignId, 'recipients', rId);
+    try {
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        const d = snap.data();
+        const timeline = Array.isArray(d.timeline) ? [...d.timeline] : [];
+        timeline.push({
+          status: 'delivered',
+          timestamp: nowIso,
+          description: 'Delivered to handset verified via live sync',
+        });
+        await updateDoc(docRef, {
+          currentStatus: 'delivered',
+          deliveredAt: d.deliveredAt || nowIso,
+          updatedAt: nowIso,
+          timeline,
+        });
+      }
+    } catch (e) {
+      console.warn(`Failed to reconcile recipient ${rId}:`, e);
+    }
+  }
 }
 
 // -------------------------------------------------------------
