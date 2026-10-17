@@ -102,6 +102,10 @@ interface WhatsAppAccountsContextType {
     currency: string,
     note?: string
   ) => Promise<{ success: boolean; error?: string }>;
+  setPaymentMethodStatus: (
+    accountId: string,
+    status: 'LINKED' | 'NOT_SET'
+  ) => Promise<{ success: boolean; error?: string }>;
   disconnectAccount: (accountId: string) => Promise<void>;
   reconnectAccount: (accountId: string) => Promise<void>;
   deleteAccount: (accountId: string) => Promise<void>;
@@ -647,6 +651,26 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
     }
   };
 
+  const setPaymentMethodStatus = async (
+    accountId: string,
+    status: 'LINKED' | 'NOT_SET'
+  ): Promise<{ success: boolean; error?: string }> => {
+    const effectiveOrgId = getEffectiveOrgId();
+    if (!effectiveOrgId) return { success: false, error: 'Organization not found' };
+
+    const accountRef = doc(db, 'organizations', effectiveOrgId, 'whatsappAccounts', accountId);
+    try {
+      await updateDoc(accountRef, {
+        paymentMethodStatus: status,
+        updatedAt: new Date().toISOString(),
+      });
+      return { success: true };
+    } catch (err: any) {
+      handleFirestoreError(err, OperationType.UPDATE, `organizations/${effectiveOrgId}/whatsappAccounts/${accountId}`);
+      return { success: false, error: err?.message || 'Failed to update payment method status' };
+    }
+  };
+
   const disconnectAccount = async (accountId: string) => {
     const effectiveOrgId = getEffectiveOrgId();
     if (!effectiveOrgId) return;
@@ -758,6 +782,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
         syncAccountWithMeta,
         updateAccountToken,
         logAccountRecharge,
+        setPaymentMethodStatus,
         disconnectAccount,
         reconnectAccount,
         deleteAccount,

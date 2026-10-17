@@ -36,7 +36,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
   onClose,
   account,
 }) => {
-  const { syncAccountWithMeta, logAccountRecharge } = useWhatsAppAccounts();
+  const { syncAccountWithMeta, logAccountRecharge, setPaymentMethodStatus } = useWhatsAppAccounts();
   const toast = useToast();
 
   const [activeTab, setActiveTab] = useState<'payment' | 'verification' | 'rates'>('payment');
@@ -44,7 +44,30 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
   const [rechargeNote, setRechargeNote] = useState<string>('Meta Business Manager Recharge');
   const [isLoggingRecharge, setIsLoggingRecharge] = useState<boolean>(false);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [isUpdatingStatus, setIsUpdatingStatus] = useState<boolean>(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const handleTogglePaymentStatus = async (status: 'LINKED' | 'NOT_SET') => {
+    if (!account) return;
+    setIsUpdatingStatus(true);
+    try {
+      const res = await setPaymentMethodStatus(account.id, status);
+      if (res.success) {
+        toast.showSuccess(
+          status === 'LINKED' ? 'Payment Method Status: ACTIVE' : 'Payment Status Reset',
+          status === 'LINKED'
+            ? 'Account marked as Payment Linked. You can now send campaigns.'
+            : 'Payment status set to Action Required.'
+        );
+      } else {
+        toast.showError('Update Failed', res.error || 'Failed to update payment status');
+      }
+    } catch (err: any) {
+      toast.showError('Error', err?.message || 'Something went wrong');
+    } finally {
+      setIsUpdatingStatus(false);
+    }
+  };
 
   if (!isOpen || !account) return null;
 
@@ -265,16 +288,41 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
                   </div>
                 </div>
 
-                <a
-                  href={wabaPaymentUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs inline-flex items-center justify-center space-x-2 shadow-xs transition-colors shrink-0"
-                >
-                  <CreditCard className="w-4 h-4" />
-                  <span>💳 Add / Recharge Payment on Meta</span>
-                  <ExternalLink className="w-3.5 h-3.5" />
-                </a>
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 shrink-0">
+                  <a
+                    href={wabaPaymentUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs inline-flex items-center justify-center space-x-2 shadow-xs transition-colors shrink-0"
+                  >
+                    <CreditCard className="w-4 h-4" />
+                    <span>💳 Add / Recharge on Meta</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+
+                  {!hasPaymentMethod ? (
+                    <button
+                      type="button"
+                      onClick={() => handleTogglePaymentStatus('LINKED')}
+                      disabled={isUpdatingStatus}
+                      className="px-3.5 py-2.5 rounded-xl bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 hover:bg-neutral-800 dark:hover:bg-neutral-100 font-semibold text-xs inline-flex items-center justify-center space-x-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                      title="If you already linked a card or paid on Meta, click here to mark status as active"
+                    >
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400 dark:text-emerald-600" />
+                      <span>{isUpdatingStatus ? 'Saving...' : 'Mene Pay Kar Diya (Mark Active)'}</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleTogglePaymentStatus('NOT_SET')}
+                      disabled={isUpdatingStatus}
+                      className="px-3 py-2.5 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white font-medium text-xs inline-flex items-center justify-center transition-colors cursor-pointer"
+                      title="Reset payment status back to Action Required"
+                    >
+                      <span>Reset Status</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Direct Links to Meta Billing Hub */}
@@ -339,33 +387,70 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
                 </div>
               </div>
 
-              {/* Explainer: Can Meta API Show Live Balance? (Direct Answer to User's Question) */}
-              <div className="p-4 rounded-2xl bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 space-y-3">
-                <div className="flex items-center space-x-2 text-amber-900 dark:text-amber-200">
-                  <Info className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+              {/* Explainer: Payment Issue Troubleshooting & Live Balance Guide */}
+              <div className="p-4 rounded-2xl bg-amber-50/90 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-900/60 space-y-3.5">
+                <div className="flex items-center space-x-2 text-amber-950 dark:text-amber-200">
+                  <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0" />
                   <span className="font-bold text-xs sm:text-sm">
-                    Important: Profile par kitna payment he wo kaise check karein? (Meta Cloud API Rule)
+                    ⚠️ Payment Kar Diya Fir Bhi Meta / WhatsApp Manager Me "Payment Issue" Kyu Aa Raha Hai?
                   </span>
                 </div>
-                <div className="text-xs text-amber-900/90 dark:text-amber-300/90 space-y-2 leading-relaxed">
-                  <p>
-                    <strong>1. Direct Meta Billing:</strong> WhatsApp Cloud API me messages ka paisa third-party CRM app nahi leta; Meta khud directly aapke Meta Business Manager account se deduct karta hai.
-                  </p>
-                  <p>
-                    <strong>2. Bank/Card Privacy Rule:</strong> Meta ki financial security policy ke tahat, Meta ka Graph API kisi bhi third-party application ko live bank card balance ya credit line balance read karne ki permission nahi deta.
-                  </p>
-                  <p>
-                    <strong>3. Live Ledger Dekhne Ka Tareeka:</strong> Apna live wallet balance, last deduction, aur GST invoice dekhne ke liye neeche diye gaye button par click karein:
-                  </p>
+
+                <div className="text-xs text-amber-950/90 dark:text-amber-200/90 space-y-2.5 leading-relaxed">
+                  <div className="p-2.5 rounded-xl bg-white/80 dark:bg-neutral-900/60 border border-amber-200 dark:border-amber-900/40">
+                    <p className="font-bold text-neutral-900 dark:text-white">
+                      1. Ad Account vs WhatsApp Account (Sabse Badi Wajah):
+                    </p>
+                    <p className="text-neutral-700 dark:text-neutral-300 mt-0.5">
+                      Meta me <strong>Facebook Ads (Ad Account)</strong> ka balance alag hota hai aur <strong>WhatsApp Business Account (WABA)</strong> ka payment method alag hota hai! Agar aapne Ads Manager me paise daale hain, toh wo WhatsApp API messages ke liye use nahi hote. Aapko WhatsApp Account ke payment method me card ya prepaid wallet link karna hota hai.
+                    </p>
+                  </div>
+
+                  <div className="p-2.5 rounded-xl bg-white/80 dark:bg-neutral-900/60 border border-amber-200 dark:border-amber-900/40">
+                    <p className="font-bold text-neutral-900 dark:text-white">
+                      2. Bank Auto-Debit Decline / Pending Settlement:
+                    </p>
+                    <p className="text-neutral-700 dark:text-neutral-300 mt-0.5">
+                      Meta conversations ka bill auto-debit karta hai. Indian debit/credit card par OTP ya RBI limits ki wajah se agar Meta ka ₹50 ya ₹100 ka auto-cut ek baar bhi fail ho jaye, toh Meta status ko <strong>"Payment Issue"</strong> me daal deta hai. Neeche <em>"Meta Billing Hub"</em> link par jakar <strong>"Pay Now"</strong> click karke pending bill settle karein.
+                    </p>
+                  </div>
+
+                  <div className="p-2.5 rounded-xl bg-white/80 dark:bg-neutral-900/60 border border-amber-200 dark:border-amber-900/40">
+                    <p className="font-bold text-neutral-900 dark:text-white">
+                      3. Bank Clearing Delay (1 se 4 Ghante):
+                    </p>
+                    <p className="text-neutral-700 dark:text-neutral-300 mt-0.5">
+                      Agar aapne abhi payment kiya hai, toh Meta ke servers par update hone aur bank settlement complete hone me aamtaur par 1 se 4 ghante ka samay lag sakta hai.
+                    </p>
+                  </div>
+
+                  <div className="p-2.5 rounded-xl bg-white/80 dark:bg-neutral-900/60 border border-amber-200 dark:border-amber-900/40">
+                    <p className="font-bold text-neutral-900 dark:text-white">
+                      4. App Me Status Sync Karna:
+                    </p>
+                    <p className="text-neutral-700 dark:text-neutral-300 mt-0.5">
+                      Agar aapne Meta WhatsApp Manager me card/wallet link kar diya hai, toh upar <strong>"Mene Pay Kar Diya (Mark Active)"</strong> button dabayein ya <strong>"Sync with Meta"</strong> karein taaki app me status turant green active ho jaye.
+                    </p>
+                  </div>
                 </div>
-                <div className="pt-1">
+
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <a
+                    href={wabaPaymentUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-2xs transition-colors"
+                  >
+                    <span>1. WhatsApp WABA Payment Settings</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
                   <a
                     href={metaBillingHubUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center space-x-2 px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-2xs transition-colors"
+                    className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-2xs transition-colors"
                   >
-                    <span>Check Live Balance on Meta Business Suite</span>
+                    <span>2. Meta Billing Hub (Pay Pending Bill)</span>
                     <ExternalLink className="w-3.5 h-3.5" />
                   </a>
                 </div>
