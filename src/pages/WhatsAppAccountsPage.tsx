@@ -9,17 +9,23 @@ import {
   Trash2,
   ExternalLink,
   ShieldCheck,
+  ShieldAlert,
   Copy,
   Check,
   HelpCircle,
   Zap,
   Key,
+  CreditCard,
+  Wallet,
+  Building2,
+  DollarSign,
 } from 'lucide-react';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
 import { useToast } from '../context/ToastContext.tsx';
 import type { WhatsAppAccount } from '../types/index.ts';
 import { parseMessagingLimitTier } from '../lib/metaLimits.ts';
 import { UpdateAccountTokenModal } from '../components/UpdateAccountTokenModal.tsx';
+import { AccountBillingModal } from '../components/AccountBillingModal.tsx';
 
 interface WhatsAppAccountsPageProps {
   onOpenConnectModal: () => void;
@@ -44,6 +50,7 @@ export const WhatsAppAccountsPage: React.FC<WhatsAppAccountsPageProps> = ({
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
   const [tokenModalAccount, setTokenModalAccount] = useState<WhatsAppAccount | null>(null);
+  const [billingModalAccount, setBillingModalAccount] = useState<WhatsAppAccount | null>(null);
 
   const copyToClipboard = (text: string, isUrl: boolean) => {
     navigator.clipboard.writeText(text);
@@ -294,9 +301,71 @@ export const WhatsAppAccountsPage: React.FC<WhatsAppAccountsPageProps> = ({
                   </div>
                 </div>
 
+                {/* Meta Business Portfolio Verification Status */}
+                {(() => {
+                  const isVerified =
+                    acc.businessVerificationStatus === 'VERIFIED' ||
+                    ['TIER_1K', 'TIER_10K', 'TIER_100K', 'TIER_UNLIMITED'].includes(acc.messagingLimitTier || '');
+                  const verificationUrl = acc.businessPortfolioId
+                    ? `https://business.facebook.com/settings/security?business_id=${encodeURIComponent(acc.businessPortfolioId)}`
+                    : 'https://business.facebook.com/settings/security';
+                  return (
+                    <div
+                      className={`p-3 rounded-xl border flex items-center justify-between gap-3 text-xs ${
+                        isVerified
+                          ? 'bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-200/80 dark:border-emerald-800/50'
+                          : 'bg-amber-50/50 dark:bg-amber-950/20 border-amber-200/80 dark:border-amber-800/50'
+                      }`}
+                    >
+                      <div className="flex items-center space-x-2.5 min-w-0">
+                        {isVerified ? (
+                          <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                        ) : (
+                          <ShieldAlert className="w-4 h-4 text-amber-500 shrink-0" />
+                        )}
+                        <div className="min-w-0">
+                          <div className="flex items-center space-x-1.5 flex-wrap">
+                            <span className="font-semibold text-neutral-800 dark:text-neutral-200 text-[11px]">
+                              Business Portfolio:
+                            </span>
+                            <span
+                              className={`px-1.5 py-0.2 rounded font-bold text-[10px] ${
+                                isVerified
+                                  ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                                  : 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                              }`}
+                            >
+                              {isVerified ? 'VERIFIED (Official)' : 'UNVERIFIED (250 limit)'}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-neutral-500 truncate mt-0.5">
+                            {isVerified
+                              ? 'Meta Business Verification active. Eligible for high-volume broadcast tiers.'
+                              : 'Standard Unverified limit. Complete verification on Meta to unlock 1,000+ daily limit.'}
+                          </p>
+                        </div>
+                      </div>
+
+                      <a
+                        href={verificationUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[11px] font-bold text-amber-700 dark:text-amber-400 hover:underline flex items-center space-x-1 shrink-0"
+                        title="Open Meta Security Center to verify Business Portfolio"
+                      >
+                        <span>{isVerified ? 'Security Center' : 'Verify on Meta'}</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
+                  );
+                })()}
+
                 {/* Daily Messaging Limit & Tier Card */}
                 {(() => {
-                  const limitInfo = parseMessagingLimitTier(acc.messagingLimitTier);
+                  const isVerified =
+                    acc.businessVerificationStatus === 'VERIFIED' ||
+                    ['TIER_1K', 'TIER_2K', 'TIER_10K', 'TIER_100K', 'TIER_UNLIMITED'].includes(acc.messagingLimitTier || '');
+                  const limitInfo = parseMessagingLimitTier(acc.messagingLimitTier, isVerified);
                   return (
                     <div className="p-3.5 rounded-xl bg-neutral-50 dark:bg-neutral-800/60 border border-neutral-200/80 dark:border-neutral-700/60 space-y-2">
                       <div className="flex items-center justify-between">
@@ -321,9 +390,83 @@ export const WhatsAppAccountsPage: React.FC<WhatsAppAccountsPageProps> = ({
                   );
                 })()}
 
+                {/* WhatsApp Messaging Payment & Direct Recharge Link */}
+                {(() => {
+                  const hasPayment =
+                    acc.paymentMethodStatus === 'LINKED' ||
+                    Boolean(acc.primaryFundingId) ||
+                    Boolean(acc.prepaidBalance && acc.prepaidBalance.amount > 0);
+                  const wabaPaymentUrl = `https://business.facebook.com/wa/manage/payment_methods/?waba_id=${encodeURIComponent(
+                    acc.wabaId
+                  )}`;
+                  return (
+                    <div className="p-3.5 rounded-xl bg-gradient-to-r from-emerald-50/60 via-teal-50/40 to-neutral-50/60 dark:from-emerald-950/20 dark:via-teal-950/15 dark:to-neutral-900 border border-emerald-200/80 dark:border-emerald-800/60 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-1.5">
+                          <CreditCard className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                          <span className="text-xs font-bold text-neutral-900 dark:text-white">
+                            Messaging Payment &amp; Balance
+                          </span>
+                        </div>
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                            hasPayment
+                              ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800'
+                              : 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300 border border-rose-300 dark:border-rose-800'
+                          }`}
+                        >
+                          {hasPayment ? 'Payment Linked' : 'No Payment Added'}
+                        </span>
+                      </div>
+
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                        <div>
+                          <p className="text-[11px] text-neutral-600 dark:text-neutral-400 leading-tight">
+                            Currency: <strong>{acc.currency || 'INR'} (₹)</strong> &bull; Meta auto-debits card or wallet per conversation.
+                          </p>
+                          {acc.prepaidBalance && acc.prepaidBalance.amount > 0 ? (
+                            <p className="text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold font-mono mt-0.5">
+                              Tracked Balance: ₹{acc.prepaidBalance.amount.toLocaleString()}
+                            </p>
+                          ) : (
+                            <p className="text-[10px] text-neutral-400 mt-0.5">
+                              Click below to check live ledger or add funds on Meta.
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="flex items-center space-x-2 shrink-0">
+                          {/* Direct Link to Meta Payment Add */}
+                          <a
+                            href={wabaPaymentUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs inline-flex items-center space-x-1.5 shadow-2xs transition-colors"
+                            title="Direct link to add payment method or recharge balance on Meta"
+                          >
+                            <CreditCard className="w-3.5 h-3.5" />
+                            <span>💳 Add Payment / Recharge</span>
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+
+                          {/* Check Balance & Billing Hub Modal */}
+                          <button
+                            type="button"
+                            onClick={() => setBillingModalAccount(acc)}
+                            className="px-2.5 py-1.5 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-white dark:bg-neutral-800 hover:bg-emerald-50 dark:hover:bg-neutral-700 text-emerald-700 dark:text-emerald-300 font-semibold text-xs transition-colors cursor-pointer"
+                            title="Check live balance on Meta, log recharge & view message pricing"
+                          >
+                            <span>Check Balance</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {/* Actions */}
                 <div className="flex items-center justify-between pt-1">
-                  <div className="flex items-center space-x-2">
+                  <div className="flex items-center space-x-2 flex-wrap gap-y-2">
                     {isConn ? (
                       <button
                         onClick={() => handleDisconnect(acc.id)}
@@ -356,6 +499,15 @@ export const WhatsAppAccountsPage: React.FC<WhatsAppAccountsPageProps> = ({
                         }`}
                       />
                       <span>Sync with Meta</span>
+                    </button>
+
+                    <button
+                      onClick={() => setBillingModalAccount(acc)}
+                      className="px-3 py-1.5 rounded-lg border border-emerald-200 dark:border-emerald-800/80 bg-emerald-50/50 dark:bg-emerald-950/30 hover:bg-emerald-100/60 dark:hover:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 text-xs font-medium flex items-center space-x-1.5 transition-colors cursor-pointer"
+                      title="View Business Portfolio Verification, Payment Method & Balance Details"
+                    >
+                      <CreditCard className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                      <span>Billing &amp; Portfolio</span>
                     </button>
 
                     <button
@@ -447,6 +599,13 @@ export const WhatsAppAccountsPage: React.FC<WhatsAppAccountsPageProps> = ({
         onClose={() => setTokenModalAccount(null)}
         account={tokenModalAccount}
         onSuccess={refreshMetaStatus}
+      />
+
+      {/* Meta WhatsApp Billing, Payment Methods & Business Portfolio Modal */}
+      <AccountBillingModal
+        isOpen={Boolean(billingModalAccount)}
+        onClose={() => setBillingModalAccount(null)}
+        account={billingModalAccount}
       />
     </div>
   );

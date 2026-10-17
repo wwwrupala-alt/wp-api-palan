@@ -8,8 +8,13 @@ export interface MessagingLimitInfo {
   upgradeRequirement: string;
 }
 
-export function parseMessagingLimitTier(tier?: string): MessagingLimitInfo {
-  const normalized = (tier || 'TIER_250').toUpperCase().trim();
+export function parseMessagingLimitTier(tier?: string, isVerified?: boolean): MessagingLimitInfo {
+  let normalized = (tier || (isVerified ? 'TIER_2K' : 'TIER_250')).toUpperCase().trim();
+
+  // If business is verified on Meta, its limit is at least 2,000 (Tier 2K)
+  if (isVerified && (normalized === 'TIER_250' || normalized === 'TIER_NOT_SET' || normalized === 'TIER_TRIAL')) {
+    normalized = 'TIER_2K';
+  }
 
   switch (normalized) {
     case 'TIER_50':
@@ -32,17 +37,29 @@ export function parseMessagingLimitTier(tier?: string): MessagingLimitInfo {
         shortLabel: '250 / 24h',
         badgeColor: 'emerald',
         description: 'Standard Unverified Meta Business limit. You can initiate broadcast or direct conversations with up to 250 unique customers every 24 hours.',
-        upgradeRequirement: 'Complete Meta Business Verification or send high-volume campaigns to upgrade to Tier 1K (1,000 / 24h).',
+        upgradeRequirement: 'Complete Meta Business Verification to instantly upgrade to 2K (2,000 Unique Users / 24h).',
       };
     case 'TIER_1K':
       return {
         tier: 'TIER_1K',
         limit: 1000,
-        label: '1,000 Unique Users / 24 hrs',
-        shortLabel: '1,000 / 24h',
+        label: '1,000 Unique Users / 24 hrs (1K)',
+        shortLabel: '1K / 24h',
         badgeColor: 'blue',
         description: 'Tier 1 Verified limit. Send up to 1,000 business-initiated conversations to unique customers in any rolling 24-hour window.',
         upgradeRequirement: 'Send 500+ messages in a 7-day period while maintaining Green quality rating to upgrade to Tier 10K.',
+      };
+    case 'TIER_2K':
+    case 'TIER_2000':
+    case '2K':
+      return {
+        tier: 'TIER_2K',
+        limit: 2000,
+        label: '2,000 Unique Users / 24 hrs (2K)',
+        shortLabel: '2K / 24h',
+        badgeColor: 'blue',
+        description: 'Tier 2K Verified Business limit. You can initiate broadcast or direct conversations with up to 2,000 unique customers every 24 hours.',
+        upgradeRequirement: 'Send high-volume campaigns with Green quality rating to upgrade to Tier 10K (10,000 / 24h).',
       };
     case 'TIER_10K':
       return {

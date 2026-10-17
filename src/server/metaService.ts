@@ -300,7 +300,19 @@ export async function handleEmbeddedSignupExchange(req: Request, res: Response) 
       });
     }
 
-    const accessToken = tokenData.access_token;
+    let accessToken = tokenData.access_token;
+
+    // Exchange short-lived User Token (1-2 hr) for Long-Lived Token (60 days)
+    try {
+      const longLivedUrl = `https://graph.facebook.com/${config.graphVersion}/oauth/access_token?grant_type=fb_exchange_token&client_id=${config.appId}&client_secret=${config.appSecret}&fb_exchange_token=${accessToken}`;
+      const longLivedRes = await fetch(longLivedUrl);
+      const longLivedData = await longLivedRes.json();
+      if (longLivedRes.ok && longLivedData.access_token) {
+        accessToken = longLivedData.access_token;
+      }
+    } catch (llErr) {
+      console.warn('[EmbeddedSignup] Long-lived token exchange notice:', llErr);
+    }
 
     // 2. Fetch granular scopes and WABA information from debug_token or Graph API
     const debugUrl = `https://graph.facebook.com/${config.graphVersion}/debug_token?input_token=${accessToken}&access_token=${config.appId}|${config.appSecret}`;
@@ -572,7 +584,7 @@ export async function handleGetTemplates(req: Request, res: Response) {
   try {
     let wabaId = (req.query.wabaId as string) || (req.body?.wabaId as string) || '';
     const orgId = (req.query.organizationId as string) || (req.headers['x-organization-id'] as string) || '';
-    const config = getMetaConfig();
+    const config = await getEffectiveMetaConfig(orgId);
     let token =
       (req.headers['x-meta-token'] as string) ||
       (req.query.customToken as string);
@@ -633,6 +645,26 @@ export async function handleGetTemplates(req: Request, res: Response) {
         }
       } catch (lookupErr) {
         console.warn('Failed resolving phone ID to WABA ID:', lookupErr);
+      }
+    }
+
+    // Fallback: If custom account token failed (e.g. expired or missing management permission),
+    // retry with Server System User Token if available (BSP Model)
+    if (!templatesRes.ok && config.systemToken && token !== config.systemToken) {
+      try {
+        const sysTemplatesUrl = `https://graph.facebook.com/${config.graphVersion}/${wabaId}/message_templates?limit=100&access_token=${config.systemToken}`;
+        const sysRes = await fetch(sysTemplatesUrl);
+        const sysData = await sysRes.json();
+        if (sysRes.ok && !sysData.error) {
+          templatesRes = sysRes;
+          templatesData = sysData;
+          token = config.systemToken;
+          if (orgId) {
+            updateFirestoreWhatsAppAccount(orgId, wabaId, { customToken: config.systemToken }).catch(() => {});
+          }
+        }
+      } catch (sysErr) {
+        console.warn('System user token fallback notice:', sysErr);
       }
     }
 
@@ -771,9 +803,9 @@ export async function getMetaHeaderHandleForMedia(
 // Handler: Create a Template on Meta Graph API
 export async function handleCreateTemplate(req: Request, res: Response) {
   try {
-    await loadMetaConfigFromDb();
-    const { wabaId, name, category, language, components, customToken } = req.body;
-    const config = getMetaConfig();
+    const { wabaId, name, category, language, components, customToken, organizationId } = req.body;
+    const orgId = organizationId || (req.headers['x-organization-id'] as string) || '';
+    const config = await getEffectiveMetaConfig(orgId);
     const token =
       customToken ||
       (req.headers['x-meta-token'] as string) ||

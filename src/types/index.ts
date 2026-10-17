@@ -116,6 +116,28 @@ export interface WhatsAppAccount {
   displayPhoneNumber: string;
   verifiedName: string;
   businessId?: string;
+  businessPortfolioId?: string;
+  businessPortfolioName?: string;
+  businessVerificationStatus?: 'VERIFIED' | 'NOT_VERIFIED' | 'PENDING' | 'REVOKED' | 'EXPIRED' | string;
+  accountReviewStatus?: 'APPROVED' | 'PENDING' | 'REJECTED' | 'DISABLED' | string;
+  nameStatus?: string;
+  currency?: string;
+  primaryFundingId?: string;
+  paymentMethodStatus?: 'LINKED' | 'NOT_SET' | 'EXEMPT';
+  paymentMethodType?: string;
+  prepaidBalance?: {
+    amount: number;
+    currency: string;
+    lastUpdated?: string;
+    source?: 'meta_synced' | 'manual_logged';
+    rechargeHistory?: Array<{
+      id: string;
+      date: string;
+      amount: number;
+      currency: string;
+      note?: string;
+    }>;
+  };
   customToken?: string;
   pin?: string;
   connectionStatus: 'connected' | 'disconnected' | 'pending';

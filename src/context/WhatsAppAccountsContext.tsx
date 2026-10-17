@@ -3,6 +3,7 @@ import {
   collection,
   onSnapshot,
   doc,
+  getDoc,
   setDoc,
   updateDoc,
   deleteDoc,
@@ -95,6 +96,12 @@ interface WhatsAppAccountsContextType {
   }) => Promise<{ success: boolean; error?: string }>;
   syncAccountWithMeta: (account: WhatsAppAccount) => Promise<{ success: boolean; error?: string }>;
   updateAccountToken: (accountId: string, customToken: string) => Promise<{ success: boolean; error?: string }>;
+  logAccountRecharge: (
+    accountId: string,
+    amount: number,
+    currency: string,
+    note?: string
+  ) => Promise<{ success: boolean; error?: string }>;
   disconnectAccount: (accountId: string) => Promise<void>;
   reconnectAccount: (accountId: string) => Promise<void>;
   deleteAccount: (accountId: string) => Promise<void>;
@@ -406,7 +413,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
                 const accountId = data.phoneNumberId || `wa_${Date.now()}`;
                 const accountDocRef = doc(db, 'organizations', effectiveOrgId, 'whatsappAccounts', accountId);
 
-                const newAccount: Omit<WhatsAppAccount, 'id'> = {
+                const newAccount: Record<string, any> = {
                   wabaId: data.wabaId,
                   phoneNumberId: data.phoneNumberId,
                   displayPhoneNumber: data.displayPhoneNumber,
@@ -414,12 +421,17 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
                   connectionStatus: 'connected',
                   webhookStatus: 'active',
                   qualityRating: data.qualityRating || 'GREEN',
+                  messagingLimitTier: data.messagingLimitTier || data.account?.messagingLimitTier || 'TIER_2K',
+                  messagingLimitLabel: data.messagingLimitLabel || data.account?.messagingLimitLabel || '2,000 Unique Users / 24 hrs (2K)',
+                  businessVerificationStatus: data.businessVerificationStatus || data.account?.businessVerificationStatus || 'VERIFIED',
+                  currency: data.currency || data.account?.currency || 'INR',
+                  paymentMethodStatus: data.paymentMethodStatus || data.account?.paymentMethodStatus || 'LINKED',
                   customToken: data.customToken || undefined,
                   createdAt: new Date().toISOString(),
                   updatedAt: new Date().toISOString(),
                 };
 
-                await setDoc(accountDocRef, newAccount);
+                await setDoc(accountDocRef, newAccount, { merge: true });
                 resolve();
               })
               .catch((err) => {
@@ -591,6 +603,50 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
     }
   };
 
+  const logAccountRecharge = async (
+    accountId: string,
+    amount: number,
+    currency: string,
+    note?: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    const effectiveOrgId = getEffectiveOrgId();
+    if (!effectiveOrgId) return { success: false, error: 'Organization not found' };
+
+    const accountRef = doc(db, 'organizations', effectiveOrgId, 'whatsappAccounts', accountId);
+    try {
+      const snap = await getDoc(accountRef);
+      const existingData = snap.exists() ? snap.data() : {};
+      const existingPrepaid = (existingData as any).prepaidBalance || {};
+      const currentAmount = typeof existingPrepaid.amount === 'number' ? existingPrepaid.amount : 0;
+      const newAmount = currentAmount + amount;
+      const history = existingPrepaid.rechargeHistory || [];
+
+      const newEntry = {
+        id: `rc_${Date.now()}`,
+        date: new Date().toISOString(),
+        amount,
+        currency,
+        note: note || 'Prepaid Recharge via Meta Business Manager',
+      };
+
+      await updateDoc(accountRef, {
+        prepaidBalance: {
+          amount: newAmount,
+          currency,
+          lastUpdated: new Date().toISOString(),
+          source: 'manual_logged',
+          rechargeHistory: [newEntry, ...history].slice(0, 50),
+        },
+        paymentMethodStatus: 'LINKED',
+        updatedAt: new Date().toISOString(),
+      });
+      return { success: true };
+    } catch (err: any) {
+      handleFirestoreError(err, OperationType.UPDATE, `organizations/${effectiveOrgId}/whatsappAccounts/${accountId}`);
+      return { success: false, error: err?.message || 'Failed to update recharge balance' };
+    }
+  };
+
   const disconnectAccount = async (accountId: string) => {
     const effectiveOrgId = getEffectiveOrgId();
     if (!effectiveOrgId) return;
@@ -701,6 +757,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
         registerPhoneNumber,
         syncAccountWithMeta,
         updateAccountToken,
+        logAccountRecharge,
         disconnectAccount,
         reconnectAccount,
         deleteAccount,

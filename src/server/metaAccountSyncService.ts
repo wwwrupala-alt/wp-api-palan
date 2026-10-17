@@ -169,6 +169,14 @@ export async function fetchAndSyncMetaAccount(params: {
     messagingLimitTier?: string;
     messagingLimitLabel?: string;
     maxDailyConversations?: number;
+    businessVerificationStatus?: string;
+    accountReviewStatus?: string;
+    nameStatus?: string;
+    businessPortfolioId?: string;
+    businessPortfolioName?: string;
+    currency?: string;
+    primaryFundingId?: string;
+    paymentMethodStatus?: string;
     connectionStatus: string;
     webhookStatus: string;
   };
@@ -191,6 +199,14 @@ export async function fetchAndSyncMetaAccount(params: {
   let resolvedMessagingLimitTier = 'TIER_250';
   let resolvedThroughput = 'STANDARD';
   let resolvedCodeVerification = 'VERIFIED';
+  let resolvedBusinessVerificationStatus = 'NOT_VERIFIED';
+  let resolvedAccountReviewStatus = 'APPROVED';
+  let resolvedNameStatus = 'APPROVED';
+  let resolvedBusinessPortfolioId = '';
+  let resolvedBusinessPortfolioName = '';
+  let resolvedCurrency = 'INR';
+  let resolvedPrimaryFundingId = '';
+  let resolvedPaymentMethodStatus: 'LINKED' | 'NOT_SET' = 'NOT_SET';
   let tokenValid = false;
 
   // 1. If token is available, query Meta Graph API live
@@ -198,7 +214,7 @@ export async function fetchAndSyncMetaAccount(params: {
     try {
       // Step A: If Phone Number ID is provided, query it directly
       if (resolvedPhoneId) {
-        const phoneUrl = `https://graph.facebook.com/${config.graphVersion}/${resolvedPhoneId}?fields=id,verified_name,display_phone_number,quality_rating,code_verification_status,messaging_limit_tier,throughput,status,whatsapp_business_account&access_token=${token}`;
+        const phoneUrl = `https://graph.facebook.com/${config.graphVersion}/${resolvedPhoneId}?fields=id,verified_name,display_phone_number,quality_rating,code_verification_status,messaging_limit_tier,throughput,status,name_status,whatsapp_business_account&access_token=${token}`;
         const phoneRes = await fetch(phoneUrl);
         const phoneData = await phoneRes.json();
 
@@ -209,6 +225,9 @@ export async function fetchAndSyncMetaAccount(params: {
           resolvedBusinessName = phoneData.verified_name || resolvedBusinessName;
           resolvedQualityRating = (phoneData.quality_rating as 'GREEN' | 'YELLOW' | 'RED') || 'GREEN';
 
+          if (phoneData.name_status) {
+            resolvedNameStatus = String(phoneData.name_status).toUpperCase();
+          }
           if (phoneData.messaging_limit_tier) {
             resolvedMessagingLimitTier = phoneData.messaging_limit_tier;
           }
@@ -225,9 +244,9 @@ export async function fetchAndSyncMetaAccount(params: {
         }
       }
 
-      // Step B: If WABA ID is known, query WABA details for official business name and template namespace
+      // Step B: If WABA ID is known, query WABA details for official business name, verification, and payment funding
       if (resolvedWabaId) {
-        const wabaUrl = `https://graph.facebook.com/${config.graphVersion}/${resolvedWabaId}?fields=id,name,timezone_id,currency,message_template_namespace&access_token=${token}`;
+        const wabaUrl = `https://graph.facebook.com/${config.graphVersion}/${resolvedWabaId}?fields=id,name,timezone_id,currency,message_template_namespace,account_review_status,business_verification_status,owner_business_info,primary_funding_id,purchase_order_number&access_token=${token}`;
         const wabaRes = await fetch(wabaUrl);
         const wabaData = await wabaRes.json();
 
@@ -237,9 +256,37 @@ export async function fetchAndSyncMetaAccount(params: {
             resolvedBusinessName = wabaData.name;
           }
 
+          if (wabaData.currency) {
+            resolvedCurrency = wabaData.currency;
+          }
+          if (wabaData.primary_funding_id) {
+            resolvedPrimaryFundingId = wabaData.primary_funding_id;
+            resolvedPaymentMethodStatus = 'LINKED';
+          }
+          if (wabaData.account_review_status) {
+            resolvedAccountReviewStatus = String(wabaData.account_review_status).toUpperCase();
+          }
+          if (wabaData.business_verification_status) {
+            resolvedBusinessVerificationStatus = String(wabaData.business_verification_status).toUpperCase();
+          }
+          if (wabaData.owner_business_info) {
+            if (wabaData.owner_business_info.id) {
+              resolvedBusinessPortfolioId = wabaData.owner_business_info.id;
+            }
+            if (wabaData.owner_business_info.name) {
+              resolvedBusinessPortfolioName = wabaData.owner_business_info.name;
+            }
+            if (
+              wabaData.owner_business_info.verification_status &&
+              (!resolvedBusinessVerificationStatus || resolvedBusinessVerificationStatus === 'NOT_VERIFIED')
+            ) {
+              resolvedBusinessVerificationStatus = String(wabaData.owner_business_info.verification_status).toUpperCase();
+            }
+          }
+
           // If phone number ID was not set, fetch primary phone from WABA
           if (!resolvedPhoneId) {
-            const phonesUrl = `https://graph.facebook.com/${config.graphVersion}/${resolvedWabaId}/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating&access_token=${token}`;
+            const phonesUrl = `https://graph.facebook.com/${config.graphVersion}/${resolvedWabaId}/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating,name_status&access_token=${token}`;
             const phonesRes = await fetch(phonesUrl);
             const phonesData = await phonesRes.json();
 
@@ -249,9 +296,28 @@ export async function fetchAndSyncMetaAccount(params: {
               resolvedDisplayPhone = primaryPhone.display_phone_number || primaryPhone.id;
               resolvedBusinessName = primaryPhone.verified_name || resolvedBusinessName;
               resolvedQualityRating = (primaryPhone.quality_rating as 'GREEN' | 'YELLOW' | 'RED') || 'GREEN';
+              if (primaryPhone.name_status) {
+                resolvedNameStatus = String(primaryPhone.name_status).toUpperCase();
+              }
             }
           }
         }
+      }
+
+      // If messaging tier is Tier 1K/2K+, Meta requires business verification
+      if (
+        ['TIER_1K', 'TIER_2K', 'TIER_10K', 'TIER_100K', 'TIER_UNLIMITED'].includes(resolvedMessagingLimitTier) &&
+        resolvedBusinessVerificationStatus === 'NOT_VERIFIED'
+      ) {
+        resolvedBusinessVerificationStatus = 'VERIFIED';
+      }
+
+      // If business verification is VERIFIED, messaging tier is 2K (2,000 / 24h)
+      if (
+        resolvedBusinessVerificationStatus === 'VERIFIED' &&
+        (resolvedMessagingLimitTier === 'TIER_250' || resolvedMessagingLimitTier === 'TIER_NOT_SET' || !resolvedMessagingLimitTier)
+      ) {
+        resolvedMessagingLimitTier = 'TIER_2K';
       }
 
       // Step C: Auto-register 6-digit PIN if provided
@@ -301,7 +367,10 @@ export async function fetchAndSyncMetaAccount(params: {
 
   const nowIso = new Date().toISOString();
   const accountDocumentId = resolvedPhoneId;
-  const limitInfo = parseMessagingLimitTier(resolvedMessagingLimitTier);
+  const limitInfo = parseMessagingLimitTier(
+    resolvedMessagingLimitTier,
+    resolvedBusinessVerificationStatus === 'VERIFIED'
+  );
 
   const accountDocData: Record<string, unknown> = {
     id: accountDocumentId,
@@ -315,6 +384,14 @@ export async function fetchAndSyncMetaAccount(params: {
     maxDailyConversations: limitInfo.limit,
     codeVerificationStatus: resolvedCodeVerification,
     throughputLevel: resolvedThroughput,
+    businessVerificationStatus: resolvedBusinessVerificationStatus,
+    accountReviewStatus: resolvedAccountReviewStatus,
+    nameStatus: resolvedNameStatus,
+    businessPortfolioId: resolvedBusinessPortfolioId,
+    businessPortfolioName: resolvedBusinessPortfolioName,
+    currency: resolvedCurrency,
+    primaryFundingId: resolvedPrimaryFundingId,
+    paymentMethodStatus: resolvedPaymentMethodStatus,
     connectionStatus: 'connected',
     webhookStatus: 'active',
     updatedAt: nowIso,
@@ -337,7 +414,7 @@ export async function fetchAndSyncMetaAccount(params: {
   addWebhookLog({
     event: 'WhatsApp Account Synced & Saved to Firestore',
     origin: 'Meta Cloud API Backend Service',
-    details: `Synced WABA: ${resolvedWabaId}, Phone: ${resolvedPhoneId} (${resolvedBusinessName}) [Limit: ${limitInfo.label}] into organizations/${organizationId}/whatsappAccounts/${accountDocumentId}`,
+    details: `Synced WABA: ${resolvedWabaId}, Phone: ${resolvedPhoneId} (${resolvedBusinessName}) [Verification: ${resolvedBusinessVerificationStatus}, Payment: ${resolvedPaymentMethodStatus}] into organizations/${organizationId}/whatsappAccounts/${accountDocumentId}`,
     status: firestoreRes.success ? 'success' : 'warning',
     rawPayload: {
       accountDocData,
@@ -357,6 +434,14 @@ export async function fetchAndSyncMetaAccount(params: {
       messagingLimitTier: limitInfo.tier,
       messagingLimitLabel: limitInfo.label,
       maxDailyConversations: limitInfo.limit,
+      businessVerificationStatus: resolvedBusinessVerificationStatus,
+      accountReviewStatus: resolvedAccountReviewStatus,
+      nameStatus: resolvedNameStatus,
+      businessPortfolioId: resolvedBusinessPortfolioId,
+      businessPortfolioName: resolvedBusinessPortfolioName,
+      currency: resolvedCurrency,
+      primaryFundingId: resolvedPrimaryFundingId,
+      paymentMethodStatus: resolvedPaymentMethodStatus,
       connectionStatus: 'connected',
       webhookStatus: 'active',
     },
