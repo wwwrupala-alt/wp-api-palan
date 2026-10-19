@@ -143,13 +143,25 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
 
   if (!isOpen) return null;
 
+  const effectiveAppId = (
+    organization?.metaAppConfig?.appId ||
+    metaStatus?.appId ||
+    ''
+  ).trim();
+
+  const effectiveConfigId = (
+    organization?.metaAppConfig?.configId ||
+    metaStatus?.configId ||
+    ''
+  ).trim();
+
   // 1. Meta Embedded Signup V4 Launch
   const handleEmbeddedSignup = async () => {
     setError(null);
     setSuccess(null);
 
-    const hasAppId = Boolean(metaStatus?.appId && metaStatus.appId.trim() !== '');
-    const hasConfigId = Boolean(metaStatus?.configId && metaStatus.configId.trim() !== '');
+    const hasAppId = Boolean(effectiveAppId);
+    const hasConfigId = Boolean(effectiveConfigId);
 
     if (isLimitReached) {
       const msg = `Your plan allows ${maxNumbersAllowed} WhatsApp connection${maxNumbersAllowed > 1 ? 's' : ''}. Please upgrade your plan to add another connection.`;
@@ -679,7 +691,7 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
               </div>
 
               {/* Configuration Status Inspection Box */}
-              {Boolean(metaStatus?.appId && metaStatus?.configId) ? (
+              {Boolean(effectiveAppId && effectiveConfigId) ? (
                 <div className="p-3.5 rounded-2xl bg-neutral-50 dark:bg-neutral-800/40 border border-neutral-200 dark:border-neutral-700/60 space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="font-semibold text-xs text-neutral-800 dark:text-neutral-200 flex items-center space-x-1.5">
@@ -694,11 +706,11 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
                   <div className="grid grid-cols-2 gap-2 text-[11px] font-mono bg-white dark:bg-neutral-900/60 p-2.5 rounded-xl border border-neutral-200/60 dark:border-neutral-800">
                     <div>
                       <span className="text-neutral-500 font-sans block text-[10px]">Meta App ID:</span>
-                      <MaskedIdDisplay value={metaStatus?.appId} label="Meta App ID" digitsToShow={1} />
+                      <MaskedIdDisplay value={effectiveAppId} label="Meta App ID" digitsToShow={1} />
                     </div>
                     <div>
                       <span className="text-neutral-500 font-sans block text-[10px]">Facebook Login Config ID:</span>
-                      <MaskedIdDisplay value={metaStatus?.configId} label="Configuration ID" digitsToShow={1} />
+                      <MaskedIdDisplay value={effectiveConfigId} label="Configuration ID" digitsToShow={1} />
                     </div>
                     <div>
                       <span className="text-neutral-500 font-sans block text-[10px]">Session Info Version:</span>
@@ -731,7 +743,7 @@ export const ConnectWhatsAppModal: React.FC<ConnectWhatsAppModalProps> = ({
               <button
                 type="button"
                 onClick={handleEmbeddedSignup}
-                disabled={loading || !Boolean(metaStatus?.appId && metaStatus?.configId)}
+                disabled={loading || !Boolean(effectiveAppId && effectiveConfigId)}
                 className="w-full py-3.5 px-4 rounded-xl bg-[#1877F2] hover:bg-[#166fe5] text-white font-medium flex items-center justify-center space-x-2 transition-all shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer text-sm font-semibold"
               >
                 {loading ? (

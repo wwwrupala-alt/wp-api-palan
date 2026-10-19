@@ -179,7 +179,17 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
       });
       if (res.ok) {
         const data = await res.json();
-        setMetaStatus(data);
+        // If organization in state already has custom metaAppConfig, keep custom values authoritative
+        if (organization?.metaAppConfig?.appId && organization?.metaAppConfig?.configId) {
+          setMetaStatus({
+            ...data,
+            appId: organization.metaAppConfig.appId,
+            configId: organization.metaAppConfig.configId,
+            isCustomTenantApp: true,
+          });
+        } else {
+          setMetaStatus(data);
+        }
       }
     } catch (err) {
       console.warn('Failed to load Meta configuration status:', err);
@@ -187,8 +197,31 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
   };
 
   useEffect(() => {
+    if (organization?.metaAppConfig?.appId && organization?.metaAppConfig?.configId) {
+      setMetaStatus((prev) => ({
+        isConfigured: true,
+        appIdSet: true,
+        appId: organization.metaAppConfig!.appId,
+        configId: organization.metaAppConfig!.configId,
+        appSecretSet: Boolean(organization.metaAppConfig!.appSecret),
+        webhookVerifyTokenSet: true,
+        systemTokenSet: Boolean(organization.metaAppConfig!.systemUserToken || organization.metaAppConfig!.systemToken),
+        webhookUrl: prev?.webhookUrl || `${window.location.origin}/api/meta/webhook`,
+        webhookVerifyToken: organization.metaAppConfig!.verifyToken || prev?.webhookVerifyToken || 'cloudwaba_verify_token_secure',
+        graphVersion: organization.metaAppConfig!.graphVersion || prev?.graphVersion || 'v22.0',
+        isCustomTenantApp: true,
+        organizationId: organization.id,
+      }));
+    }
     fetchMetaStatus();
-  }, [organization?.id, currentUser?.uid]);
+  }, [
+    organization?.id,
+    organization?.metaAppConfig?.appId,
+    organization?.metaAppConfig?.configId,
+    organization?.metaAppConfig?.updatedAt,
+    userProfile?.organizationId,
+    currentUser?.uid,
+  ]);
 
   // Listen to Firestore WhatsApp accounts for this organization
   useEffect(() => {
@@ -235,9 +268,14 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
   // Helper to safely initialize Facebook SDK with valid App ID and version
   const initFacebookSDK = () => {
     if (typeof window === 'undefined' || !window.FB) return;
-    const resolvedAppId = (metaStatus?.appId || (import.meta.env.VITE_META_APP_ID as string) || '').trim();
+    const resolvedAppId = (
+      organization?.metaAppConfig?.appId ||
+      metaStatus?.appId ||
+      (import.meta.env.VITE_META_APP_ID as string) ||
+      ''
+    ).trim();
     if (!resolvedAppId) return; // Do not initialize FB SDK until real Meta App ID is configured
-    const resolvedVersion = metaStatus?.graphVersion || 'v22.0';
+    const resolvedVersion = organization?.metaAppConfig?.graphVersion || metaStatus?.graphVersion || 'v22.0';
     try {
       window.FB.init({
         appId: resolvedAppId,
@@ -269,7 +307,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
     } else {
       initFacebookSDK();
     }
-  }, [metaStatus]);
+  }, [metaStatus, organization?.metaAppConfig?.appId, organization?.metaAppConfig?.configId]);
 
   // Connect WhatsApp via Meta Embedded Signup V4 (Supports Coexistence Mode, Standard Cloud API & WABA Migration)
   const connectViaEmbeddedSignup = async (options?: {
@@ -281,14 +319,24 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
     const effectiveOrgId = getEffectiveOrgId();
     if (!effectiveOrgId) throw new Error('Organization not found. Please re-login.');
 
-    const resolvedAppId = (metaStatus?.appId || (import.meta.env.VITE_META_APP_ID as string) || '').trim();
+    const resolvedAppId = (
+      organization?.metaAppConfig?.appId ||
+      metaStatus?.appId ||
+      (import.meta.env.VITE_META_APP_ID as string) ||
+      ''
+    ).trim();
     if (!resolvedAppId) {
       throw new Error(
         'Meta App ID is not yet configured in Admin panel. Please go to Admin Settings > Meta App Config to save your Meta App ID.'
       );
     }
 
-    const configId = (metaStatus?.configId || (import.meta.env.VITE_META_CONFIG_ID as string) || '').trim();
+    const configId = (
+      organization?.metaAppConfig?.configId ||
+      metaStatus?.configId ||
+      (import.meta.env.VITE_META_CONFIG_ID as string) ||
+      ''
+    ).trim();
     if (!configId) {
       throw new Error(
         'Facebook Login Configuration ID is not configured. Please go to Admin Settings > Meta App Config to save your Configuration ID.'
