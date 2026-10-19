@@ -26,6 +26,8 @@ import {
   Ban,
   Play,
   Workflow,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -409,23 +411,39 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
     });
   }, [scopedCampaigns, searchQuery, statusFilter]);
 
-  // Checkbox handlers
+  // Pagination & Entry Size State (User Request: 10 / 30 / 50 entries, default 10)
+  const [pageSize, setPageSize] = useState<number>(10);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+
+  // Reset page whenever filters or page size change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, statusFilter, accountFilter, pageSize]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredCampaigns.length / pageSize));
+
+  const paginatedCampaigns = useMemo(() => {
+    const startIndex = (currentPage - 1) * pageSize;
+    return filteredCampaigns.slice(startIndex, startIndex + pageSize);
+  }, [filteredCampaigns, currentPage, pageSize]);
+
+  // Checkbox handlers for visible paginated campaigns
   const isAllSelected =
-    filteredCampaigns.length > 0 &&
-    filteredCampaigns.every((c) => selectedCampaignIds.includes(c.id));
+    paginatedCampaigns.length > 0 &&
+    paginatedCampaigns.every((c) => selectedCampaignIds.includes(c.id));
 
   const isSomeSelected =
-    selectedCampaignIds.length > 0 && !isAllSelected;
+    paginatedCampaigns.some((c) => selectedCampaignIds.includes(c.id)) && !isAllSelected;
 
   const handleToggleSelectAll = () => {
     if (isAllSelected) {
-      // Unselect all visible campaigns
+      // Unselect all visible campaigns on this page
       setSelectedCampaignIds((prev) =>
-        prev.filter((id) => !filteredCampaigns.some((c) => c.id === id))
+        prev.filter((id) => !paginatedCampaigns.some((c) => c.id === id))
       );
     } else {
-      // Select all visible campaigns
-      const visibleIds = filteredCampaigns.map((c) => c.id);
+      // Select all visible campaigns on this page
+      const visibleIds = paginatedCampaigns.map((c) => c.id);
       setSelectedCampaignIds((prev) => Array.from(new Set([...prev, ...visibleIds])));
     }
   };
@@ -478,12 +496,12 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
   };
 
   return (
-    <div className="p-4 sm:p-6 space-y-6 max-w-7xl mx-auto animate-fadeIn">
+    <div className="p-3 sm:p-4 space-y-3 max-w-7xl mx-auto animate-fadeIn">
       {/* Mode Switcher: Broadcast Campaigns vs Drip Campaigns */}
-      <div className="flex items-center space-x-1 p-1 rounded-2xl bg-neutral-100 dark:bg-neutral-800/80 w-fit">
+      <div className="flex items-center space-x-1 p-0.5 rounded-xl bg-neutral-100 dark:bg-neutral-800/80 w-fit">
         <button
           type="button"
-          className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white shadow-2xs cursor-default flex items-center space-x-1.5"
+          className="px-3 py-1 rounded-lg text-xs font-bold bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white shadow-2xs cursor-default flex items-center space-x-1.5"
         >
           <Send className="w-3.5 h-3.5 text-emerald-600" />
           <span>Broadcast Campaigns</span>
@@ -492,11 +510,11 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
           <button
             type="button"
             onClick={onNavigateToDrip}
-            className="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white flex items-center space-x-1.5 transition-colors cursor-pointer"
+            className="px-3 py-1 rounded-lg text-xs font-semibold text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white flex items-center space-x-1.5 transition-colors cursor-pointer"
           >
             <Workflow className="w-3.5 h-3.5 text-amber-500" />
-            <span>Drip Campaigns (Automated Sequences)</span>
-            <span className="px-1.5 py-0.2 rounded-md text-[9px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+            <span>Drip Campaigns</span>
+            <span className="px-1 py-0.2 rounded text-[9px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300">
               Pro
             </span>
           </button>
@@ -504,30 +522,30 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
       </div>
 
       {/* Header */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
         <div>
           <div className="flex items-center space-x-2">
-            <h2 className="text-xl font-bold tracking-tight text-neutral-900 dark:text-white">
+            <h2 className="text-base sm:text-lg font-bold tracking-tight text-neutral-900 dark:text-white">
               Broadcast Campaigns
             </h2>
-            <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+            <span className="px-2 py-0.2 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
               Live Preview &amp; Manual Paste
             </span>
           </div>
-          <p className="text-xs sm:text-sm text-neutral-500 dark:text-neutral-400">
-            Send bulk WhatsApp messages with official Meta templates, live WhatsApp bubble preview &amp; Excel number pasting.
+          <p className="text-xs text-neutral-500 dark:text-neutral-400">
+            Send bulk WhatsApp messages with official Meta templates, live WhatsApp bubble preview &amp; Excel pasting.
           </p>
         </div>
 
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center space-x-2 shrink-0">
           {onNavigateToDrip && (
             <button
               onClick={onNavigateToDrip}
-              className="inline-flex items-center space-x-1.5 px-3.5 py-2.5 rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 hover:bg-amber-100 font-bold text-xs sm:text-sm transition-colors cursor-pointer"
+              className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 hover:bg-amber-100 font-bold text-xs transition-colors cursor-pointer"
             >
-              <Workflow className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+              <Workflow className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
               <span>Drip Campaigns</span>
-              <span className="px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-amber-200 dark:bg-amber-900 text-amber-800 dark:text-amber-200">
+              <span className="px-1 py-0.2 rounded-full text-[9px] font-bold bg-amber-200 dark:bg-amber-900 text-amber-800 dark:text-amber-200">
                 Pro
               </span>
             </button>
@@ -536,9 +554,9 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
           {onViewAnalytics && campaigns.length > 0 && (
             <button
               onClick={() => onViewAnalytics(campaigns[0].id)}
-              className="inline-flex items-center space-x-1.5 px-3.5 py-2.5 rounded-xl border border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/60 font-semibold text-xs sm:text-sm transition-colors cursor-pointer"
+              className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/60 font-semibold text-xs transition-colors cursor-pointer"
             >
-              <BarChart3 className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+              <BarChart3 className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
               <span>Live Analytics</span>
             </button>
           )}
@@ -546,105 +564,105 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
           <button
             onClick={() => setIsModalOpen(true)}
             disabled={!activeAccount}
-            className="inline-flex items-center space-x-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-medium text-xs sm:text-sm shadow-xs transition-colors cursor-pointer"
+            className="inline-flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-medium text-xs shadow-2xs transition-colors cursor-pointer"
           >
-            <Plus className="w-4 h-4" />
+            <Plus className="w-3.5 h-3.5" />
             <span>Create Campaign</span>
           </button>
         </div>
       </div>
 
-      {/* Quick KPI Stat Cards */}
+      {/* Quick KPI Stat Cards (Compact View) */}
       {scopedCampaigns.length > 0 && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           <div
             onClick={() => setStatusFilter('all')}
-            className={`p-3.5 rounded-2xl border transition-all cursor-pointer ${
+            className={`px-3 py-2 rounded-xl border transition-all cursor-pointer ${
               statusFilter === 'all'
                 ? 'bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 border-neutral-900 shadow-xs'
                 : 'bg-white dark:bg-neutral-800/80 border-neutral-200 dark:border-neutral-700 hover:border-neutral-300'
             }`}
           >
             <div className="flex items-center justify-between">
-              <span className={`text-[11px] font-semibold uppercase tracking-wider ${statusFilter === 'all' ? 'text-neutral-300 dark:text-neutral-600' : 'text-neutral-500'}`}>
+              <span className={`text-[10px] font-semibold uppercase tracking-wider ${statusFilter === 'all' ? 'text-neutral-300 dark:text-neutral-600' : 'text-neutral-500'}`}>
                 Total Broadcasts
               </span>
-              <Send className="w-3.5 h-3.5 opacity-70" />
+              <Send className="w-3 h-3 opacity-70" />
             </div>
-            <div className="text-xl font-bold font-mono mt-1">
+            <div className="text-lg font-bold font-mono mt-0.5">
               {scopedCampaigns.length}
             </div>
           </div>
 
           <div
             onClick={() => setStatusFilter('scheduled')}
-            className={`p-3.5 rounded-2xl border transition-all cursor-pointer ${
+            className={`px-3 py-2 rounded-xl border transition-all cursor-pointer ${
               statusFilter === 'scheduled'
                 ? 'bg-amber-500 text-white border-amber-500 shadow-xs'
                 : 'bg-amber-50/60 dark:bg-amber-950/20 border-amber-200/80 dark:border-amber-900/50 hover:border-amber-300 text-amber-900 dark:text-amber-100'
             }`}
           >
             <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold uppercase tracking-wider">
+              <span className="text-[10px] font-bold uppercase tracking-wider">
                 ⏰ Scheduled
               </span>
-              <Clock className="w-3.5 h-3.5" />
+              <Clock className="w-3 h-3" />
             </div>
-            <div className="text-xl font-bold font-mono mt-1 flex items-baseline space-x-1.5">
+            <div className="text-lg font-bold font-mono mt-0.5 flex items-baseline space-x-1.5">
               <span>{scopedCampaigns.filter((c) => c.status === 'scheduled').length}</span>
-              <span className="text-[10px] font-normal opacity-80">broadcasts</span>
+              <span className="text-[9px] font-normal opacity-80">broadcasts</span>
             </div>
           </div>
 
           <div
             onClick={() => setStatusFilter('completed')}
-            className={`p-3.5 rounded-2xl border transition-all cursor-pointer ${
+            className={`px-3 py-2 rounded-xl border transition-all cursor-pointer ${
               statusFilter === 'completed'
                 ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
                 : 'bg-emerald-50/60 dark:bg-emerald-950/20 border-emerald-200/80 dark:border-emerald-900/50 hover:border-emerald-300 text-emerald-900 dark:text-emerald-100'
             }`}
           >
             <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold uppercase tracking-wider">
+              <span className="text-[10px] font-bold uppercase tracking-wider">
                 Completed
               </span>
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+              <CheckCircle2 className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
             </div>
-            <div className="text-xl font-bold font-mono mt-1">
+            <div className="text-lg font-bold font-mono mt-0.5">
               {scopedCampaigns.filter((c) => c.status === 'completed').length}
             </div>
           </div>
 
-          <div className="p-3.5 rounded-2xl bg-white dark:bg-neutral-800/80 border border-neutral-200 dark:border-neutral-700">
+          <div className="px-3 py-2 rounded-xl bg-white dark:bg-neutral-800/80 border border-neutral-200 dark:border-neutral-700">
             <div className="flex items-center justify-between">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-neutral-500">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
                 Delivered Msgs
               </span>
-              <Users className="w-3.5 h-3.5 text-purple-500" />
+              <Users className="w-3 h-3 text-purple-500" />
             </div>
-            <div className="text-xl font-bold font-mono mt-1 text-purple-600 dark:text-purple-400">
+            <div className="text-lg font-bold font-mono mt-0.5 text-purple-600 dark:text-purple-400">
               {scopedCampaigns.reduce((acc, c) => acc + (c.stats?.delivered || c.stats?.sent || 0), 0).toLocaleString()}
             </div>
           </div>
         </div>
       )}
 
-      {/* Upcoming Scheduled Broadcast Announcement Banner */}
+      {/* Upcoming Scheduled Broadcast Announcement Banner (Compact) */}
       {nextScheduledCampaign && (
-        <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/15 via-amber-500/10 to-orange-500/15 dark:from-amber-950/40 dark:via-neutral-900 dark:to-orange-950/30 border border-amber-300/80 dark:border-amber-900/60 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 text-xs shadow-xs animate-fadeIn">
-          <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 rounded-2xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
-              <Clock className="w-5 h-5 animate-pulse" />
+        <div className="p-2.5 sm:p-3 rounded-xl bg-gradient-to-r from-amber-500/15 via-amber-500/10 to-orange-500/15 dark:from-amber-950/40 dark:via-neutral-900 dark:to-orange-950/30 border border-amber-300/80 dark:border-amber-900/60 flex flex-col md:flex-row items-start md:items-center justify-between gap-2.5 text-xs shadow-xs animate-fadeIn">
+          <div className="flex items-center space-x-2.5">
+            <div className="w-8 h-8 rounded-lg bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <Clock className="w-4 h-4 animate-pulse" />
             </div>
             <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-bold text-neutral-900 dark:text-white text-sm">
-                  Next Scheduled Broadcast: &ldquo;{nextScheduledCampaign.name}&rdquo;
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="font-bold text-neutral-900 dark:text-white text-xs">
+                  Next Scheduled: &ldquo;{nextScheduledCampaign.name}&rdquo;
                 </span>
                 {nextScheduledCampaign.scheduledAt && (() => {
                   const rel = getRelativeScheduledTime(nextScheduledCampaign.scheduledAt);
                   return rel ? (
-                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                    <span className={`px-1.5 py-0.2 rounded-full text-[9px] font-bold ${
                       rel.isOverdue
                         ? 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
                         : 'bg-amber-200 text-amber-900 dark:bg-amber-900 dark:text-amber-200'
@@ -654,103 +672,99 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
                   ) : null;
                 })()}
               </div>
-              <p className="text-[11px] text-neutral-600 dark:text-neutral-400">
-                Scheduled for <strong>{new Date(nextScheduledCampaign.scheduledAt!).toLocaleString()}</strong> • {nextScheduledCampaign.recipientCount} Recipients • Template: <span className="font-mono">{nextScheduledCampaign.templateName}</span>
+              <p className="text-[10px] text-neutral-600 dark:text-neutral-400">
+                {new Date(nextScheduledCampaign.scheduledAt!).toLocaleString()} • {nextScheduledCampaign.recipientCount} Recipients • Template: <span className="font-mono">{nextScheduledCampaign.templateName}</span>
               </p>
             </div>
           </div>
 
-          <div className="flex items-center space-x-2 self-end md:self-auto shrink-0">
+          <div className="flex items-center space-x-1.5 self-end md:self-auto shrink-0">
             <button
               type="button"
               onClick={() => setSendNowTargetCampaign(nextScheduledCampaign)}
-              className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs flex items-center space-x-1.5 transition-colors cursor-pointer shadow-xs"
+              className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] flex items-center space-x-1 transition-colors cursor-pointer shadow-xs"
             >
-              <Zap className="w-3.5 h-3.5" />
+              <Zap className="w-3 h-3" />
               <span>Send Now</span>
             </button>
             <button
               type="button"
               onClick={() => handleOpenRescheduleModal(nextScheduledCampaign)}
-              className="px-3 py-1.5 rounded-xl border border-amber-300 dark:border-amber-800 bg-white dark:bg-neutral-800 text-amber-900 dark:text-amber-200 font-semibold text-xs hover:bg-amber-50 transition-colors cursor-pointer"
+              className="px-2.5 py-1 rounded-lg border border-amber-300 dark:border-amber-800 bg-white dark:bg-neutral-800 text-amber-900 dark:text-amber-200 font-semibold text-[11px] hover:bg-amber-50 transition-colors cursor-pointer"
             >
-              <Calendar className="w-3.5 h-3.5" />
+              <Calendar className="w-3 h-3" />
               <span>Reschedule</span>
             </button>
             <button
               type="button"
               onClick={() => setCancelScheduleTarget(nextScheduledCampaign)}
-              className="p-1.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-500 hover:text-rose-600 hover:border-rose-300 transition-colors cursor-pointer"
+              className="p-1 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-500 hover:text-rose-600 hover:border-rose-300 transition-colors cursor-pointer"
               title="Cancel scheduled broadcast"
             >
-              <Ban className="w-3.5 h-3.5" />
+              <Ban className="w-3 h-3" />
             </button>
           </div>
         </div>
       )}
 
-      {/* Floating / Sticky Bulk Action Bar (When 1 or more campaigns are selected) */}
+      {/* Floating / Sticky Bulk Action Bar */}
       {selectedCampaignIds.length > 0 && (
-        <div className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 flex flex-wrap items-center justify-between gap-3 text-xs animate-fadeIn shadow-xs">
-          <div className="flex items-center space-x-2.5 text-rose-800 dark:text-rose-300 font-semibold">
-            <CheckSquare className="w-4 h-4 text-rose-600 dark:text-rose-400" />
+        <div className="p-2.5 sm:p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 flex flex-wrap items-center justify-between gap-2.5 text-xs animate-fadeIn shadow-xs">
+          <div className="flex items-center space-x-2 text-rose-800 dark:text-rose-300 font-semibold text-xs">
+            <CheckSquare className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
             <span>
               {selectedCampaignIds.length} campaign{selectedCampaignIds.length > 1 ? 's' : ''} selected
             </span>
-            <span className="text-neutral-400">•</span>
-            <span className="text-[11px] font-normal text-rose-700/80 dark:text-rose-300/80">
-              Multiple select karke ek saath delete karne ke liye taiyar
-            </span>
           </div>
 
-          <div className="flex items-center space-x-2">
+          <div className="flex items-center space-x-1.5">
             <button
               onClick={() => setSelectedCampaignIds([])}
-              className="px-3 py-1.5 rounded-xl border border-rose-200 dark:border-rose-800/80 hover:bg-rose-100 dark:hover:bg-rose-900/50 text-rose-700 dark:text-rose-300 font-medium transition-colors cursor-pointer text-xs"
+              className="px-2.5 py-1 rounded-lg border border-rose-200 dark:border-rose-800/80 hover:bg-rose-100 dark:hover:bg-rose-900/50 text-rose-700 dark:text-rose-300 font-medium transition-colors cursor-pointer text-xs"
             >
-              Clear Selection
+              Clear
             </button>
             <button
               onClick={() => setDeleteModalOpen(true)}
-              className="px-4 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-semibold flex items-center space-x-1.5 transition-colors cursor-pointer shadow-xs text-xs"
+              className="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-semibold flex items-center space-x-1.5 transition-colors cursor-pointer shadow-xs text-xs"
             >
-              <Trash2 className="w-3.5 h-3.5" />
-              <span>Delete Selected ({selectedCampaignIds.length})</span>
+              <Trash2 className="w-3 h-3" />
+              <span>Delete ({selectedCampaignIds.length})</span>
             </button>
           </div>
         </div>
       )}
 
-      {/* Filter and Search Bar */}
+      {/* Filter and Search Bar (Compact) */}
       {campaigns.length > 0 && (
-        <div className="flex flex-col sm:flex-row items-center gap-3">
+        <div className="flex flex-col sm:flex-row items-center gap-2">
           <div className="relative flex-1 w-full">
-            <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400" />
+            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400" />
             <input
               type="text"
               placeholder="Search campaigns by name or template..."
               value={searchQuery || ''}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-4 py-2 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs text-neutral-900 dark:text-white placeholder-neutral-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-500"
+              className="w-full pl-8 pr-3 py-1.5 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs text-neutral-900 dark:text-white placeholder-neutral-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-500"
             />
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery('')}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-neutral-600 cursor-pointer"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-neutral-600 cursor-pointer"
               >
-                <X className="w-3.5 h-3.5" />
+                <X className="w-3 h-3" />
               </button>
             )}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+          <div className="flex flex-wrap items-center gap-1.5 w-full sm:w-auto">
             {accounts.length > 0 && (
               <div className="flex items-center space-x-1.5 w-full sm:w-auto">
                 <Smartphone className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
                 <select
                   value={accountFilter}
                   onChange={(e) => setAccountFilter(e.target.value)}
-                  className="w-full sm:w-auto px-3 py-2 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs text-neutral-800 dark:text-neutral-200 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 font-medium cursor-pointer"
+                  className="w-full sm:w-auto px-2.5 py-1.5 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs text-neutral-800 dark:text-neutral-200 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 font-medium cursor-pointer"
                   title="Filter campaigns by sending WhatsApp number"
                 >
                   {activeAccount && (
@@ -765,7 +779,7 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
                         {acc.displayPhoneNumber} - {acc.verifiedName}
                       </option>
                     ))}
-                  <option value="all">🌐 All WhatsApp Numbers (Combined View) ({campaigns.length})</option>
+                  <option value="all">🌐 All WhatsApp Numbers ({campaigns.length})</option>
                 </select>
               </div>
             )}

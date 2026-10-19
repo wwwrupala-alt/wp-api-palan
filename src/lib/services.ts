@@ -752,10 +752,26 @@ export function subscribeCampaignRecipients(
 }
 
 /**
- * Fetches campaign analytics data from the backend API
+ * Fetches campaign analytics data from the backend API, optionally refetching from Meta Graph API
  */
-export async function fetchCampaignAnalyticsApi(campaignId: string) {
-  const res = await fetch(`/api/campaigns/${encodeURIComponent(campaignId)}/analytics`);
+export async function fetchCampaignAnalyticsApi(
+  campaignId: string,
+  options?: {
+    organizationId?: string;
+    phoneNumberId?: string;
+    refreshMeta?: boolean;
+    reconcile?: boolean;
+  }
+) {
+  const query = new URLSearchParams();
+  if (options?.organizationId) query.set('organizationId', options.organizationId);
+  if (options?.phoneNumberId && options.phoneNumberId !== 'all') query.set('phoneNumberId', options.phoneNumberId);
+  if (options?.refreshMeta) query.set('refreshMeta', 'true');
+  if (options?.reconcile) query.set('reconcile', 'true');
+
+  const qs = query.toString();
+  const url = `/api/campaigns/${encodeURIComponent(campaignId)}/analytics${qs ? `?${qs}` : ''}`;
+  const res = await fetch(url);
   return parseJsonResponse(res, 'Failed to fetch campaign analytics.');
 }
 

@@ -203,6 +203,8 @@ export interface CampaignRecipient {
   campaignId: string;
   campaignName?: string;
   organizationId: string;
+  whatsAppAccountId?: string;
+  phoneNumberId?: string;
   customerName: string;
   phoneNumber: string;
   phone?: string;

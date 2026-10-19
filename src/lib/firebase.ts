@@ -6,11 +6,11 @@ import firebaseConfig from '../../firebase-applet-config.json';
 // Initialize Firebase App
 export const app = initializeApp(firebaseConfig);
 
-// Initialize Firestore with auto-detect long polling to prevent [code=unavailable] in web sandboxes
+// Initialize Firestore with forced long polling to prevent GrpcConnection Listen stream RST_STREAM errors in web sandboxes
 export const db = initializeFirestore(
   app,
   {
-    experimentalAutoDetectLongPolling: true,
+    experimentalForceLongPolling: true,
   },
   firebaseConfig.firestoreDatabaseId
 );

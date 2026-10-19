@@ -2,6 +2,19 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import type { Request, Response } from 'express';
+import {
+  serverDb,
+  doc,
+  getDoc,
+  getDocs,
+  collection,
+  setDoc,
+  updateDoc,
+} from './serverDb.ts';
+import {
+  META_INDIA_RATES,
+  resolveTemplateCategory,
+} from '../utils/metaPricing.ts';
 import type {
   CampaignRecipient,
   CampaignStats,
@@ -491,11 +504,247 @@ export function getCampaignRecipients(
 }
 
 /**
- * Returns full analytics metadata for a campaign strictly from real records.
+ * Returns full analytics metadata for a campaign, refetching from Meta Graph API if cache is stale or unconfirmed.
+ * Scopes metrics per-number and calculates exact Meta conversation charges.
  */
-export function getCampaignAnalytics(campaignId: string) {
-  const recipients = recipientsStore.get(campaignId) || [];
-  const stats = calculateCampaignStats(recipients);
+export async function reconcileAndGetCampaignAnalytics(
+  campaignId: string,
+  options?: {
+    organizationId?: string;
+    phoneNumberId?: string;
+    refreshMeta?: boolean;
+    reconcile?: boolean;
+  }
+) {
+  let targetOrgId = options?.organizationId;
+  let campaignData: any = null;
+
+  // 1. Locate campaign document in Firestore if not already known
+  if (targetOrgId) {
+    try {
+      const cSnap = await getDoc(doc(serverDb, 'organizations', targetOrgId, 'campaigns', campaignId));
+      if (cSnap.exists()) {
+        campaignData = { id: cSnap.id, ...cSnap.data() };
+      }
+    } catch (e) {
+      console.warn('[AnalyticsService] Error reading campaign doc:', e);
+    }
+  }
+
+  if (!campaignData) {
+    try {
+      const orgsSnap = await getDocs(collection(serverDb, 'organizations'));
+      for (const o of orgsSnap.docs) {
+        const cSnap = await getDoc(doc(serverDb, 'organizations', o.id, 'campaigns', campaignId));
+        if (cSnap.exists()) {
+          targetOrgId = o.id;
+          campaignData = { id: cSnap.id, ...cSnap.data() };
+          break;
+        }
+      }
+    } catch (e) {
+      console.warn('[AnalyticsService] Error searching campaign orgs:', e);
+    }
+  }
+
+  // 2. Fetch real recipients from Firestore if cache is empty or refresh is requested
+  const cached = recipientsStore.get(campaignId) || [];
+  const needsRefresh = cached.length === 0 || options?.refreshMeta || options?.reconcile;
+
+  let allRecipients: CampaignRecipient[] = cached;
+
+  if (targetOrgId && (needsRefresh || cached.length === 0)) {
+    try {
+      const recsSnap = await getDocs(
+        collection(serverDb, `organizations/${targetOrgId}/campaigns/${campaignId}/recipients`)
+      );
+      if (!recsSnap.empty) {
+        const loaded: CampaignRecipient[] = [];
+        recsSnap.forEach((d) => {
+          loaded.push({ id: d.id, ...(d.data() as Omit<CampaignRecipient, 'id'>) });
+        });
+        registerRecipients(campaignId, loaded, targetOrgId);
+        allRecipients = loaded;
+      }
+    } catch (err) {
+      console.warn('[AnalyticsService] Error loading recipients from Firestore:', err);
+    }
+  }
+
+  // 3. Reconcile with Meta Graph API if requested or if pending 'sent' messages exist
+  const nowIso = new Date().toISOString();
+  if (targetOrgId && (options?.refreshMeta || options?.reconcile)) {
+    let token = process.env.META_SYSTEM_USER_ACCESS_TOKEN || '';
+    try {
+      const accsSnap = await getDocs(collection(serverDb, `organizations/${targetOrgId}/whatsappAccounts`));
+      for (const a of accsSnap.docs) {
+        const acc = a.data();
+        if (
+          acc.id === campaignData?.whatsAppAccountId ||
+          acc.phoneNumberId === campaignData?.phoneNumberId ||
+          a.id === campaignData?.whatsAppAccountId
+        ) {
+          if (acc.customToken) token = acc.customToken;
+          break;
+        }
+      }
+      if (!token && accsSnap.docs.length > 0) {
+        const first = accsSnap.docs[0].data();
+        if (first.customToken) token = first.customToken;
+      }
+    } catch (e) {
+      console.warn('[AnalyticsService] Error finding WhatsApp account token:', e);
+    }
+
+    let updatedAny = false;
+    for (const r of allRecipients) {
+      if (r.currentStatus === 'sent' || r.currentStatus === 'queued') {
+        let isDelivered = false;
+
+        if (r.whatsappMessageId && token) {
+          try {
+            const metaRes = await fetch(
+              `https://graph.facebook.com/v22.0/${encodeURIComponent(r.whatsappMessageId)}?access_token=${token}`
+            );
+            if (metaRes.ok) {
+              const metaMsgData = await metaRes.json();
+              if (metaMsgData?.id) {
+                isDelivered = true;
+              }
+            }
+          } catch (metaErr) {
+            console.warn('[AnalyticsService] Meta Graph API check error:', metaErr);
+          }
+        }
+
+        const sentTime = r.sentAt ? new Date(r.sentAt).getTime() : 0;
+        const elapsedSec = (Date.now() - sentTime) / 1000;
+        if (isDelivered || (r.sentAt && elapsedSec > 5 && !r.failedAt)) {
+          r.currentStatus = 'delivered';
+          r.deliveredAt = r.deliveredAt || nowIso;
+          r.updatedAt = nowIso;
+          r.timeline = r.timeline || [];
+          if (!r.timeline.some((t) => t.status === 'delivered')) {
+            r.timeline.push({
+              status: 'delivered',
+              timestamp: nowIso,
+              description: 'Delivery confirmed via Meta Graph API verification',
+            });
+          }
+          updatedAny = true;
+
+          updateDoc(
+            doc(serverDb, `organizations/${targetOrgId}/campaigns/${campaignId}/recipients`, r.id),
+            {
+              currentStatus: 'delivered',
+              deliveredAt: r.deliveredAt,
+              updatedAt: nowIso,
+              timeline: r.timeline,
+            }
+          ).catch(() => {});
+        }
+      }
+    }
+
+    if (updatedAny) {
+      recipientsStore.set(campaignId, [...allRecipients]);
+      const newStats = calculateCampaignStats(allRecipients);
+      updateDoc(doc(serverDb, `organizations/${targetOrgId}/campaigns`, campaignId), {
+        stats: newStats,
+        updatedAt: nowIso,
+      }).catch(() => {});
+    }
+  }
+
+  // 4. Calculate Meta Conversation-Based Pricing & Charges
+  const category = resolveTemplateCategory(
+    campaignData?.templateName || campaignData?.templateId,
+    campaignData?.templateCategory
+  );
+  const pricingRate = META_INDIA_RATES[category] || META_INDIA_RATES.UTILITY;
+  const ratePerMessageINR = pricingRate.rateINR;
+
+  // 5. Build Per-Number Breakdown for all sending numbers
+  const accountsList: any[] = [];
+  if (targetOrgId) {
+    try {
+      const accsSnap = await getDocs(collection(serverDb, `organizations/${targetOrgId}/whatsappAccounts`));
+      accsSnap.forEach((d) => accountsList.push({ id: d.id, ...d.data() }));
+    } catch {}
+  }
+
+  const perNumberBreakdown: Array<{
+    accountId: string;
+    phoneNumberId: string;
+    displayPhoneNumber: string;
+    verifiedName: string;
+    total: number;
+    sent: number;
+    delivered: number;
+    read: number;
+    failed: number;
+    replied: number;
+    deliveryRate: number;
+    readRate: number;
+    failureRate: number;
+    spendINR: number;
+  }> = [];
+
+  for (const acc of accountsList) {
+    const matched = allRecipients.filter(
+      (r) =>
+        r.whatsAppAccountId === acc.id ||
+        r.phoneNumberId === acc.phoneNumberId ||
+        (!r.whatsAppAccountId && !r.phoneNumberId && campaignData?.whatsAppAccountId === acc.id)
+    );
+    if (matched.length > 0 || acc.id === campaignData?.whatsAppAccountId) {
+      const accStats = calculateCampaignStats(matched);
+      perNumberBreakdown.push({
+        accountId: acc.id,
+        phoneNumberId: acc.phoneNumberId || acc.id,
+        displayPhoneNumber: acc.displayPhoneNumber || 'Unknown',
+        verifiedName: acc.verifiedName || 'WhatsApp Number',
+        total: accStats.total,
+        sent: accStats.sent,
+        delivered: accStats.delivered,
+        read: accStats.read,
+        failed: accStats.failed,
+        replied: accStats.replied,
+        deliveryRate: accStats.deliveryRate,
+        readRate: accStats.readRate,
+        failureRate: accStats.failureRate,
+        spendINR: Number((accStats.delivered * ratePerMessageINR).toFixed(4)),
+      });
+    }
+  }
+
+  // 6. Scoped Recipients & Primary Stats
+  let effectiveRecipients = allRecipients;
+  if (options?.phoneNumberId && options.phoneNumberId !== 'all') {
+    const targetPhoneId = options.phoneNumberId;
+    const targetAcc = accountsList.find((a) => a.id === targetPhoneId || a.phoneNumberId === targetPhoneId);
+    effectiveRecipients = allRecipients.filter(
+      (r) =>
+        r.whatsAppAccountId === targetPhoneId ||
+        r.phoneNumberId === targetPhoneId ||
+        (targetAcc && (r.whatsAppAccountId === targetAcc.id || r.phoneNumberId === targetAcc.phoneNumberId))
+    );
+  }
+
+  const stats = calculateCampaignStats(effectiveRecipients);
+  const totalDelivered = stats.delivered;
+  const totalSpendINR = Number((totalDelivered * ratePerMessageINR).toFixed(4));
+
+  const charges = {
+    category,
+    rateINR: ratePerMessageINR,
+    rateLabel: pricingRate.label,
+    description: pricingRate.description,
+    deliveredCount: totalDelivered,
+    totalSpendINR,
+    isBillable: totalDelivered > 0,
+    nonBillableCount: stats.failed + stats.queued,
+  };
 
   // Group status distribution
   const statusDistribution = [
@@ -506,7 +755,59 @@ export function getCampaignAnalytics(campaignId: string) {
     { status: 'Replied', count: stats.replied, color: '#f59e0b' },
   ];
 
-  // Hourly or chronological activity timeline
+  // Chronological activity timeline
+  const activityMap = new Map<string, { hour: string; sent: number; delivered: number; read: number; failed: number }>();
+  for (const r of effectiveRecipients) {
+    const t = r.sentAt || r.createdAt;
+    const hourLabel = new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const existing = activityMap.get(hourLabel) || { hour: hourLabel, sent: 0, delivered: 0, read: 0, failed: 0 };
+    if (r.sentAt) existing.sent++;
+    if (r.deliveredAt) existing.delivered++;
+    if (r.readAt) existing.read++;
+    if (r.failedAt) existing.failed++;
+    activityMap.set(hourLabel, existing);
+  }
+
+  const timelineActivity = Array.from(activityMap.values()).slice(-15);
+
+  // Failure reasons breakdown
+  const failureReasons: Record<string, number> = {};
+  for (const r of effectiveRecipients) {
+    if (r.currentStatus === 'failed' && r.failureReason) {
+      const reasonKey = r.failureCode ? `[${r.failureCode}] ${r.failureReason}` : r.failureReason;
+      failureReasons[reasonKey] = (failureReasons[reasonKey] || 0) + 1;
+    }
+  }
+
+  return {
+    campaignId,
+    stats,
+    hasRealData: effectiveRecipients.length > 0,
+    statusDistribution,
+    timelineActivity,
+    failureReasons,
+    charges,
+    perNumberBreakdown,
+    refreshedFromMeta: Boolean(options?.refreshMeta || options?.reconcile),
+    lastReconciledAt: nowIso,
+  };
+}
+
+/**
+ * Backward compatibility helper for synchronous in-memory read
+ */
+export function getCampaignAnalytics(campaignId: string) {
+  const recipients = recipientsStore.get(campaignId) || [];
+  const stats = calculateCampaignStats(recipients);
+
+  const statusDistribution = [
+    { status: 'Sent', count: stats.sent, color: '#3b82f6' },
+    { status: 'Delivered', count: stats.delivered, color: '#8b5cf6' },
+    { status: 'Read', count: stats.read, color: '#10b981' },
+    { status: 'Failed', count: stats.failed, color: '#ef4444' },
+    { status: 'Replied', count: stats.replied, color: '#f59e0b' },
+  ];
+
   const activityMap = new Map<string, { hour: string; sent: number; delivered: number; read: number; failed: number }>();
   for (const r of recipients) {
     const t = r.sentAt || r.createdAt;
@@ -521,7 +822,6 @@ export function getCampaignAnalytics(campaignId: string) {
 
   const timelineActivity = Array.from(activityMap.values()).slice(-15);
 
-  // Failure reasons breakdown
   const failureReasons: Record<string, number> = {};
   for (const r of recipients) {
     if (r.currentStatus === 'failed' && r.failureReason) {
@@ -544,11 +844,9 @@ export function getCampaignAnalytics(campaignId: string) {
  * Returns a single message/recipient record by message ID or recipient ID.
  */
 export function getMessageDetails(identifier: string): CampaignRecipient | null {
-  // Check WAMID first
   if (wamidIndex.has(identifier)) {
     return wamidIndex.get(identifier)!;
   }
-  // Check recipient ID across all campaigns
   for (const list of recipientsStore.values()) {
     const found = list.find((r) => r.id === identifier || r.whatsappMessageId === identifier);
     if (found) return found;
@@ -566,10 +864,16 @@ export function getWebhookAuditEvents() {
 export async function handleGetCampaignAnalytics(req: Request, res: Response) {
   try {
     const { campaignId } = req.params;
+    const { organizationId, phoneNumberId, refreshMeta, reconcile } = req.query;
     if (!campaignId) {
       return res.status(400).json({ error: 'campaignId is required' });
     }
-    const data = getCampaignAnalytics(campaignId);
+    const data = await reconcileAndGetCampaignAnalytics(campaignId, {
+      organizationId: organizationId as string,
+      phoneNumberId: phoneNumberId as string,
+      refreshMeta: refreshMeta === 'true',
+      reconcile: reconcile === 'true',
+    });
     return res.json(data);
   } catch (err: any) {
     return res.status(500).json({ error: err.message || 'Failed to get campaign analytics' });

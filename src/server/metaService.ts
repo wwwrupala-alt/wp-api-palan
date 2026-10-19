@@ -400,6 +400,22 @@ export async function handleEmbeddedSignupExchange(req: Request, res: Response) 
       }
     }
 
+    // Always ensure WABA is subscribed to webhooks for this app
+    if (wabaId && accessToken) {
+      try {
+        const subRes = await fetch(`https://graph.facebook.com/${config.graphVersion}/${wabaId}/subscribed_apps`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        });
+        const subData = await subRes.json();
+        console.log(`[EmbeddedSignup] WABA ${wabaId} webhook subscription:`, subData);
+      } catch (subErr) {
+        console.warn('[EmbeddedSignup] WABA webhook subscription notice:', subErr);
+      }
+    }
+
     addWebhookLog({
       event: 'WhatsApp Account Connected',
       origin: 'Embedded Signup',
@@ -2150,7 +2166,7 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
     const phoneNumberId = value.metadata?.phone_number_id;
     if (!value.messages || !Array.isArray(value.messages)) return;
 
-    // 1. Find organization owning this phoneNumberId
+    // 1. Find organization owning this phoneNumberId (prefer actual tenant organizations with active customToken)
     const orgsSnap = await getDocs(collection(serverDb, 'organizations'));
     let targetOrgId = '';
     let matchedAccount: any = null;
@@ -2160,12 +2176,17 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
       for (const aDoc of accsSnap.docs) {
         const a = aDoc.data();
         if (a.phoneNumberId === phoneNumberId || a.id === phoneNumberId) {
-          targetOrgId = orgDoc.id;
-          matchedAccount = { id: aDoc.id, ...a };
-          break;
+          // If we haven't found an account yet, or if current candidate has a customToken, or if previous candidate was org_master_platform
+          if (
+            !matchedAccount ||
+            (!matchedAccount.customToken && a.customToken) ||
+            (orgDoc.id !== 'org_master_platform' && targetOrgId === 'org_master_platform')
+          ) {
+            targetOrgId = orgDoc.id;
+            matchedAccount = { id: aDoc.id, ...a };
+          }
         }
       }
-      if (targetOrgId) break;
     }
 
     if (!targetOrgId && orgsSnap.docs.length > 0) {
@@ -2271,32 +2292,79 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
         console.warn('[Webhook] processIncomingCustomerReply error:', err);
       });
 
-      // CHATBOT ENGINE: Evaluate active bot flows for this incoming message
-      const flowsSnap = await getDocs(collection(serverDb, `organizations/${targetOrgId}/botFlows`));
+      // CHATBOT ENGINE: Collect active bot flows for this incoming message
+      // Inspect targeted organization and other tenant organizations so user flows are never missed
       const activeFlows: any[] = [];
-      flowsSnap.forEach((d) => {
+      const seenFlowIds = new Set<string>();
+
+      const targetFlowsSnap = await getDocs(collection(serverDb, `organizations/${targetOrgId}/botFlows`));
+      targetFlowsSnap.forEach((d) => {
         const f = d.data();
-        if (f.enabled) activeFlows.push({ id: d.id, ...f });
+        if (f.enabled) {
+          activeFlows.push({ id: d.id, ...f, orgId: targetOrgId });
+          seenFlowIds.add(d.id);
+        }
       });
 
+      // Also inspect other tenant orgs to combine all active flows
+      for (const orgDoc of orgsSnap.docs) {
+        if (orgDoc.id === targetOrgId) continue;
+        const otherFlowsSnap = await getDocs(collection(serverDb, `organizations/${orgDoc.id}/botFlows`));
+        otherFlowsSnap.forEach((d) => {
+          const f = d.data();
+          if (f.enabled && !seenFlowIds.has(d.id)) {
+            const flowPhone = f.phoneNumberId?.trim();
+            if (!flowPhone || flowPhone === 'all' || flowPhone === phoneNumberId) {
+              activeFlows.push({ id: d.id, ...f, orgId: orgDoc.id });
+              seenFlowIds.add(d.id);
+            }
+          }
+        });
+      }
+
       const upperText = textBody.trim().toUpperCase();
+      const cleanSearchText = textBody.trim().toLowerCase();
       let matchedFlow: any = null;
       let targetSteps: any[] = [];
 
-      // 1. If incoming message is an interactive button click or list selection
-      if (interactiveButtonId || interactiveListId) {
-        const clickedId = interactiveButtonId || interactiveListId;
-        for (const flow of activeFlows) {
-          for (const step of (flow.steps || [])) {
-            // Check buttons (supports ONE BUTTON TO MULTIPLE NODES!)
-            const btn = (step.buttons || []).find(
-              (b: any) => b.id === clickedId || b.title?.trim().toLowerCase() === textBody.trim().toLowerCase()
-            );
-            if (btn) {
+      // 1. Check if incoming message is an interactive button click or matches any button title in the flow pipeline
+      const clickedId = interactiveButtonId || interactiveListId;
+      for (const flow of activeFlows) {
+        for (const step of (flow.steps || [])) {
+          // Check buttons (match by clicked ID or by button title when user types/clicks the label)
+          const btn = (step.buttons || []).find((b: any) => {
+            if (clickedId && b.id === clickedId) return true;
+            if (cleanSearchText && b.title?.trim().toLowerCase() === cleanSearchText) return true;
+            return false;
+          });
+
+          if (btn) {
+            matchedFlow = flow;
+            const stepIds: string[] = (btn.targetStepIds && btn.targetStepIds.length > 0)
+              ? btn.targetStepIds
+              : (btn.targetStepId ? [btn.targetStepId] : []);
+            if (stepIds.length > 0) {
+              targetSteps = stepIds
+                .map((id: string) => (flow.steps || []).find((s: any) => s.id === id))
+                .filter(Boolean);
+            } else {
+              targetSteps = [];
+            }
+            break;
+          }
+
+          // Check list sections
+          for (const sec of (step.listSections || [])) {
+            const row = (sec.rows || []).find((r: any) => {
+              if (clickedId && r.id === clickedId) return true;
+              if (cleanSearchText && r.title?.trim().toLowerCase() === cleanSearchText) return true;
+              return false;
+            });
+            if (row) {
               matchedFlow = flow;
-              const stepIds: string[] = (btn.targetStepIds && btn.targetStepIds.length > 0)
-                ? btn.targetStepIds
-                : (btn.targetStepId ? [btn.targetStepId] : []);
+              const stepIds: string[] = (row.targetStepIds && row.targetStepIds.length > 0)
+                ? row.targetStepIds
+                : (row.targetStepId ? [row.targetStepId] : []);
               if (stepIds.length > 0) {
                 targetSteps = stepIds
                   .map((id: string) => (flow.steps || []).find((s: any) => s.id === id))
@@ -2306,34 +2374,13 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
               }
               break;
             }
-
-            // Check list sections
-            for (const sec of (step.listSections || [])) {
-              const row = (sec.rows || []).find(
-                (r: any) => r.id === clickedId || r.title?.trim().toLowerCase() === textBody.trim().toLowerCase()
-              );
-              if (row) {
-                matchedFlow = flow;
-                const stepIds: string[] = (row.targetStepIds && row.targetStepIds.length > 0)
-                  ? row.targetStepIds
-                  : (row.targetStepId ? [row.targetStepId] : []);
-                if (stepIds.length > 0) {
-                  targetSteps = stepIds
-                    .map((id: string) => (flow.steps || []).find((s: any) => s.id === id))
-                    .filter(Boolean);
-                } else {
-                  targetSteps = [];
-                }
-                break;
-              }
-            }
-            if (targetSteps.length > 0) break;
           }
           if (targetSteps.length > 0) break;
         }
+        if (targetSteps.length > 0) break;
       }
 
-      // 2. If not an interactive click, match by keyword trigger
+      // 2. If not a button transition, match by keyword trigger
       if (targetSteps.length === 0) {
         for (const flow of activeFlows) {
           const flowPhoneId = flow.phoneNumberId?.trim();
@@ -2348,7 +2395,7 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
             }
           }
 
-          const condition = flow.triggerCondition || 'exact';
+          const condition = flow.triggerCondition || 'contains';
           const flowKeywords = (flow.keywords || []).map((k: string) => k.trim().toUpperCase());
 
           if (condition === 'anything_else') {
@@ -2358,18 +2405,22 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
             break;
           }
 
-          const isMatch = flowKeywords.some((kw: string) => {
-            if (!kw) return false;
-            if (condition === 'exact') return upperText === kw;
-            if (condition === 'contains') return upperText.includes(kw);
-            if (condition === 'begins_with') return upperText.startsWith(kw);
-            if (condition === 'ends_with') return upperText.endsWith(kw);
-            if (condition === 'whole_word') {
-              const regex = new RegExp(`\\b${kw}\\b`, 'i');
-              return regex.test(textBody);
-            }
-            return upperText.includes(kw);
-          });
+          // Match keywords (exact, contains, begins_with, ends_with, or common greetings if empty)
+          const cleanUpperText = upperText.replace(/[!?.,;:\-_#*]/g, '').trim();
+          const isMatch = flowKeywords.length === 0
+            ? ['HI', 'HELLO', 'START', 'MENU', 'HELP'].some(kw => upperText.includes(kw) || cleanUpperText.includes(kw))
+            : flowKeywords.some((kw: string) => {
+                if (!kw) return false;
+                if (condition === 'exact') return upperText === kw || cleanUpperText === kw;
+                if (condition === 'contains') return upperText.includes(kw) || cleanUpperText.includes(kw);
+                if (condition === 'begins_with') return upperText.startsWith(kw) || cleanUpperText.startsWith(kw);
+                if (condition === 'ends_with') return upperText.endsWith(kw) || cleanUpperText.endsWith(kw);
+                if (condition === 'whole_word') {
+                  const regex = new RegExp(`\\b${kw}\\b`, 'i');
+                  return regex.test(textBody) || regex.test(cleanUpperText);
+                }
+                return upperText.includes(kw) || cleanUpperText.includes(kw);
+              });
 
           if (isMatch) {
             matchedFlow = flow;
@@ -2527,7 +2578,11 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
                 status: 'success',
               });
             } else {
-              const errMsg = metaData.error?.message || JSON.stringify(metaData);
+              const errCode = metaData.error?.code;
+              let errMsg = metaData.error?.message || JSON.stringify(metaData);
+              if (errCode === 131030) {
+                errMsg = `Meta Sandbox Restriction (#131030): Recipient +${cleanPhone} is not in Meta Allowed Numbers list. In Development Mode, test numbers can only reply to numbers registered in Meta Developer Portal -> WhatsApp -> API Setup -> "To" phone number list.`;
+              }
               console.warn('[Webhook] Meta API rejected bot reply:', errMsg);
               addWebhookLog({
                 event: 'Chatbot Reply Error',
@@ -2547,6 +2602,15 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
             });
           }
         }
+      }
+
+      if (!matchedFlow || targetSteps.length === 0) {
+        addWebhookLog({
+          event: 'No Chatbot Trigger Matched',
+          origin: `Customer: +${cleanPhone}`,
+          details: `Message "${textBody}" did not match any active chatbot flow (evaluated ${activeFlows.length} flows across organizations).`,
+          status: 'warning',
+        });
       }
     }
   }
@@ -2845,7 +2909,7 @@ export async function processIncomingWhatsAppStatusUpdate(statusObj: any, metada
 }
 
 // Handler: Meta Webhook POST notifications (Incoming messages & statuses)
-export function handleWebhookPost(req: Request, res: Response) {
+export async function handleWebhookPost(req: Request, res: Response) {
   const body = req.body;
   if (!body || typeof body !== 'object') {
     return res.status(200).send('EVENT_RECEIVED');
@@ -2912,9 +2976,11 @@ export function handleWebhookPost(req: Request, res: Response) {
         });
 
         // Process status update into Firestore and Campaign Analytics
-        processIncomingWhatsAppStatusUpdate(statusObj, value.metadata).catch((err) => {
+        try {
+          await processIncomingWhatsAppStatusUpdate(statusObj, value.metadata);
+        } catch (err) {
           console.error('[Webhook] Failed to process status update:', err);
-        });
+        }
       }
     }
 
@@ -2939,9 +3005,17 @@ export function handleWebhookPost(req: Request, res: Response) {
       }
 
       // Process real incoming WhatsApp messages into Firestore Inbox & run Bot
-      processIncomingWhatsAppWebhookPayload(value).catch((err) => {
+      try {
+        await processIncomingWhatsAppWebhookPayload(value);
+      } catch (err: any) {
         console.error('[Webhook] Failed to process incoming WhatsApp messages:', err);
-      });
+        addWebhookLog({
+          event: 'Chatbot Processing Exception',
+          origin: 'Webhook Engine',
+          details: `Error processing incoming message: ${err?.message || String(err)}`,
+          status: 'error',
+        });
+      }
     }
 
     // 3. Handle official Meta Template Status Updates (APPROVED, REJECTED, PAUSED)

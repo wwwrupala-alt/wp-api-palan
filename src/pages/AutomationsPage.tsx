@@ -202,7 +202,7 @@ export const AutomationsPage: React.FC = () => {
   // Filtered flows
   const displayedFlows = botFlows.filter((f) => {
     if (accountFilter === 'all') return true;
-    return f.phoneNumberId === accountFilter || !f.phoneNumberId;
+    return f.phoneNumberId === accountFilter || !f.phoneNumberId || f.phoneNumberId === 'all';
   });
 
   return (

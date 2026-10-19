@@ -140,17 +140,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setOrganization((prev) => prev || fallbackOrg);
 
         const orgRef = doc(db, 'organizations', targetOrgId);
-        onSnapshot(orgRef, (orgSnap) => {
-          if (orgSnap.exists()) {
-            const rawData = orgSnap.data() as Organization;
-            setOrganization({
-              ...rawData,
-              id: orgSnap.id,
-            } as Organization);
-          } else {
-            setOrganization(fallbackOrg);
+        onSnapshot(
+          orgRef,
+          (orgSnap) => {
+            if (orgSnap.exists()) {
+              const rawData = orgSnap.data() as Organization;
+              setOrganization({
+                ...rawData,
+                id: orgSnap.id,
+              } as Organization);
+            } else {
+              setOrganization(fallbackOrg);
+            }
+          },
+          (err) => {
+            console.warn('[AuthContext] Org snapshot listener error:', err);
           }
-        });
+        );
       }
     } catch (error) {
       console.warn('Profile load resilient fallback:', error);
