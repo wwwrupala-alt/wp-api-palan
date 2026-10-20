@@ -70,28 +70,38 @@ const AppContent: React.FC = () => {
 
   // Sync tab with role changes / impersonation updates
   React.useEffect(() => {
-    if (isMasterAdmin && !impersonatedBy) {
-      if (currentTab === 'dashboard') {
-        setCurrentTab('master');
+    setCurrentTab((prevTab) => {
+      if (isMasterAdmin && !impersonatedBy) {
+        if (prevTab === 'dashboard') return 'master';
+      } else if (impersonatedBy || isAdmin) {
+        if (prevTab === 'master') return 'dashboard';
+        if (prevTab === 'admin' && !isMasterAdmin && userProfile?.canAccessSettingsMetaApi === false) return 'dashboard';
+        if (prevTab === 'automations' && !isMasterAdmin && userProfile?.canAccessAutomations === false) return 'dashboard';
+        if (prevTab === 'inbox' && !isMasterAdmin && userProfile?.canAccessInbox === false) return 'dashboard';
+        if (prevTab === 'drip' && !isMasterAdmin && userProfile?.canAccessDripCampaigns === false) return 'dashboard';
+      } else if (isUser) {
+        const userPerms = (userProfile?.subscription?.features as any) || {};
+        const userCanAuto = userProfile?.canAccessAutomations !== false && userPerms.canAutomations !== false;
+        const userCanInbox = userProfile?.canAccessInbox !== false && userPerms.canInbox !== false;
+        const userCanDrip = userProfile?.canAccessDripCampaigns !== false && userPerms.canDripCampaigns !== false;
+        if (['master', 'users', 'admin'].includes(prevTab)) return 'dashboard';
+        if (prevTab === 'automations' && !userCanAuto) return 'dashboard';
+        if (prevTab === 'inbox' && !userCanInbox) return 'dashboard';
+        if (prevTab === 'drip' && !userCanDrip) return 'dashboard';
       }
-    } else if (impersonatedBy || isAdmin) {
-      if (currentTab === 'master') {
-        setCurrentTab('dashboard');
-      } else if (currentTab === 'admin' && !isMasterAdmin && userProfile?.canAccessSettingsMetaApi === false) {
-        setCurrentTab('dashboard');
-      } else if (currentTab === 'automations' && !isMasterAdmin && userProfile?.canAccessAutomations === false) {
-        setCurrentTab('dashboard');
-      }
-    } else if (isUser) {
-      const userPerms = (userProfile?.subscription?.features as any) || {};
-      const userCanAuto = userProfile?.canAccessAutomations !== false && userPerms.canAutomations !== false;
-      if (['master', 'users', 'admin'].includes(currentTab)) {
-        setCurrentTab('dashboard');
-      } else if (currentTab === 'automations' && !userCanAuto) {
-        setCurrentTab('dashboard');
-      }
-    }
-  }, [isMasterAdmin, impersonatedBy, isAdmin, isUser, userProfile?.canAccessSettingsMetaApi, userProfile?.canAccessAutomations, userProfile?.subscription?.features, currentTab]);
+      return prevTab;
+    });
+  }, [
+    isMasterAdmin,
+    impersonatedBy,
+    isAdmin,
+    isUser,
+    userProfile?.canAccessSettingsMetaApi,
+    userProfile?.canAccessAutomations,
+    userProfile?.canAccessInbox,
+    userProfile?.canAccessDripCampaigns,
+    (userProfile?.subscription?.features as any)?.canAutomations,
+  ]);
 
   if (legalDoc) {
     return (
@@ -177,7 +187,7 @@ const AppContent: React.FC = () => {
             />
           )}
           {currentTab === 'users' && (isAdmin || isMasterAdmin) && <TenantUsersPage />}
-          {currentTab === 'inbox' && <InboxPage />}
+          {currentTab === 'inbox' && (isMasterAdmin || userProfile?.canAccessInbox !== false) && <InboxPage />}
           {currentTab === 'whatsapp' && (
             <WhatsAppAccountsPage onOpenConnectModal={() => setIsConnectModalOpen(true)} />
           )}
@@ -192,7 +202,7 @@ const AppContent: React.FC = () => {
               onNavigateToDrip={() => setCurrentTab('drip')}
             />
           )}
-          {currentTab === 'drip' && (
+          {currentTab === 'drip' && (isMasterAdmin || userProfile?.canAccessDripCampaigns !== false) && (
             <DripCampaignsPage
               onNavigateToCampaigns={() => setCurrentTab('campaigns')}
             />

@@ -29,14 +29,17 @@ import {
   RefreshCw,
   Smartphone,
   Bot,
+  Lock,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useToast } from '../context/ToastContext.tsx';
 import type { UserProfile } from '../types/index.ts';
 
 export const TenantUsersPage: React.FC = () => {
-  const { userProfile, organization, impersonateUser } = useAuth();
+  const { userProfile, organization, impersonateUser, isMasterAdmin } = useAuth();
   const toast = useToast();
+
+  const canWatchWorkspaceLive = isMasterAdmin || userProfile?.canWatchWorkspaceLive !== false;
 
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -380,6 +383,13 @@ export const TenantUsersPage: React.FC = () => {
 
   // Handle Watch / Impersonate User
   const handleWatchUser = async (user: UserProfile) => {
+    if (!canWatchWorkspaceLive) {
+      toast.showError(
+        'Permission Denied',
+        'Watch Workspace Live permission is disabled for your admin account by Master Admin.'
+      );
+      return;
+    }
     try {
       await impersonateUser(user.uid);
       toast.showSuccess(
@@ -710,15 +720,25 @@ export const TenantUsersPage: React.FC = () => {
                           </button>
 
                           {/* 2. Login As User (Watch Live) */}
-                          <button
-                            type="button"
-                            onClick={() => handleWatchUser(u)}
-                            title="Login As User (Watch Workspace Live)"
-                            className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-200 hover:bg-emerald-100 font-bold text-[11px] transition-colors cursor-pointer"
-                          >
-                            <LogIn className="w-3.5 h-3.5" />
-                            <span>Watch</span>
-                          </button>
+                          {canWatchWorkspaceLive ? (
+                            <button
+                              type="button"
+                              onClick={() => handleWatchUser(u)}
+                              title="Login As User (Watch Workspace Live)"
+                              className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-200 hover:bg-emerald-100 font-bold text-[11px] transition-colors cursor-pointer"
+                            >
+                              <LogIn className="w-3.5 h-3.5" />
+                              <span>Watch</span>
+                            </button>
+                          ) : (
+                            <span
+                              title="Watch Workspace Live permission is disabled for this admin account by Master Admin"
+                              className="inline-flex items-center space-x-1 px-2 py-1 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-100 dark:bg-neutral-800/60 text-neutral-400 font-medium text-[10px] cursor-not-allowed opacity-75"
+                            >
+                              <Lock className="w-3 h-3 text-neutral-400" />
+                              <span>Locked</span>
+                            </span>
+                          )}
 
                           {/* 3. Edit & Extend Validity */}
                           <button
@@ -1231,18 +1251,28 @@ export const TenantUsersPage: React.FC = () => {
 
               {/* Quick Actions */}
               <div className="pt-2 flex items-center justify-end space-x-2 border-t border-neutral-200 dark:border-neutral-800">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const u = inspectUser;
-                    setInspectUser(null);
-                    handleWatchUser(u);
-                  }}
-                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs cursor-pointer flex items-center space-x-1.5"
-                >
-                  <LogIn className="w-4 h-4" />
-                  <span>Login As User (Watch Live)</span>
-                </button>
+                {canWatchWorkspaceLive ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const u = inspectUser;
+                      setInspectUser(null);
+                      handleWatchUser(u);
+                    }}
+                    className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs cursor-pointer flex items-center space-x-1.5"
+                  >
+                    <LogIn className="w-4 h-4" />
+                    <span>Login As User (Watch Live)</span>
+                  </button>
+                ) : (
+                  <div
+                    title="Watch Workspace Live permission is disabled for your admin account"
+                    className="px-3.5 py-2 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-100 dark:bg-neutral-800 text-neutral-400 text-xs font-semibold flex items-center space-x-1.5 cursor-not-allowed"
+                  >
+                    <Lock className="w-3.5 h-3.5 text-neutral-400" />
+                    <span>Live Portal Watch Disabled</span>
+                  </div>
+                )}
               </div>
             </div>
           </div>

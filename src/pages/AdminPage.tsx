@@ -66,13 +66,19 @@ export const AdminPage: React.FC = () => {
   // Sync inputs whenever organization metadata updates
   useEffect(() => {
     if (organization?.metaAppConfig) {
-      if (organization.metaAppConfig.appId) setMetaAppIdInput(organization.metaAppConfig.appId);
-      if (organization.metaAppConfig.appSecret) setMetaAppSecretInput(organization.metaAppConfig.appSecret);
-      if (organization.metaAppConfig.configId) setMetaConfigIdInput(organization.metaAppConfig.configId);
-      if (organization.metaAppConfig.systemUserToken) setMetaSystemTokenInput(organization.metaAppConfig.systemUserToken);
-      if (organization.metaAppConfig.wabaId) setMetaWabaIdInput(organization.metaAppConfig.wabaId);
+      if (organization.metaAppConfig.appId) setMetaAppIdInput((prev) => prev || organization.metaAppConfig!.appId || '');
+      if (organization.metaAppConfig.appSecret) setMetaAppSecretInput((prev) => prev || organization.metaAppConfig!.appSecret || '');
+      if (organization.metaAppConfig.configId) setMetaConfigIdInput((prev) => prev || organization.metaAppConfig!.configId || '');
+      if (organization.metaAppConfig.systemUserToken) setMetaSystemTokenInput((prev) => prev || organization.metaAppConfig!.systemUserToken || '');
+      if (organization.metaAppConfig.wabaId) setMetaWabaIdInput((prev) => prev || organization.metaAppConfig!.wabaId || '');
     }
-  }, [organization?.metaAppConfig]);
+  }, [
+    organization?.metaAppConfig?.appId,
+    organization?.metaAppConfig?.appSecret,
+    organization?.metaAppConfig?.configId,
+    organization?.metaAppConfig?.systemUserToken,
+    organization?.metaAppConfig?.wabaId,
+  ]);
 
   // Subscribe to global Meta App config
   useEffect(() => {

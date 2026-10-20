@@ -128,16 +128,34 @@ export const Sidebar: React.FC<SidebarProps> = ({
   }
 
   // Base Workspace Tabs
+  navItems.push({ id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard });
+
+  // Check permission for Inbox
+  const canAccessInbox =
+    isMasterAdmin ||
+    (userProfile?.canAccessInbox !== false &&
+      (userProfile?.subscription?.features as any)?.canInbox !== false);
+  if (canAccessInbox) {
+    navItems.push({ id: 'inbox', label: 'Inbox', icon: MessageSquare });
+  }
+
   navItems.push(
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'inbox', label: 'Inbox', icon: MessageSquare },
     { id: 'whatsapp', label: 'WhatsApp Numbers', icon: Smartphone },
     { id: 'contacts', label: 'Contacts', icon: Users },
     { id: 'templates', label: 'Templates', icon: FileText },
-    { id: 'campaigns', label: 'Campaigns', icon: Send },
-    { id: 'drip', label: 'Drip Campaigns', icon: Workflow, badge: 'Pro' },
-    { id: 'analytics', label: 'Campaign Analytics', icon: BarChart3 }
+    { id: 'campaigns', label: 'Campaigns', icon: Send }
   );
+
+  // Check permission for Drip Campaigns
+  const canAccessDrip =
+    isMasterAdmin ||
+    (userProfile?.canAccessDripCampaigns !== false &&
+      (userProfile?.subscription?.features as any)?.canDripCampaigns !== false);
+  if (canAccessDrip) {
+    navItems.push({ id: 'drip', label: 'Drip Campaigns', icon: Workflow, badge: 'Pro' });
+  }
+
+  navItems.push({ id: 'analytics', label: 'Campaign Analytics', icon: BarChart3 });
 
   // Check permission for Automations (Bot & Automations)
   const canAccessAutomations =

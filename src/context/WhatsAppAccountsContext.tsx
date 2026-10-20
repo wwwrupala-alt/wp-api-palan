@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import {
   collection,
   onSnapshot,
@@ -10,7 +10,7 @@ import {
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase.ts';
 import { useAuth } from './AuthContext.tsx';
-import type { WhatsAppAccount, MetaConfigStatus } from '../types/index.ts';
+import type { WhatsAppAccount, MetaConfigStatus, ConnectionHealthReport } from '../types/index.ts';
 
 async function parseJsonResponse<T = any>(res: Response, fallbackError: string): Promise<T> {
   const text = await res.text();
@@ -118,6 +118,31 @@ interface WhatsAppAccountsContextType {
   reconnectAccount: (accountId: string) => Promise<void>;
   deleteAccount: (accountId: string) => Promise<void>;
   refreshMetaStatus: () => Promise<void>;
+  verifyConnectionHealth: (params: {
+    accountId: string;
+    phoneNumberId?: string;
+    wabaId?: string;
+    customToken?: string;
+  }) => Promise<ConnectionHealthReport>;
+  deregisterAccount: (params: {
+    accountId: string;
+    phoneNumberId?: string;
+    customToken?: string;
+    deleteFromWorkspace?: boolean;
+  }) => Promise<{ success: boolean; metaDeregistered?: boolean; metaNotice?: string; error?: string }>;
+  disconnectAndReleaseAccount: (params: {
+    accountId: string;
+    phoneNumberId?: string;
+    wabaId?: string;
+    customToken?: string;
+  }) => Promise<{
+    success: boolean;
+    metaDeregistered?: boolean;
+    tokenRevoked?: boolean;
+    webhookUnsubscribed?: boolean;
+    message?: string;
+    error?: string;
+  }>;
 }
 
 declare global {
@@ -179,49 +204,46 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
       });
       if (res.ok) {
         const data = await res.json();
-        // If organization in state already has custom metaAppConfig, keep custom values authoritative
-        if (organization?.metaAppConfig?.appId && organization?.metaAppConfig?.configId) {
-          setMetaStatus({
-            ...data,
-            appId: organization.metaAppConfig.appId,
-            configId: organization.metaAppConfig.configId,
-            isCustomTenantApp: true,
-          });
-        } else {
-          setMetaStatus(data);
-        }
+        setMetaStatus(data);
       }
     } catch (err) {
       console.warn('Failed to load Meta configuration status:', err);
     }
   };
 
-  useEffect(() => {
+  const computedMetaStatus: MetaConfigStatus | null = useMemo(() => {
     if (organization?.metaAppConfig?.appId && organization?.metaAppConfig?.configId) {
-      setMetaStatus((prev) => ({
+      return {
         isConfigured: true,
         appIdSet: true,
-        appId: organization.metaAppConfig!.appId,
-        configId: organization.metaAppConfig!.configId,
-        appSecretSet: Boolean(organization.metaAppConfig!.appSecret),
+        appId: organization.metaAppConfig.appId,
+        configId: organization.metaAppConfig.configId,
+        appSecretSet: Boolean(organization.metaAppConfig.appSecret),
         webhookVerifyTokenSet: true,
-        systemTokenSet: Boolean(organization.metaAppConfig!.systemUserToken || organization.metaAppConfig!.systemToken),
-        webhookUrl: prev?.webhookUrl || `${window.location.origin}/api/meta/webhook`,
-        webhookVerifyToken: organization.metaAppConfig!.verifyToken || prev?.webhookVerifyToken || 'cloudwaba_verify_token_secure',
-        graphVersion: organization.metaAppConfig!.graphVersion || prev?.graphVersion || 'v22.0',
+        systemTokenSet: Boolean(organization.metaAppConfig.systemUserToken || organization.metaAppConfig.systemToken),
+        webhookUrl: metaStatus?.webhookUrl || `${typeof window !== 'undefined' ? window.location.origin : ''}/api/meta/webhook`,
+        webhookVerifyToken: organization.metaAppConfig.verifyToken || metaStatus?.webhookVerifyToken || 'cloudwaba_verify_token_secure',
+        graphVersion: organization.metaAppConfig.graphVersion || metaStatus?.graphVersion || 'v22.0',
         isCustomTenantApp: true,
         organizationId: organization.id,
-      }));
+      };
     }
-    fetchMetaStatus();
+    return metaStatus;
   }, [
     organization?.id,
     organization?.metaAppConfig?.appId,
     organization?.metaAppConfig?.configId,
-    organization?.metaAppConfig?.updatedAt,
-    userProfile?.organizationId,
-    currentUser?.uid,
+    organization?.metaAppConfig?.appSecret,
+    organization?.metaAppConfig?.systemUserToken,
+    organization?.metaAppConfig?.systemToken,
+    organization?.metaAppConfig?.verifyToken,
+    organization?.metaAppConfig?.graphVersion,
+    metaStatus,
   ]);
+
+  useEffect(() => {
+    fetchMetaStatus();
+  }, [organization?.id, currentUser?.uid]);
 
   // Listen to Firestore WhatsApp accounts for this organization
   useEffect(() => {
@@ -249,7 +271,22 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
         setActiveAccount((prev) => {
           if (prev) {
             const found = list.find((a) => a.id === prev.id);
-            if (found) return found;
+            if (found) {
+              if (
+                found.id === prev.id &&
+                found.connectionStatus === prev.connectionStatus &&
+                found.verifiedName === prev.verifiedName &&
+                found.displayPhoneNumber === prev.displayPhoneNumber &&
+                found.wabaId === prev.wabaId &&
+                found.phoneNumberId === prev.phoneNumberId &&
+                found.businessVerificationStatus === prev.businessVerificationStatus &&
+                found.messagingLimitTier === prev.messagingLimitTier &&
+                found.webhookStatus === prev.webhookStatus
+              ) {
+                return prev;
+              }
+              return found;
+            }
           }
           return list.find((a) => a.connectionStatus === 'connected') || list[0] || null;
         });
@@ -263,7 +300,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
     );
 
     return () => unsubscribe();
-  }, [organization?.id, currentUser]);
+  }, [organization?.id, currentUser?.uid]);
 
   // Helper to safely initialize Facebook SDK with valid App ID and version
   const initFacebookSDK = () => {
@@ -307,7 +344,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
     } else {
       initFacebookSDK();
     }
-  }, [metaStatus, organization?.metaAppConfig?.appId, organization?.metaAppConfig?.configId]);
+  }, [computedMetaStatus?.appId, computedMetaStatus?.graphVersion]);
 
   // Connect WhatsApp via Meta Embedded Signup V4 (Supports Coexistence Mode, Standard Cloud API & WABA Migration)
   const connectViaEmbeddedSignup = async (options?: {
@@ -663,6 +700,113 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
     }
   };
 
+  const verifyConnectionHealth = async (params: {
+    accountId: string;
+    phoneNumberId?: string;
+    wabaId?: string;
+    customToken?: string;
+  }): Promise<ConnectionHealthReport> => {
+    const effectiveOrgId = getEffectiveOrgId();
+    try {
+      const res = await fetch('/api/meta/connection-health', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          organizationId: effectiveOrgId,
+          accountId: params.accountId,
+          phoneNumberId: params.phoneNumberId || params.accountId,
+          wabaId: params.wabaId,
+          customToken: params.customToken,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        return {
+          success: false,
+          healthStatus: data.healthStatus || 'ERROR',
+          statusSummary: data.statusSummary || data.error || 'Failed to verify connection health.',
+          checkedAt: new Date().toISOString(),
+          error: data.error,
+        };
+      }
+      return data;
+    } catch (err: any) {
+      return {
+        success: false,
+        healthStatus: 'ERROR',
+        statusSummary: err?.message || 'Network error verifying connection health.',
+        checkedAt: new Date().toISOString(),
+        error: err?.message || 'Network error',
+      };
+    }
+  };
+
+  const deregisterAccount = async (params: {
+    accountId: string;
+    phoneNumberId?: string;
+    customToken?: string;
+    deleteFromWorkspace?: boolean;
+  }): Promise<{ success: boolean; metaDeregistered?: boolean; metaNotice?: string; error?: string }> => {
+    const effectiveOrgId = getEffectiveOrgId();
+    try {
+      const res = await fetch('/api/meta/deregister-phone', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          organizationId: effectiveOrgId,
+          accountId: params.accountId,
+          phoneNumberId: params.phoneNumberId || params.accountId,
+          customToken: params.customToken,
+          deleteFromWorkspace: params.deleteFromWorkspace ?? true,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { success: false, error: data.error || 'Failed to deregister phone number' };
+      }
+      return data;
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Network error deregistering phone number' };
+    }
+  };
+
+  const disconnectAndReleaseAccount = async (params: {
+    accountId: string;
+    phoneNumberId?: string;
+    wabaId?: string;
+    customToken?: string;
+  }): Promise<{
+    success: boolean;
+    metaDeregistered?: boolean;
+    tokenRevoked?: boolean;
+    webhookUnsubscribed?: boolean;
+    message?: string;
+    error?: string;
+  }> => {
+    const effectiveOrgId = getEffectiveOrgId();
+    try {
+      const res = await fetch('/api/meta/disconnect-and-release', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          organizationId: effectiveOrgId,
+          accountId: params.accountId,
+          phoneNumberId: params.phoneNumberId || params.accountId,
+          wabaId: params.wabaId,
+          customToken: params.customToken,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { success: false, error: data.error || 'Failed to disconnect and release account' };
+      }
+      return data;
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Network error disconnecting and releasing account' };
+    }
+  };
+
   const logAccountRecharge = async (
     accountId: string,
     amount: number,
@@ -865,7 +1009,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
         accounts,
         activeAccount,
         loading,
-        metaStatus,
+        metaStatus: computedMetaStatus,
         setActiveAccount,
         connectViaEmbeddedSignup,
         checkWabaMigration,
@@ -882,6 +1026,9 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
         reconnectAccount,
         deleteAccount,
         refreshMetaStatus: fetchMetaStatus,
+        verifyConnectionHealth,
+        deregisterAccount,
+        disconnectAndReleaseAccount,
       }}
     >
       {children}

@@ -202,7 +202,7 @@ export const CreateDripCampaignModal: React.FC<CreateDripCampaignModalProps> = (
         },
       ]);
     }
-  }, [isOpen, campaignToEdit, activeAccount?.phoneNumberId, accounts]);
+  }, [isOpen, campaignToEdit?.id, activeAccount?.phoneNumberId]);
 
   // Add Step
   const handleAddStep = () => {

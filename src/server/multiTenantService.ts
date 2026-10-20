@@ -684,6 +684,9 @@ export async function handleCreateMasterAdmin(req: Request, res: Response): Prom
       maxUsers = 10,
       canAccessSettingsMetaApi,
       canAccessAutomations,
+      canWatchWorkspaceLive,
+      canAccessInbox,
+      canAccessDripCampaigns,
     } = req.body;
 
     if (!adminName || !password || (!email && !phone)) {
@@ -745,6 +748,9 @@ export async function handleCreateMasterAdmin(req: Request, res: Response): Prom
       displayPassword: password,
       canAccessSettingsMetaApi: canAccessSettingsMetaApi !== false,
       canAccessAutomations: canAccessAutomations !== false,
+      canWatchWorkspaceLive: canWatchWorkspaceLive !== false,
+      canAccessInbox: canAccessInbox !== false,
+      canAccessDripCampaigns: canAccessDripCampaigns !== false,
       subscription: {
         planId: planId || 'plan_pro',
         planName,
@@ -810,6 +816,9 @@ export async function handleUpdateMasterAdmin(req: Request, res: Response): Prom
       newPassword,
       canAccessSettingsMetaApi,
       canAccessAutomations,
+      canWatchWorkspaceLive,
+      canAccessInbox,
+      canAccessDripCampaigns,
     } = req.body;
 
     const userRef = doc(serverDb, 'users', adminId);
@@ -859,6 +868,15 @@ export async function handleUpdateMasterAdmin(req: Request, res: Response): Prom
     }
     if (canAccessAutomations !== undefined) {
       updates.canAccessAutomations = Boolean(canAccessAutomations);
+    }
+    if (canWatchWorkspaceLive !== undefined) {
+      updates.canWatchWorkspaceLive = Boolean(canWatchWorkspaceLive);
+    }
+    if (canAccessInbox !== undefined) {
+      updates.canAccessInbox = Boolean(canAccessInbox);
+    }
+    if (canAccessDripCampaigns !== undefined) {
+      updates.canAccessDripCampaigns = Boolean(canAccessDripCampaigns);
     }
     if (newPassword && String(newPassword).trim().length >= 6) {
       updates.loginPassword = hashPassword(String(newPassword).trim());
@@ -1564,6 +1582,18 @@ export async function handleAdminImpersonate(req: Request, res: Response): Promi
     if (!isMaster && orgId && userData.organizationId !== orgId) {
       res.status(403).json({ error: 'Cannot watch or impersonate a user from another organization.' });
       return;
+    }
+
+    // Verify Watch Workspace Live permission if not master admin
+    if (!isMaster && adminId) {
+      const adminSnap = await getDoc(doc(serverDb, 'users', adminId));
+      if (adminSnap.exists()) {
+        const adminData = adminSnap.data() as UserProfile;
+        if (adminData.canWatchWorkspaceLive === false) {
+          res.status(403).json({ error: 'Watch Workspace Live permission is disabled for your admin account.' });
+          return;
+        }
+      }
     }
 
     let orgData: any = null;

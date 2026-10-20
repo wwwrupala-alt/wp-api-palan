@@ -14,7 +14,10 @@ import {
   handleSendMessage,
   handleSendCampaign,
   handleRegisterPhone,
+  handleDeregisterPhone,
+  handleDisconnectAndRelease,
   handleTestConnection,
+  handleVerifyConnectionHealth,
   handleCheckWabaMigration,
   handleTriggerWabaMigration,
   handleWebhookVerification,
@@ -143,7 +146,10 @@ apiApp.post('/api/meta/exchange-code', handleEmbeddedSignupExchange);
 apiApp.post('/api/meta/verify-account', handleVerifyAccount);
 apiApp.post('/api/meta/sync-account', handleSyncMetaAccount);
 apiApp.post('/api/meta/test-connection', handleTestConnection);
+apiApp.post('/api/meta/connection-health', handleVerifyConnectionHealth);
 apiApp.post('/api/meta/register-phone', handleRegisterPhone);
+apiApp.post('/api/meta/deregister-phone', handleDeregisterPhone);
+apiApp.post('/api/meta/disconnect-and-release', handleDisconnectAndRelease);
 apiApp.post('/api/meta/waba-migration/check', handleCheckWabaMigration);
 apiApp.post('/api/meta/waba-migration/trigger', handleTriggerWabaMigration);
 apiApp.get('/api/meta/templates', handleGetTemplates);

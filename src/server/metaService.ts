@@ -22,6 +22,7 @@ import {
   query,
   where,
   updateDoc,
+  deleteDoc,
 } from './serverDb.ts';
 import {
   registerRecipients,
@@ -434,7 +435,10 @@ export async function handleEmbeddedSignupExchange(req: Request, res: Response) 
         qualityRating: qualityRating,
         connectionStatus: 'connected',
         webhookStatus: 'active',
-        customToken: accessToken,
+        customToken: config.systemToken || accessToken,
+        permanentToken: config.systemToken || undefined,
+        userAccessToken: accessToken,
+        tokenType: config.systemToken ? 'PERMANENT_SYSTEM_USER' : 'LONG_LIVED_USER',
         updatedAt: new Date().toISOString(),
       });
       firestoreUpdated = fsRes.success;
@@ -1699,6 +1703,235 @@ export async function handleRegisterPhone(req: Request, res: Response) {
     return res.status(500).json({ error: message, code: 'SERVER_ERROR' });
   }
 }
+
+// Handler: Deregister and cleanly release phone number from Meta Cloud API (Prepares for Coexistence Mode / Partner Unlink)
+export async function handleDeregisterPhone(req: Request, res: Response) {
+  try {
+    const { phoneNumberId, accountId, organizationId, customToken, deleteFromWorkspace } = req.body;
+    const config = await getEffectiveMetaConfig(organizationId);
+    const token = customToken || (req.headers['x-meta-token'] as string) || config.systemToken;
+
+    const targetPhoneId = phoneNumberId || accountId;
+    if (!targetPhoneId) {
+      return res.status(400).json({ error: 'Phone Number ID is required to release/deregister.', code: 'PHONE_NUMBER_ID_REQUIRED' });
+    }
+
+    let metaDeregistered = false;
+    let metaNotice = '';
+
+    if (token) {
+      try {
+        const deregUrl = `https://graph.facebook.com/${config.graphVersion}/${targetPhoneId}/deregister`;
+        const deregRes = await fetch(deregUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            messaging_product: 'whatsapp',
+          }),
+        });
+
+        const deregData = await deregRes.json();
+        if (deregRes.ok && (deregData.success || deregData.data?.success)) {
+          metaDeregistered = true;
+          metaNotice = 'Meta Cloud API se phone number successfully deregister aur unbind ho gaya.';
+        } else {
+          const errMsg = deregData.error?.message || '';
+          if (errMsg.toLowerCase().includes('not registered') || errMsg.toLowerCase().includes('already')) {
+            metaDeregistered = true;
+            metaNotice = 'Phone number Meta par pehle se hi released/deregistered tha.';
+          } else {
+            console.warn('[Deregister] Meta Graph response notice:', deregData.error);
+            metaNotice = deregData.error?.message || 'Meta deregister returned non-fatal notice.';
+          }
+        }
+      } catch (mErr: any) {
+        console.warn('[Deregister] Meta network error:', mErr);
+        metaNotice = mErr?.message || 'Network warning calling Meta deregister endpoint.';
+      }
+    } else {
+      metaNotice = 'No Meta token provided, skipped Graph API deregister call.';
+    }
+
+    // Clean up or remove from Firestore workspace
+    if (organizationId && (accountId || targetPhoneId)) {
+      try {
+        const docId = accountId || targetPhoneId;
+        const accRef = doc(serverDb, `organizations/${organizationId}/whatsappAccounts`, docId);
+        if (deleteFromWorkspace) {
+          await deleteDoc(accRef);
+        } else {
+          await updateDoc(accRef, {
+            connectionStatus: 'disconnected',
+            webhookStatus: 'unverified',
+            deregisteredAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          });
+        }
+      } catch (dbErr) {
+        console.warn('[Deregister] Firestore account update/delete error:', dbErr);
+      }
+    }
+
+    addWebhookLog({
+      event: 'Phone Deregistered & Released',
+      origin: `Phone ID ${targetPhoneId}`,
+      details: `Number released for Coexistence mode & deregistered from Meta Cloud API. ${metaNotice}`,
+      status: 'success',
+    });
+
+    return res.json({
+      success: true,
+      metaDeregistered,
+      metaNotice,
+      phoneNumberId: targetPhoneId,
+      message: 'Number has been cleanly released and deregistered. You can now use WhatsApp Business app or reconnect in Coexistence Mode without linked device errors.',
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Error releasing/deregistering phone number';
+    return res.status(500).json({ error: message, code: 'SERVER_ERROR' });
+  }
+}
+
+// Handler: Disconnect and Release (Revoke Meta Token, Deregister from Cloud API, Unsubscribe Webhooks, Update Firestore status to disconnected, clear configuration state)
+export async function handleDisconnectAndRelease(req: Request, res: Response) {
+  try {
+    const { accountId, phoneNumberId, wabaId, organizationId, customToken } = req.body;
+    const config = await getEffectiveMetaConfig(organizationId);
+    const token = customToken || (req.headers['x-meta-token'] as string) || config.systemToken;
+
+    const targetPhoneId = phoneNumberId || accountId;
+    if (!targetPhoneId) {
+      return res.status(400).json({ error: 'Phone Number ID or Account ID is required.', code: 'ID_REQUIRED' });
+    }
+
+    let metaDeregistered = false;
+    let tokenRevoked = false;
+    let webhookUnsubscribed = false;
+    const actionLogs: string[] = [];
+
+    // 1. Deregister phone number from Meta Cloud API
+    if (token && targetPhoneId) {
+      try {
+        const deregUrl = `https://graph.facebook.com/${config.graphVersion}/${targetPhoneId}/deregister`;
+        const deregRes = await fetch(deregUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ messaging_product: 'whatsapp' }),
+        });
+        const deregJson = await deregRes.json();
+        if (deregRes.ok && (deregJson.success || deregJson.data?.success)) {
+          metaDeregistered = true;
+          actionLogs.push('Deregistered from Meta Cloud API');
+        } else {
+          const msg = deregJson.error?.message || '';
+          if (msg.toLowerCase().includes('not registered') || msg.toLowerCase().includes('already')) {
+            metaDeregistered = true;
+            actionLogs.push('Phone was already deregistered on Meta');
+          } else {
+            actionLogs.push(`Meta deregister notice: ${msg}`);
+          }
+        }
+      } catch (e: any) {
+        actionLogs.push(`Meta deregister network notice: ${e.message}`);
+      }
+    }
+
+    // 2. Unsubscribe Webhook from WABA (clears linked partner webhook state)
+    const targetWabaId = wabaId || (config as any).wabaId;
+    if (token && targetWabaId) {
+      try {
+        const unsubUrl = `https://graph.facebook.com/${config.graphVersion}/${targetWabaId}/subscribed_apps`;
+        const unsubRes = await fetch(unsubUrl, {
+          method: 'DELETE',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        const unsubJson = await unsubRes.json();
+        if (unsubRes.ok && (unsubJson.success || unsubJson.data?.success)) {
+          webhookUnsubscribed = true;
+          actionLogs.push('Unsubscribed WABA webhook apps');
+        } else {
+          actionLogs.push(`Webhook unsubscribe notice: ${unsubJson.error?.message || 'non-fatal'}`);
+        }
+      } catch (e: any) {
+        actionLogs.push(`Webhook unsubscribe network notice: ${e.message}`);
+      }
+    }
+
+    // 3. Revoke Meta Token permissions (if account custom token or temporary token)
+    if (customToken) {
+      try {
+        const revokeUrl = `https://graph.facebook.com/${config.graphVersion}/me/permissions`;
+        const revokeRes = await fetch(revokeUrl, {
+          method: 'DELETE',
+          headers: {
+            Authorization: `Bearer ${customToken}`,
+          },
+        });
+        const revokeJson = await revokeRes.json();
+        if (revokeRes.ok && (revokeJson.success || revokeJson.data?.success)) {
+          tokenRevoked = true;
+          actionLogs.push('Meta token permissions revoked');
+        } else {
+          actionLogs.push(`Token revoke notice: ${revokeJson.error?.message || 'non-fatal'}`);
+        }
+      } catch (e: any) {
+        actionLogs.push(`Token revoke error: ${e.message}`);
+      }
+    }
+
+    // 4. Update Firestore account document: set status to disconnected & clear linked webhook/config state
+    if (organizationId && (accountId || targetPhoneId)) {
+      try {
+        const docId = accountId || targetPhoneId;
+        const accRef = doc(serverDb, `organizations/${organizationId}/whatsappAccounts`, docId);
+        await updateDoc(accRef, {
+          connectionStatus: 'disconnected',
+          webhookStatus: 'unverified',
+          customToken: '',
+          pin: '',
+          tokenHealth: null,
+          tokenRevoked: true,
+          disconnectedAt: new Date().toISOString(),
+          deregisteredAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+        actionLogs.push('Firestore status set to disconnected and configuration state cleared');
+      } catch (dbErr: any) {
+        console.warn('[DisconnectAndRelease] Firestore update error:', dbErr);
+        actionLogs.push(`Firestore update warning: ${dbErr.message}`);
+      }
+    }
+
+    addWebhookLog({
+      event: 'Account Disconnected & Released',
+      origin: `Phone ID ${targetPhoneId}`,
+      details: actionLogs.join(' | '),
+      status: 'success',
+    });
+
+    return res.json({
+      success: true,
+      metaDeregistered,
+      tokenRevoked,
+      webhookUnsubscribed,
+      firestoreStatus: 'disconnected',
+      message: 'Account successfully disconnected and released. Meta token revoked, phone deregistered, and linked webhook state cleared.',
+      actionLogs,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Error disconnecting and releasing account';
+    return res.status(500).json({ error: message, code: 'SERVER_ERROR' });
+  }
+}
+
 
 // Handler: Check Existing WABA and Phone Number Migration Eligibility
 export async function handleCheckWabaMigration(req: Request, res: Response) {
@@ -3301,6 +3534,173 @@ export async function handleUploadMedia(req: Request, res: Response) {
   } catch (err: any) {
     console.error('[UploadMedia] Error saving uploaded file:', err);
     return res.status(500).json({ error: err.message || 'Failed to upload media file.' });
+  }
+}
+
+/**
+ * Handler: Verify WhatsApp Account Connection Health
+ * Inspects access token validity, expiration (permanent vs near expiry vs expired),
+ * checks required WhatsApp messaging permissions, and verifies live phone reachability.
+ */
+export async function handleVerifyConnectionHealth(req: Request, res: Response) {
+  try {
+    const { accountId, phoneNumberId, wabaId, customToken, organizationId } = req.body;
+    const config = await getEffectiveMetaConfig(organizationId);
+    const token = customToken || (req.headers['x-meta-token'] as string) || config.systemToken;
+
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        healthStatus: 'NO_TOKEN',
+        statusSummary: 'No Meta Access Token is configured for this account. Update token to restore connectivity.',
+        error: 'No Meta Access Token is configured for this account.',
+      });
+    }
+
+    // 1. Inspect token via Meta debug_token
+    let tokenData: any = null;
+    let tokenError: string | null = null;
+    try {
+      const debugUrl = `https://graph.facebook.com/${config.graphVersion}/debug_token?input_token=${token}&access_token=${token}`;
+      const debugRes = await fetch(debugUrl);
+      const debugJson = await debugRes.json();
+      if (debugRes.ok && debugJson.data) {
+        tokenData = debugJson.data;
+      } else {
+        tokenError = debugJson.error?.message || 'Meta token inspection failed.';
+      }
+    } catch (err: any) {
+      tokenError = err?.message || 'Network error connecting to Meta Graph API.';
+    }
+
+    // 2. Evaluate Expiration
+    const isValid = Boolean(tokenData?.is_valid);
+    const expiresAt = tokenData ? Number(tokenData.expires_at) : null;
+    const isPermanent = isValid && expiresAt === 0;
+    const nowSec = Math.floor(Date.now() / 1000);
+    const expiresInSeconds = expiresAt && expiresAt > 0 ? expiresAt - nowSec : null;
+    const isExpired = !isValid || (expiresInSeconds !== null && expiresInSeconds <= 0);
+    const isNearExpiry = expiresInSeconds !== null && expiresInSeconds > 0 && expiresInSeconds < (7 * 86400); // under 7 days
+    const expiresInDays = expiresInSeconds ? Number((expiresInSeconds / 86400).toFixed(1)) : null;
+    const expiresInHours = expiresInSeconds ? Math.floor(expiresInSeconds / 3600) : null;
+
+    // 3. Evaluate Scopes & Permissions
+    const grantedScopes: string[] = tokenData?.scopes || [];
+    const requiredScopes = ['whatsapp_business_messaging', 'whatsapp_business_management'];
+    const missingRequiredScopes = requiredScopes.filter((s) => !grantedScopes.includes(s));
+    const hasSufficientPermissions = isValid && missingRequiredScopes.length === 0;
+
+    // 4. Test Live Phone Reachability
+    let phoneHealth: any = null;
+    const targetPhoneId = phoneNumberId || accountId;
+    if (targetPhoneId) {
+      try {
+        const phoneUrl = `https://graph.facebook.com/${config.graphVersion}/${targetPhoneId}?fields=display_phone_number,verified_name,quality_rating,code_verification_status,status,throughput&access_token=${token}`;
+        const phoneRes = await fetch(phoneUrl);
+        const phoneJson = await phoneRes.json();
+        if (phoneRes.ok && !phoneJson.error) {
+          phoneHealth = {
+            reachable: true,
+            displayPhoneNumber: phoneJson.display_phone_number || targetPhoneId,
+            verifiedName: phoneJson.verified_name || '',
+            qualityRating: phoneJson.quality_rating || 'UNKNOWN',
+            status: phoneJson.status || 'CONNECTED',
+            codeVerificationStatus: phoneJson.code_verification_status || 'NOT_VERIFIED',
+          };
+        } else {
+          phoneHealth = {
+            reachable: false,
+            error: phoneJson.error?.message || 'Could not query phone number on Meta',
+          };
+        }
+      } catch (pErr: any) {
+        phoneHealth = {
+          reachable: false,
+          error: pErr?.message || 'Network error reaching phone on Meta',
+        };
+      }
+    }
+
+    // 5. Determine Overall Health Status
+    let healthStatus: 'HEALTHY' | 'EXPIRING_SOON' | 'EXPIRED' | 'INSUFFICIENT_PERMISSIONS' | 'INVALID_TOKEN' | 'PHONE_ERROR' = 'HEALTHY';
+    let statusSummary = '';
+
+    if (!isValid || isExpired) {
+      healthStatus = 'EXPIRED';
+      statusSummary = tokenError || 'Access token has expired or is invalid (#190 session expired). Re-authorization or new System User Token required.';
+    } else if (!hasSufficientPermissions) {
+      healthStatus = 'INSUFFICIENT_PERMISSIONS';
+      statusSummary = `Token is missing critical permissions: ${missingRequiredScopes.join(', ')}. Broadcasting and chatbot replies will fail.`;
+    } else if (isNearExpiry) {
+      healthStatus = 'EXPIRING_SOON';
+      statusSummary = `Token will expire in ${expiresInDays} days (${expiresInHours} hours). Replace with a Permanent System User Token.`;
+    } else if (phoneHealth && !phoneHealth.reachable) {
+      healthStatus = 'PHONE_ERROR';
+      statusSummary = `Token is valid, but Meta reported phone error: ${phoneHealth.error}`;
+    } else {
+      healthStatus = 'HEALTHY';
+      statusSummary = isPermanent
+        ? 'Permanent System User Token (Never expires) & All required permissions active.'
+        : `Token is valid (Expires in ${expiresInDays} days).`;
+    }
+
+    const healthReport = {
+      success: true,
+      healthStatus,
+      statusSummary,
+      checkedAt: new Date().toISOString(),
+      token: {
+        isValid,
+        tokenType: tokenData?.type || (isPermanent ? 'SYSTEM_USER' : 'USER'),
+        isPermanent,
+        isExpired,
+        isNearExpiry,
+        expiresAt: expiresAt && expiresAt > 0 ? new Date(expiresAt * 1000).toISOString() : null,
+        expiresInSeconds,
+        expiresInDays,
+        expiresInHours,
+        appId: tokenData?.app_id || config.appId,
+        application: tokenData?.application || 'Meta WhatsApp App',
+      },
+      permissions: {
+        hasSufficientPermissions,
+        grantedScopes,
+        missingRequiredScopes,
+        requiredScopes,
+      },
+      phone: phoneHealth,
+    };
+
+    // Update Firestore with latest health check
+    if (organizationId && targetPhoneId) {
+      try {
+        const accRef = doc(serverDb, `organizations/${organizationId}/whatsappAccounts`, targetPhoneId);
+        await updateDoc(accRef, {
+          tokenHealth: {
+            healthStatus,
+            isPermanent,
+            isNearExpiry,
+            isExpired,
+            expiresAt: healthReport.token.expiresAt,
+            expiresInDays,
+            missingPermissions: missingRequiredScopes,
+            checkedAt: healthReport.checkedAt,
+            appId: tokenData?.app_id,
+            application: tokenData?.application,
+          },
+        });
+      } catch (fsErr) {
+        // non-blocking
+      }
+    }
+
+    return res.json(healthReport);
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      healthStatus: 'ERROR',
+      error: err?.message || 'Failed to verify connection health',
+    });
   }
 }
 

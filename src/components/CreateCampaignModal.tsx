@@ -341,7 +341,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
         setSelectedTemplateId(approvedTemplates[0].id);
         setTemplateVariables({});
       }
-    } else {
+    } else if (selectedTemplateId) {
       setSelectedTemplateId('');
       setTemplateVariables({});
     }

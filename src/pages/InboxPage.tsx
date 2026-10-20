@@ -107,18 +107,16 @@ export const InboxPage: React.FC = () => {
       organization.id,
       (data) => {
         setConversations(data);
-        if (!selectedConv && data.length > 0) {
-          setSelectedConv(data[0]);
-        } else if (selectedConv) {
-          // Keep active conversation selection in sync
-          const updated = data.find((c) => c.id === selectedConv.id);
-          if (updated) setSelectedConv(updated);
-        }
+        setSelectedConv((prev) => {
+          if (!prev) return data[0] || null;
+          const match = data.find((c) => c.id === prev.id);
+          return match || data[0] || null;
+        });
       },
       () => {}
     );
     return () => unsub();
-  }, [organization?.id, selectedConv?.id]);
+  }, [organization?.id]);
 
   // Subscribe to templates
   useEffect(() => {
@@ -303,14 +301,16 @@ export const InboxPage: React.FC = () => {
 
   // Keep selected conversation aligned with filtered conversations
   useEffect(() => {
-    if (filteredConversations.length > 0) {
-      if (!selectedConv || !filteredConversations.some((c) => c.id === selectedConv.id)) {
-        setSelectedConv(filteredConversations[0]);
+    setSelectedConv((prev) => {
+      if (filteredConversations.length > 0) {
+        if (!prev || !filteredConversations.some((c) => c.id === prev.id)) {
+          return filteredConversations[0];
+        }
+        return prev;
       }
-    } else {
-      setSelectedConv(null);
-    }
-  }, [filteredConversations, selectedConv]);
+      return null;
+    });
+  }, [filteredConversations]);
 
   return (
     <div className="h-[calc(100vh-4rem)] flex flex-col md:flex-row overflow-hidden bg-white dark:bg-neutral-900 border-t border-neutral-200 dark:border-neutral-800 animate-fadeIn">

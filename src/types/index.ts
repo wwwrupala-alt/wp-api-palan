@@ -70,6 +70,8 @@ export interface OrganizationMetaConfig {
   systemToken?: string;
   systemUserToken?: string;
   wabaId?: string;
+  graphVersion?: string;
+  updatedAt?: string;
 }
 
 export interface UserProfile {
@@ -85,6 +87,9 @@ export interface UserProfile {
   subscription?: UserSubscription;
   canAccessSettingsMetaApi?: boolean;
   canAccessAutomations?: boolean;
+  canWatchWorkspaceLive?: boolean;
+  canAccessInbox?: boolean;
+  canAccessDripCampaigns?: boolean;
   organizationId: string;
   createdAt: string;
   updatedAt: string;
@@ -147,10 +152,57 @@ export interface WhatsAppAccount {
   messagingLimitTier?: 'TIER_50' | 'TIER_250' | 'TIER_1K' | 'TIER_10K' | 'TIER_100K' | 'TIER_UNLIMITED' | 'TIER_NOT_SET' | string;
   messagingLimitLabel?: string;
   maxDailyConversations?: number;
-  codeVerificationStatus?: string;
   throughputLevel?: string;
+  tokenHealth?: {
+    healthStatus: 'HEALTHY' | 'EXPIRING_SOON' | 'EXPIRED' | 'INSUFFICIENT_PERMISSIONS' | 'INVALID_TOKEN' | 'PHONE_ERROR' | 'NO_TOKEN' | string;
+    isPermanent?: boolean;
+    isNearExpiry?: boolean;
+    isExpired?: boolean;
+    expiresAt?: string | null;
+    expiresInDays?: number | null;
+    missingPermissions?: string[];
+    checkedAt: string;
+    appId?: string;
+    application?: string;
+  };
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ConnectionHealthReport {
+  success: boolean;
+  healthStatus: 'HEALTHY' | 'EXPIRING_SOON' | 'EXPIRED' | 'INSUFFICIENT_PERMISSIONS' | 'INVALID_TOKEN' | 'PHONE_ERROR' | 'NO_TOKEN' | 'ERROR';
+  statusSummary: string;
+  checkedAt: string;
+  token?: {
+    isValid: boolean;
+    tokenType: string;
+    isPermanent: boolean;
+    isExpired: boolean;
+    isNearExpiry: boolean;
+    expiresAt: string | null;
+    expiresInSeconds: number | null;
+    expiresInDays: number | null;
+    expiresInHours: number | null;
+    appId?: string;
+    application?: string;
+  };
+  permissions?: {
+    hasSufficientPermissions: boolean;
+    grantedScopes: string[];
+    missingRequiredScopes: string[];
+    requiredScopes: string[];
+  };
+  phone?: {
+    reachable: boolean;
+    displayPhoneNumber?: string;
+    verifiedName?: string;
+    qualityRating?: string;
+    status?: string;
+    codeVerificationStatus?: string;
+    error?: string;
+  };
+  error?: string;
 }
 
 export interface Contact {

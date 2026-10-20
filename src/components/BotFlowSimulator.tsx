@@ -116,7 +116,7 @@ export const BotFlowSimulator: React.FC<BotFlowSimulatorProps> = ({
 
   useEffect(() => {
     resetSimulator();
-  }, [flow.id, flow.updatedAt, flow.steps]);
+  }, [flow.id, flow.updatedAt, flow.steps?.length]);
 
   const handleStepTransition = (
     btnOrTarget?: string | { targetStepId?: string; targetStepIds?: string[]; action?: string; url?: string; phoneNumber?: string; title?: string },

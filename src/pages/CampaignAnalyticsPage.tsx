@@ -152,15 +152,17 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
 
   // Auto-select latest campaign when availableCampaigns changes
   useEffect(() => {
-    if (availableCampaigns.length > 0) {
-      if (!selectedCampaignId || !availableCampaigns.some((c) => c.id === selectedCampaignId)) {
-        const match = initialCampaignId ? availableCampaigns.find((c) => c.id === initialCampaignId) : null;
-        setSelectedCampaignId(match ? match.id : availableCampaigns[0].id);
+    setSelectedCampaignId((prev) => {
+      if (availableCampaigns.length > 0) {
+        if (!prev || !availableCampaigns.some((c) => c.id === prev)) {
+          const match = initialCampaignId ? availableCampaigns.find((c) => c.id === initialCampaignId) : null;
+          return match ? match.id : availableCampaigns[0].id;
+        }
+        return prev;
       }
-    } else {
-      setSelectedCampaignId('');
-    }
-  }, [availableCampaigns, selectedCampaignId, initialCampaignId]);
+      return '';
+    });
+  }, [availableCampaigns, initialCampaignId]);
 
   // Selected Campaign Object
   const currentCampaign = useMemo(() => {
