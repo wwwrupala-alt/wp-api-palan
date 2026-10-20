@@ -182,6 +182,10 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
 
   // Fallback-resilient organization resolver
   const getEffectiveOrgId = (): string => {
+    // If the active user profile is role === 'user', their WhatsApp accounts live in their own isolated workspace
+    if (userProfile?.role === 'user') {
+      return userProfile.organizationId || `org_${userProfile.uid}`;
+    }
     return (
       organization?.id ||
       userProfile?.organizationId ||
@@ -243,7 +247,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
 
   useEffect(() => {
     fetchMetaStatus();
-  }, [organization?.id, currentUser?.uid]);
+  }, [organization?.id, currentUser?.uid, userProfile?.organizationId, userProfile?.role]);
 
   // Listen to Firestore WhatsApp accounts for this organization
   useEffect(() => {
@@ -254,6 +258,10 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
       setLoading(false);
       return;
     }
+
+    setAccounts([]);
+    setActiveAccount(null);
+    setLoading(true);
 
     const accountsPath = `organizations/${effectiveOrgId}/whatsappAccounts`;
     const accountsRef = collection(db, accountsPath);
@@ -300,7 +308,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
     );
 
     return () => unsubscribe();
-  }, [organization?.id, currentUser?.uid]);
+  }, [organization?.id, currentUser?.uid, userProfile?.organizationId, userProfile?.role]);
 
   // Helper to safely initialize Facebook SDK with valid App ID and version
   const initFacebookSDK = () => {

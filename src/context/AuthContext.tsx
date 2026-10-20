@@ -470,20 +470,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       role: isMaster ? 'master_admin' : 'admin',
     };
 
+    const userWorkspaceOrg: Organization = data.organization || {
+      id: data.user.organizationId || `org_${data.user.uid}`,
+      name: `${data.user.displayName || 'User'}'s Workspace`,
+      ownerId: data.user.uid,
+      status: 'active',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
     localStorage.setItem(
       'cw_impersonation_session',
       JSON.stringify({
         user: data.user,
-        organization: data.organization || organization,
+        organization: userWorkspaceOrg,
         impersonator: impInfo,
       })
     );
 
     setCurrentUser(data.user);
     setUserProfile(data.user);
-    if (data.organization) {
-      setOrganization(data.organization);
-    }
+    setOrganization(userWorkspaceOrg);
     setImpersonatedBy(impInfo);
   };
 

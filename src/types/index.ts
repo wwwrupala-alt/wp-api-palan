@@ -84,6 +84,7 @@ export interface UserProfile {
   loginPassword?: string;
   displayPassword?: string;
   managedByAdminId?: string;
+  adminOrganizationId?: string;
   subscription?: UserSubscription;
   canAccessSettingsMetaApi?: boolean;
   canAccessAutomations?: boolean;

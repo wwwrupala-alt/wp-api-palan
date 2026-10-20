@@ -229,6 +229,60 @@ export async function ensureDefaultAccounts(): Promise<void> {
         await setDoc(planRef, plan);
       }
     }
+
+    // 4. Ensure each role === 'user' has their own isolated blank workspace organization (not sharing admin's org)
+    try {
+      const usersSnap = await getDocs(collection(serverDb, 'users'));
+      for (const d of usersSnap.docs) {
+        const u = d.data() as UserProfile;
+        if (u.role === 'user') {
+          const userOrgId = `org_${u.uid}`;
+          // If the user's organizationId is still the admin's organizationId
+          if (u.organizationId && u.organizationId !== userOrgId) {
+            const adminOrgId = u.organizationId;
+            // Get admin org for metaAppConfig
+            const adminOrgSnap = await getDoc(doc(serverDb, 'organizations', adminOrgId));
+            const adminOrgData = adminOrgSnap.exists() ? (adminOrgSnap.data() as Organization) : null;
+            
+            // Check if user's own organization exists
+            const userOrgSnap = await getDoc(doc(serverDb, 'organizations', userOrgId));
+            if (!userOrgSnap.exists()) {
+              await setDoc(doc(serverDb, 'organizations', userOrgId), {
+                id: userOrgId,
+                name: `${u.displayName || 'User'}'s Workspace`,
+                ownerId: u.uid,
+                parentOrganizationId: adminOrgId,
+                adminId: u.managedByAdminId || adminOrgData?.ownerId || '',
+                metaAppConfig: adminOrgData?.metaAppConfig || undefined,
+                status: u.subscription?.status || 'active',
+                subscription: {
+                  planName: u.subscription?.planName || 'Team Member',
+                  maxWhatsAppNumbers: u.subscription?.maxWhatsAppNumbers || 1,
+                  maxUsers: 1,
+                  validityDays: u.subscription?.validityDays || 30,
+                  startDate: new Date().toISOString(),
+                  expiresAt: u.subscription?.expiresAt,
+                  status: u.subscription?.status || 'active',
+                  features: u.subscription?.features || {},
+                },
+                createdAt: u.createdAt || new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              });
+            }
+
+            // Update user to point to their own organizationId and keep adminOrganizationId
+            await updateDoc(doc(serverDb, 'users', u.uid), {
+              organizationId: userOrgId,
+              adminOrganizationId: adminOrgId,
+              managedByAdminId: u.managedByAdminId || adminOrgData?.ownerId || '',
+            });
+            console.log(`[MultiTenant] Isolated user ${u.displayName} (${u.uid}) into clean workspace ${userOrgId}`);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[MultiTenant] User isolation sync warning:', e);
+    }
   } catch (err) {
     console.warn('[MultiTenant] Seed accounts warning:', err);
   }
@@ -1266,17 +1320,14 @@ export async function handleUpdateMasterFeatures(req: Request, res: Response): P
 // Get Users under this Admin's Organization ONLY
 export async function handleGetAdminUsers(req: Request, res: Response): Promise<void> {
   try {
-    const orgId = req.headers['x-organization-id'] as string || req.query.orgId as string;
-    if (!orgId) {
-      res.status(400).json({ error: 'Tenant organization ID is required.' });
+    const orgId = (req.headers['x-organization-id'] as string) || (req.query.orgId as string);
+    const adminId = (req.headers['x-admin-id'] as string) || (req.query.adminId as string);
+    if (!orgId && !adminId) {
+      res.status(400).json({ error: 'Tenant organization ID or Admin ID is required.' });
       return;
     }
 
-    const q = query(
-      collection(serverDb, 'users'),
-      where('organizationId', '==', orgId)
-    );
-    const snap = await getDocs(q);
+    const snap = await getDocs(collection(serverDb, 'users'));
     const users: any[] = [];
     snap.forEach((d) => {
       const data = d.data() as any;
@@ -1284,11 +1335,18 @@ export async function handleGetAdminUsers(req: Request, res: Response): Promise<
       if (data.role === 'admin' || data.role === 'owner' || data.role === 'master_admin') {
         return;
       }
-      const { loginPassword, ...u } = data;
-      users.push({
-        ...u,
-        displayPassword: data.displayPassword || '(Password Protected)',
-      });
+      const matchesAdmin =
+        (adminId && data.managedByAdminId === adminId) ||
+        (orgId && data.adminOrganizationId === orgId) ||
+        (orgId && data.organizationId === orgId);
+
+      if (matchesAdmin) {
+        const { loginPassword, ...u } = data;
+        users.push({
+          ...u,
+          displayPassword: data.displayPassword || '(Password Protected)',
+        });
+      }
     });
 
     res.json({ users });
@@ -1325,13 +1383,16 @@ export async function handleCreateAdminUser(req: Request, res: Response): Promis
     if (orgSnap.exists()) {
       const orgData = orgSnap.data() as Organization;
       const maxAllowed = orgData.subscription?.maxUsers || 10;
-      const currentUsersQuery = query(
-        collection(serverDb, 'users'),
-        where('organizationId', '==', orgId),
-        where('role', '==', 'user')
-      );
-      const currentSnap = await getDocs(currentUsersQuery);
-      if (currentSnap.size >= maxAllowed) {
+      const currentUsersSnap = await getDocs(collection(serverDb, 'users'));
+      const tenantUsersCount = currentUsersSnap.docs.filter((d) => {
+        const u = d.data() as any;
+        return (
+          u.role === 'user' &&
+          (u.adminOrganizationId === orgId || u.organizationId === orgId || u.managedByAdminId === adminId)
+        );
+      }).length;
+
+      if (tenantUsersCount >= maxAllowed) {
         res.status(403).json({
           error: `User Limit Reached: Your current plan allows maximum ${maxAllowed} users. Please contact your administrator to upgrade.`,
         });
@@ -1342,19 +1403,50 @@ export async function handleCreateAdminUser(req: Request, res: Response): Promis
     const cleanPhone = String(phone || '').trim().replace(/[^0-9]/g, '');
     const cleanEmail = String(email || '').trim().toLowerCase();
     const userId = `usr_${cleanPhone || Date.now().toString()}`;
+    const userOrgId = `org_${userId}`;
+
+    // Get Admin's organization to inherit metaAppConfig if configured
+    let adminMetaConfig: any = undefined;
+    if (orgSnap.exists()) {
+      adminMetaConfig = (orgSnap.data() as Organization).metaAppConfig;
+    }
 
     const expiresAt =
       validityDays && Number(validityDays) > 0
         ? new Date(Date.now() + Number(validityDays) * 24 * 60 * 60 * 1000).toISOString()
         : undefined;
 
+    // 1. Create a brand-new, isolated organization workspace for this user (EMPTY subcollections = PURA BLANK NEW FRESH)
+    await setDoc(doc(serverDb, 'organizations', userOrgId), {
+      id: userOrgId,
+      name: `${name}'s Workspace`,
+      ownerId: userId,
+      adminId: adminId || '',
+      parentOrganizationId: orgId,
+      status: status || 'active',
+      metaAppConfig: adminMetaConfig || undefined,
+      subscription: {
+        planName: designation || 'Team Member',
+        status: status || 'active',
+        features: permissions || {},
+        expiresAt,
+        validityDays: Number(validityDays) || 30,
+        maxWhatsAppNumbers: Math.max(1, Number(maxWhatsAppNumbers) || 1),
+        maxUsers: 1,
+      },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    // 2. Create the User profile pointing to their own fresh organization
     const userProfile: UserProfile = {
       uid: userId,
       displayName: name,
       email: cleanEmail || `${cleanPhone}@cloudwaba.internal`,
       phone: cleanPhone,
       role: 'user',
-      organizationId: orgId,
+      organizationId: userOrgId, // User's own isolated workspace (BLANK & FRESH)
+      adminOrganizationId: orgId, // Parent admin organization
       managedByAdminId: adminId || '',
       loginPassword: hashPassword(password),
       displayPassword: password,
@@ -1380,8 +1472,8 @@ export async function handleCreateAdminUser(req: Request, res: Response): Promis
       action: 'CREATE_USER',
       targetId: userId,
       targetType: 'user',
-      organizationId: orgId,
-      details: `Admin created team user ${name} (${cleanPhone || cleanEmail}) with validity ${validityDays} days`,
+      organizationId: userOrgId,
+      details: `Admin created team user ${name} (${cleanPhone || cleanEmail}) with fresh 0-number workspace ${userOrgId}`,
     });
 
     const { loginPassword, ...safeUser } = userProfile as any;
@@ -1420,7 +1512,13 @@ export async function handleUpdateAdminUser(req: Request, res: Response): Promis
 
     const currentData = userSnap.data() as UserProfile;
     // Security check: ensure user belongs to this admin's organization
-    if (orgId && currentData.organizationId !== orgId) {
+    const isOwnerAdmin =
+      !orgId ||
+      currentData.organizationId === orgId ||
+      (currentData as any).adminOrganizationId === orgId ||
+      currentData.managedByAdminId === adminId;
+
+    if (!isOwnerAdmin) {
       res.status(403).json({ error: 'Unauthorized to modify user from another organization.' });
       return;
     }
@@ -1467,6 +1565,15 @@ export async function handleUpdateAdminUser(req: Request, res: Response): Promis
 
     await setDoc(userRef, updates, { merge: true });
 
+    // Sync status and subscription to user's dedicated organization workspace
+    if (currentData.organizationId && currentData.organizationId !== orgId) {
+      await updateDoc(doc(serverDb, 'organizations', currentData.organizationId), {
+        status: status || currentData.subscription?.status || 'active',
+        subscription: updatedSub,
+        updatedAt: new Date().toISOString(),
+      }).catch(() => {});
+    }
+
     await recordAuditLog({
       actorId: adminId || 'admin',
       actorName: 'Tenant Admin',
@@ -1490,6 +1597,7 @@ export async function handleResetAdminUserPassword(req: Request, res: Response):
   try {
     const { userId } = req.params;
     const orgId = req.headers['x-organization-id'] as string;
+    const adminId = req.headers['x-admin-id'] as string;
     const isMaster = req.headers['x-is-master'] === 'true';
     const { newPassword } = req.body;
 
@@ -1507,7 +1615,14 @@ export async function handleResetAdminUserPassword(req: Request, res: Response):
     }
 
     const currentData = userSnap.data() as UserProfile;
-    if (!isMaster && orgId && currentData.organizationId !== orgId) {
+    const isOwnerAdmin =
+      isMaster ||
+      !orgId ||
+      currentData.organizationId === orgId ||
+      (currentData as any).adminOrganizationId === orgId ||
+      currentData.managedByAdminId === adminId;
+
+    if (!isOwnerAdmin) {
       res.status(403).json({ error: 'Unauthorized.' });
       return;
     }
@@ -1529,6 +1644,7 @@ export async function handleDeleteAdminUser(req: Request, res: Response): Promis
   try {
     const { userId } = req.params;
     const orgId = req.headers['x-organization-id'] as string;
+    const adminId = req.headers['x-admin-id'] as string;
     const isMaster = req.headers['x-is-master'] === 'true';
 
     const userRef = doc(serverDb, 'users', userId);
@@ -1540,12 +1656,22 @@ export async function handleDeleteAdminUser(req: Request, res: Response): Promis
     }
 
     const currentData = userSnap.data() as UserProfile;
-    if (!isMaster && orgId && currentData.organizationId !== orgId) {
+    const isOwnerAdmin =
+      isMaster ||
+      !orgId ||
+      currentData.organizationId === orgId ||
+      (currentData as any).adminOrganizationId === orgId ||
+      currentData.managedByAdminId === adminId;
+
+    if (!isOwnerAdmin) {
       res.status(403).json({ error: 'Unauthorized.' });
       return;
     }
 
     await deleteDoc(userRef);
+    if (currentData.organizationId && currentData.organizationId !== orgId) {
+      await deleteDoc(doc(serverDb, 'organizations', currentData.organizationId)).catch(() => {});
+    }
 
     res.json({ success: true, message: 'User deleted successfully.' });
   } catch (err: any) {
@@ -1579,7 +1705,14 @@ export async function handleAdminImpersonate(req: Request, res: Response): Promi
     }
 
     const userData = userSnap.data() as UserProfile;
-    if (!isMaster && orgId && userData.organizationId !== orgId) {
+    const isOwnerAdmin =
+      isMaster ||
+      !orgId ||
+      userData.organizationId === orgId ||
+      (userData as any).adminOrganizationId === orgId ||
+      userData.managedByAdminId === adminId;
+
+    if (!isOwnerAdmin) {
       res.status(403).json({ error: 'Cannot watch or impersonate a user from another organization.' });
       return;
     }
@@ -1596,15 +1729,46 @@ export async function handleAdminImpersonate(req: Request, res: Response): Promi
       }
     }
 
-    let orgData: any = null;
-    if (userData.organizationId) {
-      const orgSnap = await getDoc(doc(serverDb, 'organizations', userData.organizationId));
-      if (orgSnap.exists()) {
-        orgData = { id: orgSnap.id, ...orgSnap.data() };
-      }
+    // Ensure the watched user has their own fresh, isolated workspace organization
+    let userOrgId = userData.organizationId;
+    if (!userOrgId || userOrgId === orgId) {
+      userOrgId = `org_${userData.uid}`;
+      await updateDoc(userRef, {
+        organizationId: userOrgId,
+        adminOrganizationId: orgId,
+        managedByAdminId: adminId || '',
+      }).catch(() => {});
     }
 
-    const { loginPassword, ...safeUser } = userData as any;
+    let orgData: any = null;
+    const orgSnap = await getDoc(doc(serverDb, 'organizations', userOrgId));
+    if (orgSnap.exists()) {
+      orgData = { id: orgSnap.id, ...orgSnap.data() };
+    } else {
+      // Create fresh blank organization on the fly if needed (0 WhatsApp accounts = PURA BLANK NEW FRESH)
+      orgData = {
+        id: userOrgId,
+        name: `${userData.displayName || 'User'}'s Workspace`,
+        ownerId: userData.uid,
+        adminId: adminId || '',
+        parentOrganizationId: orgId,
+        status: userData.subscription?.status || 'active',
+        subscription: {
+          planName: userData.subscription?.planName || 'Team Member',
+          status: userData.subscription?.status || 'active',
+          features: userData.subscription?.features || {},
+          expiresAt: userData.subscription?.expiresAt,
+          validityDays: userData.subscription?.validityDays || 30,
+          maxWhatsAppNumbers: userData.subscription?.maxWhatsAppNumbers || 1,
+          maxUsers: 1,
+        },
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      await setDoc(doc(serverDb, 'organizations', userOrgId), orgData).catch(() => {});
+    }
+
+    const { loginPassword, ...safeUser } = { ...userData, organizationId: userOrgId } as any;
 
     res.json({
       success: true,
@@ -1622,3 +1786,4 @@ export async function handleAdminImpersonate(req: Request, res: Response): Promi
     res.status(500).json({ error: err.message || 'Failed to impersonate user.' });
   }
 }
+
