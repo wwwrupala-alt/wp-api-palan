@@ -2,8 +2,6 @@ import React from 'react';
 import {
   Menu,
   Smartphone,
-  Plus,
-  ChevronDown,
   ShieldAlert,
   CheckCircle2,
   Clock,
@@ -15,7 +13,7 @@ import { useAuth } from '../context/AuthContext.tsx';
 interface HeaderProps {
   currentTab: string;
   onOpenMobileMenu: () => void;
-  onOpenConnectModal: () => void;
+  onOpenConnectModal?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -58,26 +56,42 @@ export const Header: React.FC<HeaderProps> = ({
     admin: 'Settings & Meta Cloud API',
   };
 
+  const mobileTitles: Record<string, string> = {
+    master: 'Master Admin',
+    dashboard: 'Dashboard',
+    users: 'Users & Team',
+    inbox: 'Inbox',
+    whatsapp: 'WhatsApp Numbers',
+    contacts: 'Contacts',
+    templates: 'Templates',
+    campaigns: 'Campaigns',
+    drip: 'Drip Campaigns',
+    analytics: 'Analytics',
+    automations: 'Automations',
+    admin: 'Settings & Meta',
+  };
+
   return (
-    <header className="h-16 bg-white dark:bg-neutral-900 border-b border-neutral-200 dark:border-neutral-800 px-4 sm:px-6 flex items-center justify-between sticky top-0 z-30">
-      <div className="flex items-center space-x-3">
+    <header className="h-14 sm:h-16 bg-white dark:bg-neutral-900 border-b border-neutral-200 dark:border-neutral-800 px-3 sm:px-6 flex items-center justify-between sticky top-0 z-30">
+      <div className="flex items-center space-x-2 sm:space-x-3 min-w-0 flex-1 mr-2">
         <button
           onClick={onOpenMobileMenu}
-          className="lg:hidden p-2 rounded-lg text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+          className="lg:hidden p-1.5 sm:p-2 rounded-lg text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 shrink-0 cursor-pointer"
         >
           <Menu className="w-5 h-5" />
         </button>
-        <div>
-          <h1 className="text-base sm:text-lg font-semibold text-neutral-900 dark:text-white capitalize">
-            {titles[currentTab] || currentTab}
+        <div className="min-w-0">
+          <h1 className="text-sm sm:text-base md:text-lg font-bold text-neutral-900 dark:text-white truncate">
+            <span className="sm:hidden">{mobileTitles[currentTab] || currentTab}</span>
+            <span className="hidden sm:inline">{titles[currentTab] || currentTab}</span>
           </h1>
-          <p className="hidden sm:block text-[11px] text-neutral-500 dark:text-neutral-400">
+          <p className="hidden md:block text-[11px] text-neutral-500 dark:text-neutral-400 truncate">
             Multi-Tenant Meta WhatsApp Business Platform
           </p>
         </div>
       </div>
 
-      <div className="flex items-center space-x-2 sm:space-x-3">
+      <div className="flex items-center space-x-2 shrink-0">
         {/* Real-Time Plan Validity Badge */}
         {validityInfo ? (
           <div
@@ -100,23 +114,20 @@ export const Header: React.FC<HeaderProps> = ({
               }`}
             />
             <span>
-              {validityInfo.isExpired ? 'Plan Expired' : `${validityInfo.remainingDays} Days Remaining`}
-            </span>
-            <span className="hidden lg:inline font-mono text-[10px] opacity-75 font-normal">
-              ({validityInfo.formattedDate})
+              {validityInfo.isExpired ? 'Plan Expired' : `${validityInfo.remainingDays}d Remaining`}
             </span>
           </div>
         ) : isMaster ? (
           <div
             title="Master Admin Root Control"
-            className="hidden sm:flex items-center space-x-1 px-2.5 py-1.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-xs font-bold"
+            className="hidden sm:flex items-center space-x-1 px-2.5 py-1 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-xs font-bold"
           >
             <Crown className="w-3.5 h-3.5 text-amber-600" />
             <span>Master Admin</span>
           </div>
         ) : null}
 
-        {/* Meta Status Indicator */}
+        {/* Meta Status Indicator (Desktop only) */}
         {accounts.length > 0 ? (
           <div
             title="WhatsApp Business Account is connected and ready to send messages."
@@ -127,7 +138,7 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         ) : metaStatus && !metaStatus.isConfigured ? (
           <div
-            title="No WhatsApp number connected yet. Click '+ Connect WhatsApp' to add your Phone Number ID & Token, or configure server variables."
+            title="No WhatsApp number connected yet."
             className="hidden md:flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 text-amber-800 dark:text-amber-300 text-xs font-medium cursor-help"
           >
             <ShieldAlert className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
@@ -135,38 +146,27 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         ) : null}
 
-        {/* WhatsApp Account Selector if multiple accounts exist */}
+        {/* WhatsApp Account Selector */}
         {accounts.length > 0 ? (
-          <div className="relative">
-            <div className="flex items-center space-x-2 px-3 py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/60 text-xs text-neutral-900 dark:text-white">
-              <Smartphone className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-              <select
-                aria-label="Active WhatsApp Number"
-                value={activeAccount?.id || ''}
-                onChange={(e) => {
-                  const target = accounts.find((a) => a.id === e.target.value);
-                  if (target) setActiveAccount(target);
-                }}
-                className="bg-transparent border-none text-xs font-medium focus:ring-0 focus:outline-hidden cursor-pointer"
-              >
-                {accounts.map((acc) => (
-                  <option key={acc.id} value={acc.id} className="dark:bg-neutral-900 text-neutral-900 dark:text-white">
-                    {acc.displayPhoneNumber} ({acc.verifiedName})
-                  </option>
-                ))}
-              </select>
-            </div>
+          <div className="flex items-center space-x-1.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/60 text-xs text-neutral-900 dark:text-white shrink-0 shadow-2xs">
+            <Smartphone className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+            <select
+              aria-label="Active WhatsApp Number"
+              value={activeAccount?.id || ''}
+              onChange={(e) => {
+                const target = accounts.find((a) => a.id === e.target.value);
+                if (target) setActiveAccount(target);
+              }}
+              className="bg-transparent border-none text-[11px] sm:text-xs font-semibold focus:ring-0 focus:outline-hidden cursor-pointer max-w-[125px] xs:max-w-[160px] sm:max-w-[200px] md:max-w-[260px] truncate"
+            >
+              {accounts.map((acc) => (
+                <option key={acc.id} value={acc.id} className="dark:bg-neutral-900 text-neutral-900 dark:text-white">
+                  {acc.displayPhoneNumber} {acc.verifiedName ? `(${acc.verifiedName})` : ''}
+                </option>
+              ))}
+            </select>
           </div>
         ) : null}
-
-        {/* Connect WhatsApp Button */}
-        <button
-          onClick={onOpenConnectModal}
-          className="flex items-center space-x-1.5 px-3.5 py-1.5 sm:py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-medium shadow-xs transition-colors"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Connect WhatsApp</span>
-        </button>
       </div>
     </header>
   );

@@ -723,31 +723,31 @@ export const MasterAdminPage: React.FC = () => {
   };
 
   return (
-    <div className="p-4 sm:p-6 space-y-6 max-w-7xl mx-auto animate-fadeIn">
+    <div className="p-3.5 sm:p-6 space-y-4 sm:space-y-6 max-w-7xl mx-auto animate-fadeIn">
       {/* Top Banner: Master Control */}
-      <div className="p-5 rounded-3xl bg-gradient-to-r from-amber-600 via-amber-700 to-orange-700 text-white shadow-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div className="flex items-center space-x-3.5">
-          <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-xs flex items-center justify-center font-bold text-white shadow-xs shrink-0">
-            <Crown className="w-7 h-7" />
+      <div className="p-4 sm:p-5 rounded-3xl bg-gradient-to-r from-amber-600 via-amber-700 to-orange-700 text-white shadow-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3.5 sm:gap-4">
+        <div className="flex items-center space-x-3 sm:space-x-3.5">
+          <div className="w-10 sm:w-12 h-10 sm:h-12 rounded-2xl bg-white/20 backdrop-blur-xs flex items-center justify-center font-bold text-white shadow-xs shrink-0">
+            <Crown className="w-6 sm:w-7 h-6 sm:h-7" />
           </div>
-          <div>
-            <div className="flex items-center space-x-2">
-              <h2 className="text-xl font-bold tracking-tight">Master Admin Control Panel</h2>
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-white/25 text-white tracking-wide uppercase">
+          <div className="min-w-0">
+            <div className="flex items-center space-x-2 flex-wrap">
+              <h2 className="text-base sm:text-xl font-bold tracking-tight">Master Admin Control Panel</h2>
+              <span className="px-2 py-0.5 rounded-full text-[9px] sm:text-[10px] font-bold bg-white/25 text-white tracking-wide uppercase">
                 Global Level 1
               </span>
             </div>
-            <p className="text-xs text-amber-100/90 mt-0.5">
-              Multi-Tenant WhatsApp Platform Governance • Admins, Subscriptions, Global Features &amp; Isolated Tenants
+            <p className="text-[11px] sm:text-xs text-amber-100/90 mt-0.5">
+              Multi-Tenant WhatsApp Platform Governance • Admins, Subscriptions &amp; Tenants
             </p>
           </div>
         </div>
 
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center space-x-2 w-full sm:w-auto">
           <button
             type="button"
             onClick={loadMasterData}
-            className="inline-flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-white/15 hover:bg-white/25 text-white text-xs font-semibold backdrop-blur-xs transition-colors cursor-pointer"
+            className="flex-1 sm:flex-initial justify-center inline-flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-white/15 hover:bg-white/25 text-white text-xs font-semibold backdrop-blur-xs transition-colors cursor-pointer"
           >
             <RefreshCw className="w-3.5 h-3.5" />
             <span>Refresh All</span>
@@ -755,10 +755,10 @@ export const MasterAdminPage: React.FC = () => {
           <button
             type="button"
             onClick={() => setIsCreateAdminOpen(true)}
-            className="inline-flex items-center space-x-1.5 px-4 py-2 rounded-xl bg-white text-amber-900 hover:bg-amber-50 text-xs font-bold shadow-md transition-colors cursor-pointer"
+            className="flex-1 sm:flex-initial justify-center inline-flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-white text-amber-900 hover:bg-amber-50 text-xs font-bold shadow-md transition-colors cursor-pointer"
           >
-            <Plus className="w-4 h-4 text-amber-600" />
-            <span>+ Create New Admin</span>
+            <Plus className="w-3.5 h-3.5 text-amber-600" />
+            <span>+ Create Admin</span>
           </button>
         </div>
       </div>

@@ -332,6 +332,8 @@ export interface DripStep {
     read: number;
     failed: number;
   };
+  nextExecutionAt?: string | null;
+  waitingSubscribers?: number;
 }
 
 export interface DripSubscriberLog {
@@ -379,6 +381,7 @@ export interface DripCampaign {
   };
   createdAt: string;
   updatedAt: string;
+  lastScannedAt?: string;
 }
 
 export interface Message {

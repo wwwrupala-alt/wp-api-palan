@@ -125,16 +125,47 @@ export async function checkAndExecuteDripCampaigns(): Promise<void> {
           }
         }
 
+        // Condition Check: if_read (Only send if previous message was read)
+        if (currentStep.condition === 'if_read' && sub.lastStepSentAt) {
+          try {
+            const cleanPhone = (sub.phone || '').replace(/[^0-9]/g, '');
+            const msgQuery = query(
+              collection(serverDb, `organizations/${orgId}/messages`),
+              where('direction', '==', 'outbound')
+            );
+            const msgSnap = await getDocs(msgQuery);
+            const isRead = msgSnap.docs.some((d) => {
+              const m = d.data();
+              const mPhone = (m.contactId || m.recipientPhone || m.to || '').replace(/[^0-9]/g, '');
+              return mPhone.includes(cleanPhone) && m.timestamp >= sub.lastStepSentAt && m.status === 'read';
+            });
+
+            if (!isRead) {
+              console.log(`[DripScheduler] Previous message for ${sub.phone} not yet read; holding step.`);
+              // Postpone check by 5 minutes to wait for customer to read the message
+              await updateDoc(subDoc.ref, {
+                nextExecutionAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+                updatedAt: nowIso,
+              });
+              continue;
+            }
+          } catch (readCheckErr) {
+            console.warn('[DripScheduler] Read check warning:', readCheckErr);
+          }
+        }
+
         // 3. Prepare dispatch for this subscriber's step
         const phoneNumberId = camp.whatsAppAccountId || camp.phoneNumberId;
         const template = currentStep.template;
         const stepHeaderMedia = currentStep.headerMediaUrl || currentStep.variableValues?.header_media_url || currentStep.variableValues?.media_url;
+        const subCustom = sub.customFields || {};
         const recipient = {
           phone: sub.phone,
           name: sub.name,
           variableValues: {
             ...(currentStep.variableValues || {}),
-            body_1: sub.name || currentStep.variableValues?.body_1 || 'Customer',
+            ...subCustom,
+            body_1: subCustom.var1 || subCustom.body_1 || sub.name || currentStep.variableValues?.body_1 || 'Customer',
             ...(stepHeaderMedia ? { header_media_url: stepHeaderMedia, media_url: stepHeaderMedia } : {}),
           },
         };
@@ -585,5 +616,125 @@ export async function handleCancelDripSubscriber(req: Request, res: Response): P
   } catch (err: any) {
     console.error('[handleCancelDripSubscriber] Error:', err);
     res.status(500).json({ error: err?.message || 'Failed to cancel subscriber.' });
+  }
+}
+
+/**
+ * Handler: Scan and Refresh Audience Progress data
+ * POST /api/drip/campaigns/:id/rescan
+ */
+export async function handleRescanDripCampaign(req: Request, res: Response): Promise<void> {
+  try {
+    const { id } = req.params;
+    const orgId = (req.headers['x-organization-id'] as string) || req.body.organizationId;
+
+    if (!id || !orgId) {
+      res.status(400).json({ error: 'id and organizationId are required.' });
+      return;
+    }
+
+    const campRef = doc(serverDb, `organizations/${orgId}/drip_campaigns`, id);
+    const snap = await getDoc(campRef);
+
+    if (!snap.exists()) {
+      res.status(404).json({ error: 'Drip campaign not found.' });
+      return;
+    }
+
+    const camp = snap.data();
+    const subsRef = collection(serverDb, `organizations/${orgId}/drip_campaigns/${id}/subscribers`);
+    const subsSnap = await getDocs(subsRef);
+
+    let totalSubscribers = subsSnap.size;
+    let completedSubscribers = 0;
+    let activeSubscribers = 0;
+    let cancelledSubscribers = 0;
+    let totalMessagesSent = 0;
+    let failedMessages = 0;
+
+    // Track per-step waiting and next execution times
+    const stepStatsMap: Record<number, { sent: number; failed: number; waiting: number; nextExecutionAt: string | null }> = {};
+    (camp.steps || []).forEach((st: any) => {
+      stepStatsMap[st.stepNumber] = { sent: 0, failed: 0, waiting: 0, nextExecutionAt: null };
+    });
+
+    subsSnap.forEach((docItem) => {
+      const sub = docItem.data();
+      if (sub.status === 'completed') {
+        completedSubscribers++;
+      } else if (sub.status === 'active') {
+        activeSubscribers++;
+        const curStep = sub.currentStep || 1;
+        if (stepStatsMap[curStep]) {
+          stepStatsMap[curStep].waiting++;
+          if (sub.nextExecutionAt) {
+            const currentEarliest = stepStatsMap[curStep].nextExecutionAt;
+            if (!currentEarliest || new Date(sub.nextExecutionAt).getTime() < new Date(currentEarliest).getTime()) {
+              stepStatsMap[curStep].nextExecutionAt = sub.nextExecutionAt;
+            }
+          }
+        }
+      } else if (sub.status === 'cancelled') {
+        cancelledSubscribers++;
+      }
+
+      if (Array.isArray(sub.stepHistory)) {
+        sub.stepHistory.forEach((h: any) => {
+          if (h.status === 'sent') {
+            totalMessagesSent++;
+            if (stepStatsMap[h.stepNumber]) stepStatsMap[h.stepNumber].sent++;
+          } else if (h.status === 'failed') {
+            failedMessages++;
+            if (stepStatsMap[h.stepNumber]) stepStatsMap[h.stepNumber].failed++;
+          }
+        });
+      }
+    });
+
+    const updatedSteps = (camp.steps || []).map((st: any) => {
+      const sMap = stepStatsMap[st.stepNumber] || { sent: 0, failed: 0, waiting: 0, nextExecutionAt: null };
+      return {
+        ...st,
+        stats: {
+          sent: sMap.sent,
+          delivered: sMap.sent,
+          read: 0,
+          failed: sMap.failed,
+        },
+        waitingSubscribers: sMap.waiting,
+        nextExecutionAt: sMap.nextExecutionAt,
+      };
+    });
+
+    const nowIso = new Date().toISOString();
+    await updateDoc(campRef, {
+      enrolledCount: totalSubscribers,
+      activeSubscribers,
+      completedSubscribers,
+      steps: updatedSteps,
+      stats: {
+        totalMessagesSent,
+        delivered: totalMessagesSent,
+        read: 0,
+        failed: failedMessages,
+      },
+      lastScannedAt: nowIso,
+      updatedAt: nowIso,
+    });
+
+    // Run background worker to execute any steps that are now due
+    checkAndExecuteDripCampaigns().catch(() => {});
+
+    res.json({
+      success: true,
+      enrolledCount: totalSubscribers,
+      completedSubscribers,
+      activeSubscribers,
+      totalMessagesSent,
+      message: `Audience progress synced: Scanned ${totalSubscribers} subscribers (${completedSubscribers} completed, ${activeSubscribers} in progress).`,
+    });
+  } catch (err: any) {
+    console.error('[handleRescanDripCampaign] Error:', err);
+    res.status(500).json({ error: err?.message || 'Failed to scan and refresh audience progress.' });
   }
 }

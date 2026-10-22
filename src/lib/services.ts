@@ -12,6 +12,7 @@ import {
   where,
   getDocs,
   getDoc,
+  writeBatch,
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from './firebase.ts';
 import type {
@@ -195,6 +196,100 @@ export async function deleteGroup(orgId: string, groupId: string) {
   } catch (err) {
     handleFirestoreError(err, OperationType.DELETE, path);
   }
+}
+
+export async function updateGroup(orgId: string, groupId: string, updates: Partial<ContactGroup>) {
+  const path = `organizations/${orgId}/contactGroups/${groupId}`;
+  try {
+    await updateDoc(doc(db, 'organizations', orgId, 'contactGroups', groupId), removeUndefined(updates));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
+export async function bulkAddOrUpdateContacts(
+  orgId: string,
+  contactsList: Array<{
+    name: string;
+    phone: string;
+    email?: string;
+    groups: string[];
+    customFields?: Record<string, string>;
+    optInStatus?: 'opted_in' | 'opted_out' | 'pending';
+  }>
+): Promise<{ added: number; updated: number }> {
+  if (!contactsList || contactsList.length === 0) return { added: 0, updated: 0 };
+
+  // To avoid duplicate phone numbers in the database, query existing contacts
+  const existingSnap = await getDocs(collection(db, `organizations/${orgId}/contacts`));
+  const phoneToDocMap = new Map<string, { id: string; data: any }>();
+  existingSnap.docs.forEach((d) => {
+    const data = d.data();
+    const cleanP = (data.phone || '').replace(/[^0-9]/g, '');
+    if (cleanP) phoneToDocMap.set(cleanP, { id: d.id, data });
+  });
+
+  const now = new Date().toISOString();
+  let added = 0;
+  let updated = 0;
+
+  // Batch writes in chunks of 400 (Firestore max limit is 500)
+  const chunkSize = 400;
+  for (let i = 0; i < contactsList.length; i += chunkSize) {
+    const chunk = contactsList.slice(i, i + chunkSize);
+    const batch = writeBatch(db);
+
+    for (const item of chunk) {
+      const cleanP = (item.phone || '').replace(/[^0-9]/g, '');
+      const existing = phoneToDocMap.get(cleanP);
+
+      if (existing) {
+        // Merge groups & customFields
+        const mergedGroups = Array.from(new Set([...(existing.data.groups || []), ...(item.groups || [])]));
+        const mergedCustomFields = {
+          ...(existing.data.customFields || {}),
+          ...(item.customFields || {}),
+        };
+        const ref = doc(db, `organizations/${orgId}/contacts`, existing.id);
+        batch.set(
+          ref,
+          removeUndefined({
+            name: item.name || existing.data.name || cleanP,
+            phone: item.phone,
+            ...(item.email ? { email: item.email } : existing.data.email ? { email: existing.data.email } : {}),
+            groups: mergedGroups,
+            customFields: mergedCustomFields,
+            optInStatus: item.optInStatus || existing.data.optInStatus || 'opted_in',
+            updatedAt: now,
+          }),
+          { merge: true }
+        );
+        updated++;
+      } else {
+        const newId = `cnt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+        const ref = doc(db, `organizations/${orgId}/contacts`, newId);
+        batch.set(
+          ref,
+          removeUndefined({
+            name: item.name || item.phone,
+            phone: item.phone,
+            ...(item.email ? { email: item.email } : {}),
+            groups: item.groups || [],
+            customFields: item.customFields || {},
+            optInStatus: item.optInStatus || 'opted_in',
+            createdAt: now,
+            updatedAt: now,
+          })
+        );
+        phoneToDocMap.set(cleanP, { id: newId, data: item });
+        added++;
+      }
+    }
+
+    await batch.commit();
+  }
+
+  return { added, updated };
 }
 
 // -------------------------------------------------------------
@@ -644,6 +739,18 @@ export async function cancelDripSubscriberApi(orgId: string, dripId: string, sub
     body: JSON.stringify({ organizationId: orgId }),
   });
   return parseJsonResponse(res, 'Failed to cancel subscriber.');
+}
+
+export async function rescanDripCampaignApi(orgId: string, dripId: string) {
+  const res = await fetch(`/api/drip/campaigns/${dripId}/rescan`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-organization-id': orgId,
+    },
+    body: JSON.stringify({ organizationId: orgId }),
+  });
+  return parseJsonResponse(res, 'Failed to scan and refresh audience progress.');
 }
 
 export async function deleteCampaign(orgId: string, campaignId: string) {

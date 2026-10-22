@@ -437,6 +437,24 @@ export async function fetchAndSyncMetaAccount(params: {
   } else if (existingAccount?.customToken) {
     accountDocData.customToken = existingAccount.customToken;
   }
+  if (existingAccount?.permanentToken) {
+    accountDocData.permanentToken = existingAccount.permanentToken;
+  }
+  if (existingAccount?.userAccessToken) {
+    accountDocData.userAccessToken = existingAccount.userAccessToken;
+  }
+  if (existingAccount?.tokenType) {
+    accountDocData.tokenType = existingAccount.tokenType;
+  }
+  if (existingAccount?.tokenExpiresAt !== undefined) {
+    accountDocData.tokenExpiresAt = existingAccount.tokenExpiresAt;
+  }
+  if (existingAccount?.coexistenceMode !== undefined) {
+    accountDocData.coexistenceMode = existingAccount.coexistenceMode;
+  }
+  if (existingAccount?.connectedVia !== undefined) {
+    accountDocData.connectedVia = existingAccount.connectedVia;
+  }
   if (pin || existingAccount?.pin) {
     accountDocData.pin = pin || existingAccount?.pin;
   }

@@ -18,6 +18,7 @@ import {
   Calendar,
   Sparkles,
   Send,
+  RefreshCw,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useToast } from '../../context/ToastContext.tsx';
@@ -27,8 +28,10 @@ import {
   cancelDripSubscriberApi,
   enrollDripSubscribersApi,
   subscribeGroups,
+  rescanDripCampaignApi,
 } from '../../lib/services.ts';
 import type { DripCampaign, DripSubscriber, ContactGroup } from '../../types/index.ts';
+import { DripStepCountdown } from './DripStepCountdown.tsx';
 
 interface DripSubscribersModalProps {
   isOpen: boolean;
@@ -138,6 +141,24 @@ export const DripSubscribersModal: React.FC<DripSubscribersModalProps> = ({
     }
   };
 
+  const [isRescanning, setIsRescanning] = useState(false);
+
+  const handleRescanAudience = async () => {
+    if (!organization?.id || !campaign?.id) return;
+    setIsRescanning(true);
+    try {
+      const res = await rescanDripCampaignApi(organization.id, campaign.id);
+      toast.showSuccess(
+        'Audience Data Synced',
+        res.message || `Scanned ${res.enrolledCount} subscribers (${res.completedSubscribers} completed, ${res.activeSubscribers} active).`
+      );
+    } catch (err: any) {
+      toast.showError('Scan Failed', err?.message || 'Could not scan audience progress.');
+    } finally {
+      setIsRescanning(false);
+    }
+  };
+
   const handleEnrollSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!organization?.id || !campaign?.id) return;
@@ -215,6 +236,16 @@ export const DripSubscribersModal: React.FC<DripSubscribersModalProps> = ({
           </div>
 
           <div className="flex items-center space-x-2">
+            <button
+              type="button"
+              disabled={isRescanning}
+              onClick={handleRescanAudience}
+              className="px-3 py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-200 text-xs font-bold flex items-center space-x-1.5 transition-all cursor-pointer shadow-2xs"
+              title="Scan all subscribers & refresh audience progression data"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRescanning ? 'animate-spin text-emerald-600' : ''}`} />
+              <span>{isRescanning ? 'Scanning...' : 'Scan & Sync'}</span>
+            </button>
             <button
               type="button"
               onClick={() => setShowEnrollPanel(!showEnrollPanel)}
@@ -467,12 +498,12 @@ export const DripSubscribersModal: React.FC<DripSubscribersModalProps> = ({
                           <span>Step {isFinished ? totalSteps : curStepNum} of {totalSteps}</span>
                         </div>
                         {sub.nextExecutionAt && sub.status === 'active' && (
-                          <p className="text-[10px] text-amber-600 dark:text-amber-400 font-mono flex items-center justify-end space-x-1">
-                            <Clock className="w-3 h-3" />
-                            <span>
-                              Due: {new Date(sub.nextExecutionAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                            </span>
-                          </p>
+                          <div className="mt-1 flex justify-end">
+                            <DripStepCountdown
+                              nextExecutionAt={sub.nextExecutionAt}
+                              compact
+                            />
+                          </div>
                         )}
                       </div>
 

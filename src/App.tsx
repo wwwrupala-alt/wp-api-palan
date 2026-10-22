@@ -179,7 +179,7 @@ const AppContent: React.FC = () => {
           onOpenConnectModal={() => setIsConnectModalOpen(true)}
         />
 
-        <main className="flex-1 overflow-y-auto">
+        <main className="flex-1 overflow-y-auto min-w-0">
           {currentTab === 'master' && isMasterAdmin && <MasterAdminPage />}
           {currentTab === 'dashboard' && (
             <DashboardPage

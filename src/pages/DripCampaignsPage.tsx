@@ -24,6 +24,7 @@ import {
   Layers,
   ChevronRight,
   Smartphone,
+  RefreshCw,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -32,12 +33,14 @@ import {
   subscribeDripCampaigns,
   deleteDripCampaign,
   toggleDripCampaignStatusApi,
+  rescanDripCampaignApi,
 } from '../lib/services.ts';
 import type { DripCampaign } from '../types/index.ts';
 import { CreateDripCampaignModal } from '../components/drip/CreateDripCampaignModal.tsx';
 import { DripSubscribersModal } from '../components/drip/DripSubscribersModal.tsx';
 import { DripFlowModal } from '../components/drip/DripFlowModal.tsx';
 import { DripBlueprintsModal, DripBlueprint } from '../components/drip/DripBlueprintsModal.tsx';
+import { DripStepCountdown } from '../components/drip/DripStepCountdown.tsx';
 
 interface DripCampaignsPageProps {
   onNavigateToCampaigns?: () => void;
@@ -167,6 +170,25 @@ export const DripCampaignsPage: React.FC<DripCampaignsPageProps> = ({
       toast.showError('Delete Failed', err?.message || 'Failed to delete drip campaign.');
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  // Scan & Refresh Audience Progress Data
+  const [scanningCampaignId, setScanningCampaignId] = useState<string | null>(null);
+
+  const handleRescanCampaign = async (camp: DripCampaign) => {
+    if (!organization?.id) return;
+    setScanningCampaignId(camp.id);
+    try {
+      const res = await rescanDripCampaignApi(organization.id, camp.id);
+      toast.showSuccess(
+        'Audience Data Synced',
+        res.message || `Scanned ${res.enrolledCount} subscribers (${res.completedSubscribers} completed, ${res.activeSubscribers} active).`
+      );
+    } catch (err: any) {
+      toast.showError('Scan Failed', err?.message || 'Could not scan audience progress.');
+    } finally {
+      setScanningCampaignId(null);
     }
   };
 
@@ -573,11 +595,23 @@ export const DripCampaignsPage: React.FC<DripCampaignsPageProps> = ({
                             </span>
                           </div>
                           <div className="flex items-center space-x-2 text-[10px] text-neutral-500 mt-1">
-                            <span className="font-mono text-amber-600 dark:text-amber-400">
+                            <span className="font-mono text-amber-600 dark:text-amber-400 font-bold">
                               {st.delayValue === 0 ? '⚡ 0m delay' : `+${st.delayValue} ${st.delayUnit}`}
                             </span>
                             <span>•</span>
                             <span className="truncate max-w-[90px]">{st.templateName || 'Template'}</span>
+                          </div>
+
+                          {/* Countdown Timer Under Step Timing */}
+                          <div className="mt-1.5 pt-1.5 border-t border-neutral-100 dark:border-neutral-800">
+                            <DripStepCountdown
+                              nextExecutionAt={st.nextExecutionAt}
+                              delayValue={st.delayValue}
+                              delayUnit={st.delayUnit}
+                              sentCount={st.stats?.sent}
+                              waitingCount={st.waitingSubscribers}
+                              isComplete={camp.completedSubscribers > 0 && camp.activeSubscribers === 0}
+                            />
                           </div>
                         </div>
 
@@ -593,10 +627,26 @@ export const DripCampaignsPage: React.FC<DripCampaignsPageProps> = ({
                 <div className="flex flex-wrap items-center justify-between gap-4 pt-1 text-xs">
                   {/* Subscriber Progression Bar */}
                   <div className="flex-1 min-w-[260px] space-y-1.5">
-                    <div className="flex justify-between text-[11px] font-semibold text-neutral-600 dark:text-neutral-400">
-                      <span>
-                        Audience Progress: <strong className="text-neutral-900 dark:text-white">{camp.completedSubscribers || 0}</strong> of {camp.enrolledCount || 0} completed
-                      </span>
+                    <div className="flex flex-wrap items-center justify-between text-[11px] font-semibold text-neutral-600 dark:text-neutral-400 gap-2">
+                      <div className="flex items-center space-x-2">
+                        <span>
+                          Audience Progress: <strong className="text-neutral-900 dark:text-white">{camp.completedSubscribers || 0}</strong> of {camp.enrolledCount || 0} completed
+                        </span>
+                        {/* Scan & Refresh Button */}
+                        <button
+                          type="button"
+                          disabled={scanningCampaignId === camp.id}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRescanCampaign(camp);
+                          }}
+                          className="px-2 py-0.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/70 dark:hover:bg-emerald-900/70 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold flex items-center space-x-1 cursor-pointer transition-all border border-emerald-200/80 dark:border-emerald-800/80 shadow-2xs"
+                          title="Scan all subscribers and refresh audience progress data"
+                        >
+                          <RefreshCw className={`w-3 h-3 ${scanningCampaignId === camp.id ? 'animate-spin text-emerald-600' : ''}`} />
+                          <span>{scanningCampaignId === camp.id ? 'Scanning...' : 'Scan & Refresh'}</span>
+                        </button>
+                      </div>
                       <span>
                         {camp.enrolledCount > 0
                           ? `${Math.round(((camp.completedSubscribers || 0) / camp.enrolledCount) * 100)}%`

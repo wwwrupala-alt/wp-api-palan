@@ -598,6 +598,28 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
 
       const campaignName = campName.trim() || `${selectedTemplate.name} Broadcast`;
 
+      const buildRecipientVariables = (c: any) => {
+        const merged: Record<string, string> = { ...campaignVariables };
+        if (c.name && !merged.body_1) {
+          merged.body_1 = c.name;
+          merged.name = c.name;
+        }
+        if (c.customFields && typeof c.customFields === 'object') {
+          Object.entries(c.customFields).forEach(([k, v]) => {
+            if (v !== undefined && v !== null && String(v).trim()) {
+              const valStr = String(v).trim();
+              merged[k] = valStr;
+              const matchNum = k.match(/(?:var|param|body)?_?(\d+)/i);
+              if (matchNum && matchNum[1]) {
+                merged[`body_${matchNum[1]}`] = valStr;
+                merged[matchNum[1]] = valStr;
+              }
+            }
+          });
+        }
+        return merged;
+      };
+
       if (scheduleMode === 'schedule') {
         const scheduledIso = new Date(scheduledDateTime).toISOString();
         const campaignPayload = {
@@ -625,10 +647,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
             recipients: totalTargetRecipients.map((c) => ({
               phone: c.phone,
               name: c.name,
-              variableValues: {
-                ...campaignVariables,
-                body_1: c.name || campaignVariables.body_1 || 'Customer',
-              },
+              variableValues: buildRecipientVariables(c),
             })),
             customToken: currentAccount.customToken,
             variableValues: campaignVariables,
@@ -679,10 +698,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
           totalTargetRecipients.map((c) => ({
             phone: c.phone,
             name: c.name,
-            variableValues: {
-              ...campaignVariables,
-              body_1: c.name || campaignVariables.body_1 || 'Customer',
-            },
+            variableValues: buildRecipientVariables(c),
           })),
           currentAccount.customToken,
           campaignVariables,
@@ -1324,6 +1340,15 @@ Rahul: 919974428034
                   {totalTargetRecipients.length} unique recipients
                 </span>
               </div>
+
+              {totalTargetRecipients.some((r: any) => r.customFields && Object.keys(r.customFields).length > 0) && (
+                <div className="p-2.5 rounded-xl bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800/80 text-[11px] text-purple-900 dark:text-purple-200 flex items-center space-x-2 animate-fadeIn">
+                  <Sparkles className="w-4 h-4 text-purple-600 dark:text-purple-400 shrink-0" />
+                  <span>
+                    <strong>Personalized Excel Variables Active:</strong> Contacts have individualized row variables (var1, var2, amount...) which will automatically map into template parameters for each recipient!
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* Step 4: Broadcast Delivery Timing - Send Immediately vs Schedule Campaign */}

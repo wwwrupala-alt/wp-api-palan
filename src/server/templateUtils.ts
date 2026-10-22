@@ -205,8 +205,17 @@ export function formatTemplateComponentsForSending(
       const matches = textContent.match(/\{\{(\d+)\}\}/g);
       if (matches && matches.length > 0) {
         const params = matches.map((m: string, i: number) => {
-          const varKey = `body_${i + 1}`;
-          const val = variableValues?.[varKey] || variableValues?.[String(i + 1)] || `Customer`;
+          const num = i + 1;
+          const val =
+            variableValues?.[`body_${num}`] ||
+            variableValues?.[String(num)] ||
+            variableValues?.[`var${num}`] ||
+            variableValues?.[`var_${num}`] ||
+            variableValues?.[`param${num}`] ||
+            variableValues?.[`param_${num}`] ||
+            variableValues?.[`variable${num}`] ||
+            (num === 1 && variableValues?.name ? variableValues.name : null) ||
+            `Customer`;
           return { type: 'text' as const, text: String(val) };
         });
         result.push({

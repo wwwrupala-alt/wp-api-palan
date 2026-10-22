@@ -47,6 +47,7 @@ import {
   handleTestDripStep,
   handleAdvanceDripSubscriber,
   handleCancelDripSubscriber,
+  handleRescanDripCampaign,
 } from './dripSchedulerService.ts';
 import {
   handleTenantAuthLogin,
@@ -167,6 +168,7 @@ apiApp.post('/api/drip/campaigns/:id/enroll', handleEnrollDripSubscribers);
 apiApp.post('/api/drip/campaigns/:id/test-step', handleTestDripStep);
 apiApp.post('/api/drip/campaigns/:id/subscribers/:subId/advance', handleAdvanceDripSubscriber);
 apiApp.post('/api/drip/campaigns/:id/subscribers/:subId/cancel', handleCancelDripSubscriber);
+apiApp.post('/api/drip/campaigns/:id/rescan', handleRescanDripCampaign);
 
 // WhatsApp Campaign Real-Time Tracking & Analytics Endpoints (Item 12)
 apiApp.get('/api/campaigns/:campaignId/analytics', handleGetCampaignAnalytics);

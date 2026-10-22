@@ -15,6 +15,7 @@ import {
   Zap,
 } from 'lucide-react';
 import type { DripCampaign, DripStep } from '../../types/index.ts';
+import { DripStepCountdown } from './DripStepCountdown.tsx';
 
 interface DripFlowModalProps {
   isOpen: boolean;
@@ -181,9 +182,20 @@ export const DripFlowModal: React.FC<DripFlowModalProps> = ({
                       </h4>
                     </div>
 
-                    <div className="flex items-center space-x-1.5 text-xs font-medium text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/60 px-2.5 py-1 rounded-lg border border-amber-200/60 dark:border-amber-800/60 font-mono">
-                      <Clock className="w-3.5 h-3.5 shrink-0" />
-                      <span>{formatDelay(st.delayValue, st.delayUnit)}</span>
+                    <div className="flex flex-col items-end space-y-1">
+                      <div className="flex items-center space-x-1.5 text-xs font-medium text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/60 px-2.5 py-1 rounded-lg border border-amber-200/60 dark:border-amber-800/60 font-mono">
+                        <Clock className="w-3.5 h-3.5 shrink-0" />
+                        <span>{formatDelay(st.delayValue, st.delayUnit)}</span>
+                      </div>
+                      <DripStepCountdown
+                        nextExecutionAt={st.nextExecutionAt}
+                        delayValue={st.delayValue}
+                        delayUnit={st.delayUnit}
+                        sentCount={st.stats?.sent}
+                        waitingCount={st.waitingSubscribers}
+                        isComplete={campaign.completedSubscribers > 0 && campaign.activeSubscribers === 0}
+                        compact
+                      />
                     </div>
                   </div>
 
