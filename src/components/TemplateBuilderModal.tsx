@@ -18,14 +18,16 @@ import {
   Copy,
   UploadCloud,
   HardDrive,
+  Phone,
 } from 'lucide-react';
 import type { Template, TemplateComponent } from '../types/index.ts';
 import { uploadMediaFile } from '../lib/services.ts';
 
 export interface InteractiveButtonItem {
-  type: 'QUICK_REPLY' | 'URL';
+  type: 'QUICK_REPLY' | 'URL' | 'PHONE_NUMBER';
   text: string;
   url?: string;
+  phoneNumber?: string;
 }
 
 interface TemplateBuilderModalProps {
@@ -75,6 +77,7 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
   const [isUploadingMedia, setIsUploadingMedia] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const bodyTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
   // Body State
@@ -205,9 +208,10 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
       if (buttonsComp?.buttons && buttonsComp.buttons.length > 0) {
         setButtons(
           buttonsComp.buttons.map((b) => ({
-            type: b.type === 'URL' ? 'URL' : 'QUICK_REPLY',
+            type: b.type === 'URL' ? 'URL' : b.type === 'PHONE_NUMBER' ? 'PHONE_NUMBER' : 'QUICK_REPLY',
             text: b.text,
             url: b.url || 'https://example.com',
+            phoneNumber: (b as any).phone_number || (b as any).phoneNumber || '',
           }))
         );
       } else {
@@ -247,6 +251,33 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
 
   if (!isOpen) return null;
 
+  // Insert Variable at exact cursor position without any suffix
+  const handleInsertVariable = () => {
+    const matches = bodyText.match(/\{\{(\d+)\}\}/g) || [];
+    const indices = matches.map((m) => parseInt(m.replace(/[\{\}]/g, ''), 10)).filter((n) => !isNaN(n));
+    const nextIdx = indices.length > 0 ? Math.max(...indices) + 1 : 1;
+    const varTag = `{{${nextIdx}}}`;
+
+    const textarea = bodyTextareaRef.current;
+    if (textarea) {
+      const start = textarea.selectionStart ?? bodyText.length;
+      const end = textarea.selectionEnd ?? bodyText.length;
+      const before = bodyText.substring(0, start);
+      const after = bodyText.substring(end);
+      const newText = `${before}${varTag}${after}`;
+      setBodyText(newText);
+
+      // Restore focus and place cursor right after the newly inserted tag
+      setTimeout(() => {
+        textarea.focus();
+        const newCursorPos = start + varTag.length;
+        textarea.setSelectionRange(newCursorPos, newCursorPos);
+      }, 0);
+    } else {
+      setBodyText((prev) => `${prev} ${varTag}`);
+    }
+  };
+
   // Add button handler (Max 3)
   const handleAddButton = () => {
     if (buttons.length >= 3) return;
@@ -254,7 +285,7 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
       ...buttons,
       {
         type: 'QUICK_REPLY',
-        text: buttons.length === 1 ? 'Contact Support' : 'View Offers',
+        text: buttons.length === 1 ? 'Contact Support' : buttons.length === 2 ? 'Call Us' : 'View Offers',
       },
     ]);
   };
@@ -270,6 +301,12 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
           const next = { ...b, ...updated };
           if (next.type === 'URL' && !next.url) {
             next.url = 'https://example.com';
+          }
+          if (next.type === 'PHONE_NUMBER' && next.phoneNumber === undefined) {
+            next.phoneNumber = '';
+          }
+          if (next.type === 'PHONE_NUMBER' && (!next.text || next.text === 'Track Order' || next.text === 'Contact Support')) {
+            next.text = 'Call Us';
           }
           return next;
         }
@@ -417,26 +454,67 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
 
     // 4. Buttons (Up to 3 buttons)
     if (buttons.length > 0) {
-      const validButtons = buttons
-        .filter((b) => b.text.trim())
-        .map((b) => {
-          if (b.type === 'URL') {
-            return {
-              type: 'URL' as const,
-              text: b.text.trim(),
-              url: b.url?.trim() || 'https://example.com',
-            };
+      // Validate buttons before submit
+      for (let i = 0; i < buttons.length; i++) {
+        const b = buttons[i];
+        if (!b.text.trim()) {
+          alert(`Please provide a label/text for Button #${i + 1}.`);
+          return;
+        }
+        if (b.type === 'PHONE_NUMBER') {
+          const digits = (b.phoneNumber || '').replace(/\D/g, '');
+          if (!b.phoneNumber || digits.length < 7) {
+            alert(`Please enter a valid Phone Number with Country Code (e.g. +919974428034) for Button #${i + 1} (${b.text}).`);
+            return;
           }
-          return {
-            type: 'QUICK_REPLY' as const,
-            text: b.text.trim(),
-          };
-        });
+        }
+        if (b.type === 'URL') {
+          if (!b.url || !b.url.trim()) {
+            alert(`Please enter a valid Website URL (e.g. https://example.com) for Button #${i + 1} (${b.text}).`);
+            return;
+          }
+        }
+      }
 
-      if (validButtons.length > 0) {
+      const ctaButtons: any[] = [];
+      const qrButtons: any[] = [];
+
+      for (const b of buttons) {
+        if (!b.text.trim()) continue;
+        if (b.type === 'URL') {
+          let url = b.url?.trim() || 'https://example.com';
+          if (!url.startsWith('http://') && !url.startsWith('https://')) {
+            url = `https://${url}`;
+          }
+          ctaButtons.push({
+            type: 'URL' as const,
+            text: b.text.trim().slice(0, 25),
+            url,
+          });
+        } else if (b.type === 'PHONE_NUMBER') {
+          let phone = (b.phoneNumber || '').trim();
+          if (!phone.startsWith('+')) {
+            phone = `+${phone}`;
+          }
+          ctaButtons.push({
+            type: 'PHONE_NUMBER' as const,
+            text: b.text.trim().slice(0, 25),
+            phone_number: phone,
+          });
+        } else {
+          qrButtons.push({
+            type: 'QUICK_REPLY' as const,
+            text: b.text.trim().slice(0, 25),
+          });
+        }
+      }
+
+      // Meta Cloud API Rule: CTA buttons (URL, PHONE_NUMBER) must precede QUICK_REPLY buttons
+      const orderedButtons = [...ctaButtons, ...qrButtons];
+      if (orderedButtons.length > 0) {
         components.push({
           type: 'BUTTONS',
-          buttons: validButtons,
+          buttons: orderedButtons,
         });
       }
     }
@@ -871,6 +949,7 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
 
               <div>
                 <textarea
+                  ref={bodyTextareaRef}
                   rows={4}
                   required
                   placeholder="Hello {{1}}, your order #{{2}} is ready..."
@@ -885,7 +964,7 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
                   <div className="space-x-1.5">
                     <button
                       type="button"
-                      onClick={() => setBodyText((prev) => `${prev.trim()} {{${detectedVarKeys.length + 1}}} - Thank you.`)}
+                      onClick={handleInsertVariable}
                       className="text-emerald-600 dark:text-emerald-400 hover:underline font-semibold cursor-pointer"
                     >
                       + Insert Variable
@@ -1001,12 +1080,13 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
                             <select
                               value={btn.type}
                               onChange={(e) =>
-                                handleUpdateButton(index, { type: e.target.value as 'QUICK_REPLY' | 'URL' })
+                                handleUpdateButton(index, { type: e.target.value as 'QUICK_REPLY' | 'URL' | 'PHONE_NUMBER' })
                               }
                               className="w-full px-2.5 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800 text-neutral-900 dark:text-white text-xs cursor-pointer"
                             >
                               <option value="QUICK_REPLY">Quick Reply Button</option>
                               <option value="URL">Visit Website (URL Button)</option>
+                              <option value="PHONE_NUMBER">Call Phone Number (Call Button)</option>
                             </select>
                           </div>
 
@@ -1017,7 +1097,7 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
                             <input
                               type="text"
                               required
-                              placeholder="e.g. Track Order"
+                              placeholder={btn.type === 'PHONE_NUMBER' ? 'e.g. Call Us' : btn.type === 'URL' ? 'e.g. Track Order' : 'e.g. Quick Reply'}
                               value={btn.text}
                               onChange={(e) => handleUpdateButton(index, { text: e.target.value })}
                               className="w-full px-2.5 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800 text-neutral-900 dark:text-white text-xs"
@@ -1038,6 +1118,25 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
                               onChange={(e) => handleUpdateButton(index, { url: e.target.value })}
                               className="w-full px-2.5 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800 text-neutral-900 dark:text-white font-mono text-xs"
                             />
+                          </div>
+                        )}
+
+                        {btn.type === 'PHONE_NUMBER' && (
+                          <div>
+                            <label className="block text-[11px] font-medium text-neutral-600 dark:text-neutral-400 mb-1">
+                              Phone Number (with Country Code) <span className="text-red-500">*</span>
+                            </label>
+                            <input
+                              type="tel"
+                              required
+                              placeholder="e.g. +91 98765 43210"
+                              value={btn.phoneNumber || ''}
+                              onChange={(e) => handleUpdateButton(index, { phoneNumber: e.target.value })}
+                              className="w-full px-2.5 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800 text-neutral-900 dark:text-white font-mono text-xs"
+                            />
+                            <p className="text-[10px] text-neutral-500 dark:text-neutral-400 mt-1">
+                              Meta WhatsApp Rule: Include full international country code (e.g. +1 or +91). Tapping this button opens the customer's phone dialer.
+                            </p>
                           </div>
                         )}
                       </div>
@@ -1167,14 +1266,18 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
                           .map((btn, i) => (
                             <div
                               key={i}
-                              className={`py-1.5 text-center font-medium text-[11px] flex items-center justify-center space-x-1 cursor-pointer hover:bg-neutral-50 dark:hover:bg-neutral-800 ${
+                              className={`py-1.5 text-center font-medium text-[11px] flex items-center justify-center space-x-1.5 cursor-pointer hover:bg-neutral-50 dark:hover:bg-neutral-800 ${
                                 btn.type === 'URL'
                                   ? 'text-blue-600 dark:text-blue-400'
+                                  : btn.type === 'PHONE_NUMBER'
+                                  ? 'text-emerald-700 dark:text-emerald-400 font-semibold'
                                   : 'text-emerald-600 dark:text-emerald-400'
                               }`}
                             >
                               {btn.type === 'URL' ? (
                                 <Link className="w-3 h-3" />
+                              ) : btn.type === 'PHONE_NUMBER' ? (
+                                <Phone className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
                               ) : (
                                 <MessageSquare className="w-3 h-3" />
                               )}
@@ -1190,7 +1293,7 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
               <div className="p-2.5 rounded-xl bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900/50 text-[10.5px] text-blue-800 dark:text-blue-300 flex items-start space-x-2">
                 <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                 <span>
-                  Meta supports up to 3 interactive buttons (URL or Quick Reply) per message template.
+                  Meta supports up to 3 interactive buttons (URL, Call Phone Number, or Quick Reply) per message template.
                 </span>
               </div>
             </div>

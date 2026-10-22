@@ -26,6 +26,7 @@ import {
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
 import { useTheme } from '../context/ThemeContext.tsx';
+import { WhatsAppPinModal } from './WhatsAppPinModal.tsx';
 
 interface SidebarProps {
   currentTab: string;
@@ -140,7 +141,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   }
 
   navItems.push(
-    { id: 'whatsapp', label: 'WhatsApp Numbers', icon: Smartphone },
     { id: 'contacts', label: 'Contacts', icon: Users },
     { id: 'templates', label: 'Templates', icon: FileText },
     { id: 'campaigns', label: 'Campaigns', icon: Send }
@@ -177,7 +177,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
   }
 
+  // LAST ITEM IN MENU: WhatsApp Numbers (PIN protected)
+  navItems.push({ id: 'whatsapp', label: 'WhatsApp Numbers', icon: Smartphone });
+
+  const [isPinModalOpen, setIsPinModalOpen] = useState(false);
+
   const handleNavClick = (tabId: string) => {
+    if (tabId === 'whatsapp' && sessionStorage.getItem('wa_numbers_unlocked') !== 'true') {
+      setIsPinModalOpen(true);
+      return;
+    }
     setCurrentTab(tabId);
     setIsMobileOpen(false);
   };
@@ -503,6 +512,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
       )}
+
+      {/* 4-Digit Security PIN Modal for WhatsApp Numbers access */}
+      <WhatsAppPinModal
+        isOpen={isPinModalOpen}
+        onSuccess={() => {
+          setIsPinModalOpen(false);
+          setCurrentTab('whatsapp');
+          setIsMobileOpen(false);
+        }}
+        onClose={() => setIsPinModalOpen(false)}
+      />
     </>
   );
 };

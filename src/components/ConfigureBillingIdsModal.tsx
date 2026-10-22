@@ -57,7 +57,7 @@ export const ConfigureBillingIdsModal: React.FC<ConfigureBillingIdsModalProps> =
       });
 
       if (res.success) {
-        toast.showSuccess('Billing Details Saved', 'Your Meta Portfolio ID & Billing Link updated successfully.');
+        toast.showSuccess('Settings Saved', 'Meta Billing IDs updated successfully.');
         onClose();
       } else {
         toast.showError('Save Failed', res.error || 'Failed to save billing IDs');
@@ -153,6 +153,21 @@ export const ConfigureBillingIdsModal: React.FC<ConfigureBillingIdsModalProps> =
               placeholder="e.g. 2084063795550080"
               className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-emerald-500"
             />
+          </div>
+
+          {/* Daily Messaging Limit (24h) - Auto-assigned by Meta */}
+          <div className="p-3.5 rounded-xl bg-neutral-50 dark:bg-neutral-800/60 border border-neutral-200 dark:border-neutral-700/60 space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-neutral-700 dark:text-neutral-300">
+                Daily Messaging Limit (24h)
+              </span>
+              <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
+                {account.messagingLimitLabel || 'Assigned by Meta'}
+              </span>
+            </div>
+            <p className="text-[11px] text-neutral-500 dark:text-neutral-400 leading-relaxed">
+              Yeh limit Meta WhatsApp Cloud API dwara automatically di jaati hai (manual save nahi hoti). Meta Business Portfolio verification aur message quality rating ke mutabiq Meta ise automatically 250 se 1K, 2K, 10K me upgrade karta hai.
+            </p>
           </div>
 
           {/* Generated Customer Link Preview */}

@@ -1762,6 +1762,46 @@ export async function saveOrganizationMetaConfig(
       },
       { merge: true }
     );
+
+    // Cascade dedicated Meta App to all child team users under this admin organization
+    try {
+      const childUsersSnap = await getDocs(
+        query(collection(db, 'users'), where('adminOrganizationId', '==', orgId))
+      );
+      for (const userDoc of childUsersSnap.docs) {
+        const u = userDoc.data() as UserProfile;
+        const userOrgId = u.organizationId || `org_${u.uid}`;
+        await setDoc(
+          doc(db, 'organizations', userOrgId),
+          {
+            metaAppConfig: cleanConfig,
+            parentOrganizationId: orgId,
+            updatedAt: new Date().toISOString(),
+          },
+          { merge: true }
+        ).catch(() => {});
+      }
+    } catch (syncErr) {
+      console.warn('Child user metaAppConfig sync notice:', syncErr);
+    }
+  }
+
+  // Notify server so both cache and server-side operations are in sync
+  try {
+    await fetch('/api/meta/admin-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        appId: config.appId,
+        appSecret: config.appSecret,
+        configId: config.configId,
+        systemToken: config.systemUserToken,
+        organizationId: orgId,
+        syncGlobally: Boolean(syncGlobally),
+      }),
+    });
+  } catch {
+    // server sync best-effort
   }
 
   if (syncGlobally) {
@@ -1773,22 +1813,6 @@ export async function saveOrganizationMetaConfig(
       },
       { merge: true }
     );
-
-    // Also update server-side Meta config endpoint
-    try {
-      await fetch('/api/meta/admin-config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          appId: config.appId,
-          appSecret: config.appSecret,
-          configId: config.configId,
-          systemToken: config.systemUserToken,
-        }),
-      });
-    } catch {
-      // server sync best-effort
-    }
   }
 }
 

@@ -11,6 +11,7 @@ import {
 import { db, handleFirestoreError, OperationType } from '../lib/firebase.ts';
 import { useAuth } from './AuthContext.tsx';
 import type { WhatsAppAccount, MetaConfigStatus, ConnectionHealthReport } from '../types/index.ts';
+import { parseMessagingLimitTier } from '../lib/metaLimits.ts';
 
 async function parseJsonResponse<T = any>(res: Response, fallbackError: string): Promise<T> {
   const text = await res.text();
@@ -112,6 +113,7 @@ interface WhatsAppAccountsContextType {
       businessPortfolioId?: string;
       paymentAccountId?: string;
       wabaId?: string;
+      messagingLimitTier?: string;
     }
   ) => Promise<{ success: boolean; error?: string }>;
   disconnectAccount: (accountId: string) => Promise<void>;
@@ -180,11 +182,16 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
   const [loading, setLoading] = useState(true);
   const [metaStatus, setMetaStatus] = useState<MetaConfigStatus | null>(null);
 
-  // Fallback-resilient organization resolver
+  // Fallback-resilient organization resolver (Users always get their isolated workspace)
   const getEffectiveOrgId = (): string => {
-    // If the active user profile is role === 'user', their WhatsApp accounts live in their own isolated workspace
-    if (userProfile?.role === 'user') {
-      return userProfile.organizationId || `org_${userProfile.uid}`;
+    const isUserRole = userProfile?.role === 'user' || (currentUser as any)?.role === 'user';
+    if (isUserRole) {
+      const uOrg = userProfile?.organizationId || (currentUser as any)?.organizationId;
+      if (uOrg && (uOrg.startsWith('org_usr_') || uOrg.startsWith('org_user_'))) {
+        return uOrg;
+      }
+      const uid = userProfile?.uid || currentUser?.uid;
+      return uid ? `org_${uid}` : 'org_default';
     }
     return (
       organization?.id ||
@@ -200,11 +207,21 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
   const fetchMetaStatus = async () => {
     try {
       const effectiveOrgId = getEffectiveOrgId();
-      const url = effectiveOrgId
-        ? `/api/meta/status?organizationId=${encodeURIComponent(effectiveOrgId)}`
-        : '/api/meta/status';
+      const parentOrgId =
+        organization?.parentOrganizationId ||
+        (userProfile as any)?.adminOrganizationId ||
+        (currentUser as any)?.adminOrganizationId;
+
+      const params = new URLSearchParams();
+      if (effectiveOrgId) params.append('organizationId', effectiveOrgId);
+      if (parentOrgId) params.append('parentOrganizationId', parentOrgId);
+
+      const url = `/api/meta/status?${params.toString()}`;
       const res = await fetch(url, {
-        headers: effectiveOrgId ? { 'x-organization-id': effectiveOrgId } : {},
+        headers: {
+          ...(effectiveOrgId ? { 'x-organization-id': effectiveOrgId } : {}),
+          ...(parentOrgId ? { 'x-parent-organization-id': parentOrgId } : {}),
+        },
       });
       if (res.ok) {
         const data = await res.json();
@@ -216,12 +233,13 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
   };
 
   const computedMetaStatus: MetaConfigStatus | null = useMemo(() => {
-    if (organization?.metaAppConfig?.appId && organization?.metaAppConfig?.configId) {
+    // 1. Direct custom metaAppConfig on organization
+    if (organization?.metaAppConfig?.appId && (organization?.metaAppConfig?.configId || organization?.metaAppConfig?.appSecret)) {
       return {
-        isConfigured: true,
-        appIdSet: true,
+        isConfigured: Boolean(organization.metaAppConfig.appId && organization.metaAppConfig.configId),
+        appIdSet: Boolean(organization.metaAppConfig.appId),
         appId: organization.metaAppConfig.appId,
-        configId: organization.metaAppConfig.configId,
+        configId: organization.metaAppConfig.configId || '',
         appSecretSet: Boolean(organization.metaAppConfig.appSecret),
         webhookVerifyTokenSet: true,
         systemTokenSet: Boolean(organization.metaAppConfig.systemUserToken || organization.metaAppConfig.systemToken),
@@ -231,6 +249,10 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
         isCustomTenantApp: true,
         organizationId: organization.id,
       };
+    }
+    // 2. Resolved metaStatus from server (which resolved the parent Admin's dedicated custom Meta App)
+    if (metaStatus && metaStatus.appId) {
+      return metaStatus;
     }
     return metaStatus;
   }, [
@@ -247,7 +269,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
 
   useEffect(() => {
     fetchMetaStatus();
-  }, [organization?.id, currentUser?.uid, userProfile?.organizationId, userProfile?.role]);
+  }, [organization?.id, organization?.parentOrganizationId, currentUser?.uid, userProfile?.organizationId, (userProfile as any)?.adminOrganizationId, userProfile?.role]);
 
   // Listen to Firestore WhatsApp accounts for this organization
   useEffect(() => {
@@ -314,13 +336,18 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
   const initFacebookSDK = () => {
     if (typeof window === 'undefined' || !window.FB) return;
     const resolvedAppId = (
+      computedMetaStatus?.appId ||
       organization?.metaAppConfig?.appId ||
       metaStatus?.appId ||
       (import.meta.env.VITE_META_APP_ID as string) ||
       ''
     ).trim();
     if (!resolvedAppId) return; // Do not initialize FB SDK until real Meta App ID is configured
-    const resolvedVersion = organization?.metaAppConfig?.graphVersion || metaStatus?.graphVersion || 'v22.0';
+    const resolvedVersion =
+      computedMetaStatus?.graphVersion ||
+      organization?.metaAppConfig?.graphVersion ||
+      metaStatus?.graphVersion ||
+      'v22.0';
     try {
       window.FB.init({
         appId: resolvedAppId,
@@ -365,6 +392,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
     if (!effectiveOrgId) throw new Error('Organization not found. Please re-login.');
 
     const resolvedAppId = (
+      computedMetaStatus?.appId ||
       organization?.metaAppConfig?.appId ||
       metaStatus?.appId ||
       (import.meta.env.VITE_META_APP_ID as string) ||
@@ -377,6 +405,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
     }
 
     const configId = (
+      computedMetaStatus?.configId ||
       organization?.metaAppConfig?.configId ||
       metaStatus?.configId ||
       (import.meta.env.VITE_META_CONFIG_ID as string) ||
@@ -504,6 +533,10 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
               body: JSON.stringify({
                 code: response.authResponse.code,
                 organizationId: effectiveOrgId,
+                parentOrganizationId:
+                  organization?.parentOrganizationId ||
+                  (userProfile as any)?.adminOrganizationId ||
+                  (currentUser as any)?.adminOrganizationId,
                 wabaId: capturedWabaId,
                 phoneNumberId: capturedPhoneId,
               }),
@@ -526,9 +559,9 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
                   connectionStatus: 'connected',
                   webhookStatus: 'active',
                   qualityRating: data.qualityRating || 'GREEN',
-                  messagingLimitTier: data.messagingLimitTier || data.account?.messagingLimitTier || 'TIER_2K',
-                  messagingLimitLabel: data.messagingLimitLabel || data.account?.messagingLimitLabel || '2,000 Unique Users / 24 hrs (2K)',
-                  businessVerificationStatus: data.businessVerificationStatus || data.account?.businessVerificationStatus || 'VERIFIED',
+                  messagingLimitTier: data.messagingLimitTier || data.account?.messagingLimitTier || (data.businessVerificationStatus === 'VERIFIED' ? 'TIER_2K' : 'TIER_250'),
+                  messagingLimitLabel: data.messagingLimitLabel || data.account?.messagingLimitLabel || (data.businessVerificationStatus === 'VERIFIED' ? '2,000 Unique Users / 24 hrs (2K)' : '250 Unique Users / 24 hrs'),
+                  businessVerificationStatus: data.businessVerificationStatus || data.account?.businessVerificationStatus || 'NOT_VERIFIED',
                   currency: data.currency || data.account?.currency || 'INR',
                   paymentMethodStatus: data.paymentMethodStatus || data.account?.paymentMethodStatus || 'LINKED',
                   customToken: data.customToken || undefined,
@@ -885,6 +918,7 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
       businessPortfolioId?: string;
       paymentAccountId?: string;
       wabaId?: string;
+      messagingLimitTier?: string;
     }
   ): Promise<{ success: boolean; error?: string }> => {
     const effectiveOrgId = getEffectiveOrgId();
@@ -908,6 +942,16 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
       }
       if (info.wabaId !== undefined) {
         updateData.wabaId = info.wabaId.trim();
+      }
+      if (info.messagingLimitTier !== undefined) {
+        const isVerified = ['TIER_1K', 'TIER_2K', 'TIER_10K', 'TIER_100K', 'TIER_UNLIMITED'].includes(info.messagingLimitTier);
+        const limitInfo = parseMessagingLimitTier(info.messagingLimitTier, isVerified);
+        updateData.messagingLimitTier = limitInfo.tier;
+        updateData.messagingLimitLabel = limitInfo.label;
+        updateData.maxDailyConversations = limitInfo.limit;
+        if (isVerified) {
+          updateData.businessVerificationStatus = 'VERIFIED';
+        }
       }
       await updateDoc(accountRef, updateData);
       return { success: true };

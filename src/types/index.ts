@@ -100,6 +100,8 @@ export interface Organization {
   id: string;
   name: string;
   ownerId: string;
+  adminId?: string;
+  parentOrganizationId?: string;
   status: 'active' | 'suspended';
   metaAppConfig?: OrganizationMetaConfig;
   subscription?: UserSubscription;

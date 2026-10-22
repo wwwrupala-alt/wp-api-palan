@@ -12,7 +12,7 @@ import {
   deleteDoc,
 } from 'firebase/firestore';
 import { serverDb } from './serverDb.ts';
-import { executeCampaignDispatchCore } from './metaService.ts';
+import { executeCampaignDispatchCore, getEffectiveMetaConfig } from './metaService.ts';
 
 let dripInterval: any = null;
 let isProcessingDrip = false;
@@ -144,22 +144,49 @@ export async function checkAndExecuteDripCampaigns(): Promise<void> {
           continue;
         }
 
+        // Resolve active WhatsApp Account token
+        let resolvedToken = camp.customToken;
+        if (!resolvedToken && phoneNumberId) {
+          try {
+            const accSnap = await getDoc(doc(serverDb, `organizations/${orgId}/whatsappAccounts/${phoneNumberId}`));
+            if (accSnap.exists()) {
+              const accData = accSnap.data();
+              resolvedToken = accData.customToken || accData.permanentToken || accData.userAccessToken;
+            }
+          } catch (tokErr) {
+            console.warn('[DripScheduler] Could not fetch account for token:', tokErr);
+          }
+        }
+        if (!resolvedToken) {
+          try {
+            const orgMetaConfig = await getEffectiveMetaConfig(orgId);
+            resolvedToken = orgMetaConfig.systemToken;
+          } catch (cfgErr) {
+            console.warn('[DripScheduler] Could not fetch org meta config for token:', cfgErr);
+          }
+        }
+
         let dispatchSuccess = false;
         let errorMessage = '';
 
         try {
           console.log(`[DripScheduler] Dispatching Step ${currentStepNum} ("${currentStep.title}") to ${sub.phone}...`);
-          await executeCampaignDispatchCore({
+          const dispatchRes = await executeCampaignDispatchCore({
             phoneNumberId,
             template,
             recipients: [recipient],
             variableValues: recipient.variableValues,
-            customToken: camp.customToken,
+            customToken: resolvedToken,
             campaignId: `${campaignId}_step_${currentStepNum}`,
             campaignName: `${camp.name} - Step ${currentStepNum}`,
             organizationId: orgId,
           });
-          dispatchSuccess = true;
+
+          dispatchSuccess = (dispatchRes?.stats?.sent || 0) > 0;
+          if (!dispatchSuccess && dispatchRes?.errors?.length > 0) {
+            errorMessage = dispatchRes.errors[0]?.error || 'Failed to dispatch message';
+            console.warn(`[DripScheduler] Dispatch returned 0 sent messages for ${sub.phone}:`, errorMessage);
+          }
         } catch (dispatchErr: any) {
           errorMessage = dispatchErr?.message || 'Dispatch failed';
           console.error(`[DripScheduler] Failed to dispatch step ${currentStepNum} to ${sub.phone}:`, dispatchErr);
@@ -176,50 +203,62 @@ export async function checkAndExecuteDripCampaigns(): Promise<void> {
 
         const updatedHistory = [...(sub.stepHistory || []), newHistoryItem];
 
-        // Find next step
-        const nextStepNum = currentStepNum + 1;
-        const nextStep = camp.steps.find((s: any) => s.stepNumber === nextStepNum);
+        if (dispatchSuccess) {
+          // Find next step
+          const nextStepNum = currentStepNum + 1;
+          const nextStep = camp.steps.find((s: any) => s.stepNumber === nextStepNum);
 
-        if (nextStep) {
-          const delayUnit = nextStep.delayUnit || 'hours';
-          const delayVal = Number(nextStep.delayValue) || 1;
-          const delayMs =
-            delayUnit === 'minutes'
-              ? delayVal * 60 * 1000
-              : delayUnit === 'hours'
-              ? delayVal * 3600 * 1000
-              : delayVal * 86400 * 1000;
+          if (nextStep) {
+            const delayUnit = nextStep.delayUnit || 'hours';
+            const delayVal = Number(nextStep.delayValue) || 1;
+            const delayMs =
+              delayUnit === 'minutes'
+                ? delayVal * 60 * 1000
+                : delayUnit === 'hours'
+                ? delayVal * 3600 * 1000
+                : delayVal * 86400 * 1000;
 
-          const nextExecutionAt = new Date(Date.now() + delayMs).toISOString();
+            const nextExecutionAt = new Date(Date.now() + delayMs).toISOString();
 
-          await updateDoc(subDoc.ref, {
-            currentStep: nextStepNum,
-            lastStepSentAt: nowIso,
-            nextExecutionAt,
-            stepHistory: updatedHistory,
-            updatedAt: nowIso,
-          }).catch(() => {});
+            await updateDoc(subDoc.ref, {
+              currentStep: nextStepNum,
+              lastStepSentAt: nowIso,
+              nextExecutionAt,
+              stepHistory: updatedHistory,
+              updatedAt: nowIso,
+            }).catch(() => {});
+          } else {
+            // Completed entire sequence
+            await updateDoc(subDoc.ref, {
+              status: 'completed',
+              completedAt: nowIso,
+              lastStepSentAt: nowIso,
+              nextExecutionAt: null,
+              stepHistory: updatedHistory,
+              updatedAt: nowIso,
+            }).catch(() => {});
+
+            await updateDoc(dripDoc.ref, {
+              completedSubscribers: (camp.completedSubscribers || 0) + 1,
+              activeSubscribers: Math.max(0, (camp.activeSubscribers || 1) - 1),
+              updatedAt: nowIso,
+            }).catch(() => {});
+          }
         } else {
-          // Completed entire sequence
+          // If dispatch failed, DO NOT skip step! Record failure and retry in 1 minute
           await updateDoc(subDoc.ref, {
-            status: 'completed',
-            completedAt: nowIso,
-            lastStepSentAt: nowIso,
-            nextExecutionAt: null,
+            nextExecutionAt: new Date(Date.now() + 60000).toISOString(),
             stepHistory: updatedHistory,
-            updatedAt: nowIso,
-          }).catch(() => {});
-
-          await updateDoc(dripDoc.ref, {
-            completedSubscribers: (camp.completedSubscribers || 0) + 1,
-            activeSubscribers: Math.max(0, (camp.activeSubscribers || 1) - 1),
+            lastError: errorMessage,
             updatedAt: nowIso,
           }).catch(() => {});
         }
 
         // Update step stats inside campaign doc
         try {
-          const updatedSteps = camp.steps.map((st: any) => {
+          const freshCampSnap = await getDoc(dripDoc.ref);
+          const freshCamp = freshCampSnap.data() || camp;
+          const updatedSteps = (freshCamp.steps || camp.steps).map((st: any) => {
             if (st.stepNumber === currentStepNum) {
               const curStats = st.stats || { sent: 0, delivered: 0, read: 0, failed: 0 };
               return {
@@ -234,7 +273,7 @@ export async function checkAndExecuteDripCampaigns(): Promise<void> {
             return st;
           });
 
-          const currentCampStats = camp.stats || { totalMessagesSent: 0, delivered: 0, read: 0, failed: 0 };
+          const currentCampStats = freshCamp.stats || { totalMessagesSent: 0, delivered: 0, read: 0, failed: 0 };
           await updateDoc(dripDoc.ref, {
             steps: updatedSteps,
             stats: {

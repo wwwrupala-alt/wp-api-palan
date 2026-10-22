@@ -1,8 +1,10 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { getMetaConfig, addWebhookLog } from './metaService.ts';
+import { getMetaConfig, getEffectiveMetaConfig, addWebhookLog } from './metaService.ts';
 import { parseMessagingLimitTier } from '../lib/metaLimits.ts';
+import { serverDb } from './serverDb.ts';
+import { doc, getDoc } from 'firebase/firestore';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -185,37 +187,53 @@ export async function fetchAndSyncMetaAccount(params: {
   error?: string;
 }> {
   const { organizationId, phoneNumberId, wabaId, pin, fallbackName, fallbackPhone } = params;
-  const config = getMetaConfig();
-  const token = params.token || config.systemToken;
 
   if (!organizationId) {
     return { success: false, firestoreUpdated: false, error: 'organizationId is required to sync account' };
   }
 
-  let resolvedPhoneId = (phoneNumberId || '').trim();
-  let resolvedWabaId = (wabaId || '').trim();
-  let resolvedDisplayPhone = fallbackPhone || resolvedPhoneId;
-  let resolvedBusinessName = fallbackName || 'WhatsApp Business';
-  let resolvedQualityRating: 'GREEN' | 'YELLOW' | 'RED' | 'UNKNOWN' = 'GREEN';
-  let resolvedMessagingLimitTier = 'TIER_250';
-  let resolvedThroughput = 'STANDARD';
-  let resolvedCodeVerification = 'VERIFIED';
-  let resolvedBusinessVerificationStatus = 'NOT_VERIFIED';
-  let resolvedAccountReviewStatus = 'APPROVED';
-  let resolvedNameStatus = 'APPROVED';
-  let resolvedBusinessPortfolioId = '';
-  let resolvedBusinessPortfolioName = '';
-  let resolvedCurrency = 'INR';
-  let resolvedPrimaryFundingId = '';
-  let resolvedPaymentMethodStatus: 'LINKED' | 'NOT_SET' = 'NOT_SET';
+  const config = await getEffectiveMetaConfig(organizationId);
+  const token = (params.token || config.systemToken || '').trim();
+
+  // Read existing account data from Firestore first so we never wipe out existing valid state or downgrade limit
+  let existingAccount: Record<string, any> | null = null;
+  const initialPhoneId = (phoneNumberId || '').trim();
+  if (organizationId && initialPhoneId) {
+    try {
+      const snap = await getDoc(doc(serverDb, 'organizations', organizationId, 'whatsappAccounts', initialPhoneId));
+      if (snap.exists()) {
+        existingAccount = snap.data();
+      }
+    } catch (e) {
+      console.warn('[MetaSyncService] Could not read existing account data from Firestore:', e);
+    }
+  }
+
+  let resolvedPhoneId = initialPhoneId || existingAccount?.phoneNumberId || '';
+  let resolvedWabaId = (wabaId || existingAccount?.wabaId || '').trim();
+  let resolvedDisplayPhone = fallbackPhone || existingAccount?.displayPhoneNumber || resolvedPhoneId;
+  let resolvedBusinessName = fallbackName || existingAccount?.verifiedName || existingAccount?.businessName || 'WhatsApp Business';
+  let resolvedQualityRating: 'GREEN' | 'YELLOW' | 'RED' | 'UNKNOWN' = existingAccount?.qualityRating || 'GREEN';
+  let resolvedMessagingLimitTier = existingAccount?.messagingLimitTier || '';
+  let resolvedThroughput = existingAccount?.throughputLevel || 'STANDARD';
+  let resolvedCodeVerification = existingAccount?.codeVerificationStatus || 'VERIFIED';
+  let resolvedBusinessVerificationStatus = existingAccount?.businessVerificationStatus || 'NOT_VERIFIED';
+  let resolvedAccountReviewStatus = existingAccount?.accountReviewStatus || 'APPROVED';
+  let resolvedNameStatus = existingAccount?.nameStatus || 'APPROVED';
+  let resolvedBusinessPortfolioId = existingAccount?.businessPortfolioId || '';
+  let resolvedBusinessPortfolioName = existingAccount?.businessPortfolioName || '';
+  let resolvedCurrency = existingAccount?.currency || 'INR';
+  let resolvedPrimaryFundingId = existingAccount?.primaryFundingId || '';
+  let resolvedPaymentMethodStatus: 'LINKED' | 'NOT_SET' = existingAccount?.paymentMethodStatus || 'NOT_SET';
   let tokenValid = false;
 
   // 1. If token is available, query Meta Graph API live
   if (token) {
     try {
       // Step A: If Phone Number ID is provided, query it directly
+      // Note: Do NOT query 'whatsapp_business_account' on phone ID as it causes OAuthException #100 on newer Graph APIs
       if (resolvedPhoneId) {
-        const phoneUrl = `https://graph.facebook.com/${config.graphVersion}/${resolvedPhoneId}?fields=id,verified_name,display_phone_number,quality_rating,code_verification_status,messaging_limit_tier,throughput,status,name_status,whatsapp_business_account&access_token=${token}`;
+        const phoneUrl = `https://graph.facebook.com/${config.graphVersion}/${resolvedPhoneId}?fields=id,verified_name,display_phone_number,quality_rating,code_verification_status,messaging_limit_tier,throughput,status,name_status&access_token=${token}`;
         const phoneRes = await fetch(phoneUrl);
         const phoneData = await phoneRes.json();
 
@@ -238,16 +256,13 @@ export async function fetchAndSyncMetaAccount(params: {
           if (phoneData.code_verification_status) {
             resolvedCodeVerification = phoneData.code_verification_status;
           }
-
-          if (phoneData.whatsapp_business_account?.id) {
-            resolvedWabaId = phoneData.whatsapp_business_account.id;
-          }
         }
       }
 
-      // Step B: If WABA ID is known, query WABA details for official business name, verification, and payment funding
+      // Step B: If WABA ID is known, query WABA details for official business name, verification, and currency
+      // Note: Do NOT include 'primary_funding_id' in main query as it requires WhatsApp Business Solution Provider (BSP) permissions
       if (resolvedWabaId) {
-        const wabaUrl = `https://graph.facebook.com/${config.graphVersion}/${resolvedWabaId}?fields=id,name,timezone_id,currency,message_template_namespace,account_review_status,business_verification_status,owner_business_info,primary_funding_id,purchase_order_number&access_token=${token}`;
+        const wabaUrl = `https://graph.facebook.com/${config.graphVersion}/${resolvedWabaId}?fields=id,name,timezone_id,currency,message_template_namespace,account_review_status,business_verification_status,owner_business_info,purchase_order_number&access_token=${token}`;
         const wabaRes = await fetch(wabaUrl);
         const wabaData = await wabaRes.json();
 
@@ -259,10 +274,6 @@ export async function fetchAndSyncMetaAccount(params: {
 
           if (wabaData.currency) {
             resolvedCurrency = wabaData.currency;
-          }
-          if (wabaData.primary_funding_id) {
-            resolvedPrimaryFundingId = wabaData.primary_funding_id;
-            resolvedPaymentMethodStatus = 'LINKED';
           }
           if (wabaData.account_review_status) {
             resolvedAccountReviewStatus = String(wabaData.account_review_status).toUpperCase();
@@ -285,9 +296,23 @@ export async function fetchAndSyncMetaAccount(params: {
             }
           }
 
+          // Optional safe check for primary funding ID in an isolated try-catch so BSP errors don't fail WABA sync
+          try {
+            const fundRes = await fetch(`https://graph.facebook.com/${config.graphVersion}/${resolvedWabaId}?fields=primary_funding_id&access_token=${token}`);
+            if (fundRes.ok) {
+              const fundData = await fundRes.json();
+              if (fundData.primary_funding_id) {
+                resolvedPrimaryFundingId = fundData.primary_funding_id;
+                resolvedPaymentMethodStatus = 'LINKED';
+              }
+            }
+          } catch {
+            // BSP-only field, ignore error
+          }
+
           // If phone number ID was not set, fetch primary phone from WABA
           if (!resolvedPhoneId) {
-            const phonesUrl = `https://graph.facebook.com/${config.graphVersion}/${resolvedWabaId}/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating,name_status&access_token=${token}`;
+            const phonesUrl = `https://graph.facebook.com/${config.graphVersion}/${resolvedWabaId}/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating,name_status,messaging_limit_tier&access_token=${token}`;
             const phonesRes = await fetch(phonesUrl);
             const phonesData = await phonesRes.json();
 
@@ -299,6 +324,9 @@ export async function fetchAndSyncMetaAccount(params: {
               resolvedQualityRating = (primaryPhone.quality_rating as 'GREEN' | 'YELLOW' | 'RED') || 'GREEN';
               if (primaryPhone.name_status) {
                 resolvedNameStatus = String(primaryPhone.name_status).toUpperCase();
+              }
+              if (primaryPhone.messaging_limit_tier) {
+                resolvedMessagingLimitTier = primaryPhone.messaging_limit_tier;
               }
             }
           }
@@ -313,10 +341,10 @@ export async function fetchAndSyncMetaAccount(params: {
         resolvedBusinessVerificationStatus = 'VERIFIED';
       }
 
-      // If business verification is VERIFIED, messaging tier is 2K (2,000 / 24h)
+      // If business verification is VERIFIED and no tier is explicitly lower, default to Tier 2K
       if (
         resolvedBusinessVerificationStatus === 'VERIFIED' &&
-        (resolvedMessagingLimitTier === 'TIER_250' || resolvedMessagingLimitTier === 'TIER_NOT_SET' || !resolvedMessagingLimitTier)
+        (!resolvedMessagingLimitTier || resolvedMessagingLimitTier === 'TIER_250' || resolvedMessagingLimitTier === 'TIER_NOT_SET')
       ) {
         resolvedMessagingLimitTier = 'TIER_2K';
       }
@@ -366,6 +394,11 @@ export async function fetchAndSyncMetaAccount(params: {
     resolvedWabaId = `waba_${resolvedPhoneId.slice(-6) || 'direct'}`;
   }
 
+  // If no tier is determined from Meta, retain existing account tier or fallback safely
+  if (!resolvedMessagingLimitTier) {
+    resolvedMessagingLimitTier = existingAccount?.messagingLimitTier || 'TIER_250';
+  }
+
   const nowIso = new Date().toISOString();
   const accountDocumentId = resolvedPhoneId;
   const limitInfo = parseMessagingLimitTier(
@@ -401,9 +434,11 @@ export async function fetchAndSyncMetaAccount(params: {
 
   if (token) {
     accountDocData.customToken = token;
+  } else if (existingAccount?.customToken) {
+    accountDocData.customToken = existingAccount.customToken;
   }
-  if (pin) {
-    accountDocData.pin = pin;
+  if (pin || existingAccount?.pin) {
+    accountDocData.pin = pin || existingAccount?.pin;
   }
 
   // 2. Direct Backend update to Firestore `whatsappAccounts` collection

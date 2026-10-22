@@ -230,53 +230,76 @@ export async function ensureDefaultAccounts(): Promise<void> {
       }
     }
 
-    // 4. Ensure each role === 'user' has their own isolated blank workspace organization (not sharing admin's org)
+    // 4. Ensure each role === 'user' has their own isolated blank workspace organization (never sharing admin's org)
     try {
       const usersSnap = await getDocs(collection(serverDb, 'users'));
       for (const d of usersSnap.docs) {
         const u = d.data() as UserProfile;
         if (u.role === 'user') {
           const userOrgId = `org_${u.uid}`;
-          // If the user's organizationId is still the admin's organizationId
-          if (u.organizationId && u.organizationId !== userOrgId) {
-            const adminOrgId = u.organizationId;
-            // Get admin org for metaAppConfig
-            const adminOrgSnap = await getDoc(doc(serverDb, 'organizations', adminOrgId));
-            const adminOrgData = adminOrgSnap.exists() ? (adminOrgSnap.data() as Organization) : null;
-            
-            // Check if user's own organization exists
-            const userOrgSnap = await getDoc(doc(serverDb, 'organizations', userOrgId));
-            if (!userOrgSnap.exists()) {
-              await setDoc(doc(serverDb, 'organizations', userOrgId), {
-                id: userOrgId,
-                name: `${u.displayName || 'User'}'s Workspace`,
-                ownerId: u.uid,
-                parentOrganizationId: adminOrgId,
-                adminId: u.managedByAdminId || adminOrgData?.ownerId || '',
-                metaAppConfig: adminOrgData?.metaAppConfig || undefined,
-                status: u.subscription?.status || 'active',
-                subscription: {
-                  planName: u.subscription?.planName || 'Team Member',
-                  maxWhatsAppNumbers: u.subscription?.maxWhatsAppNumbers || 1,
-                  maxUsers: 1,
-                  validityDays: u.subscription?.validityDays || 30,
-                  startDate: new Date().toISOString(),
-                  expiresAt: u.subscription?.expiresAt,
-                  status: u.subscription?.status || 'active',
-                  features: u.subscription?.features || {},
-                },
-                createdAt: u.createdAt || new Date().toISOString(),
-                updatedAt: new Date().toISOString(),
-              });
+          let adminOrgId = (u as any).adminOrganizationId;
+          if (!adminOrgId && u.organizationId && u.organizationId !== userOrgId) {
+            adminOrgId = u.organizationId;
+          }
+          if (!adminOrgId && u.managedByAdminId) {
+            const adminSnap = await getDoc(doc(serverDb, 'users', u.managedByAdminId));
+            if (adminSnap.exists()) {
+              adminOrgId = adminSnap.data()?.organizationId;
             }
+          }
 
-            // Update user to point to their own organizationId and keep adminOrganizationId
+          // Fetch Admin's organization for metaAppConfig inheritance
+          let adminMetaConfig: any = undefined;
+          let adminOrgData: Organization | null = null;
+          if (adminOrgId) {
+            const adminOrgSnap = await getDoc(doc(serverDb, 'organizations', adminOrgId));
+            if (adminOrgSnap.exists()) {
+              adminOrgData = adminOrgSnap.data() as Organization;
+              adminMetaConfig = adminOrgData.metaAppConfig;
+            }
+          }
+
+          // Check if user's own organization exists
+          const userOrgSnap = await getDoc(doc(serverDb, 'organizations', userOrgId));
+          if (!userOrgSnap.exists()) {
+            await setDoc(doc(serverDb, 'organizations', userOrgId), {
+              id: userOrgId,
+              name: `${u.displayName || 'User'}'s Workspace`,
+              ownerId: u.uid,
+              parentOrganizationId: adminOrgId || '',
+              adminId: u.managedByAdminId || adminOrgData?.ownerId || '',
+              metaAppConfig: adminMetaConfig || undefined,
+              status: u.subscription?.status || 'active',
+              subscription: {
+                planName: u.subscription?.planName || 'Team Member',
+                maxWhatsAppNumbers: u.subscription?.maxWhatsAppNumbers || 1,
+                maxUsers: 1,
+                validityDays: u.subscription?.validityDays || 30,
+                startDate: new Date().toISOString(),
+                expiresAt: u.subscription?.expiresAt,
+                status: u.subscription?.status || 'active',
+                features: u.subscription?.features || {},
+              },
+              createdAt: u.createdAt || new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            });
+          } else if (adminMetaConfig && !userOrgSnap.data()?.metaAppConfig) {
+            // Populate Admin's dedicated Meta App into user's org if missing
+            await updateDoc(doc(serverDb, 'organizations', userOrgId), {
+              metaAppConfig: adminMetaConfig,
+              parentOrganizationId: adminOrgId || '',
+              updatedAt: new Date().toISOString(),
+            }).catch(() => {});
+          }
+
+          // Guarantee user document points strictly to their own userOrgId
+          if (u.organizationId !== userOrgId || (adminOrgId && (u as any).adminOrganizationId !== adminOrgId)) {
             await updateDoc(doc(serverDb, 'users', u.uid), {
               organizationId: userOrgId,
-              adminOrganizationId: adminOrgId,
+              adminOrganizationId: adminOrgId || '',
               managedByAdminId: u.managedByAdminId || adminOrgData?.ownerId || '',
             });
-            console.log(`[MultiTenant] Isolated user ${u.displayName} (${u.uid}) into clean workspace ${userOrgId}`);
+            console.log(`[MultiTenant] Strictly isolated user ${u.displayName} (${u.uid}) into clean workspace ${userOrgId}`);
           }
         }
       }
@@ -506,25 +529,71 @@ export async function handleTenantAuthLogin(req: Request, res: Response): Promis
     }
 
     // Account Status & Organization Verification
-    const orgId = (targetUser as UserProfile).organizationId || `org_${(targetUser as UserProfile).uid}`;
+    // Guarantee team users always reside in their own isolated workspace org_${uid}
+    let orgId = (targetUser as UserProfile).organizationId;
+    if (userRole === 'user') {
+      const properUserOrgId = `org_${(targetUser as UserProfile).uid}`;
+      if (!orgId || orgId !== properUserOrgId) {
+        const parentOrg = (targetUser as UserProfile).adminOrganizationId || orgId || '';
+        orgId = properUserOrgId;
+        (targetUser as any).organizationId = properUserOrgId;
+        (targetUser as any).adminOrganizationId = parentOrg;
+        await updateDoc(doc(serverDb, 'users', (targetUser as UserProfile).uid), {
+          organizationId: properUserOrgId,
+          adminOrganizationId: parentOrg,
+        }).catch(() => {});
+      }
+    } else if (!orgId) {
+      orgId = (targetUser as UserProfile).uid === 'master_admin_root' ? 'org_master_platform' : `org_${(targetUser as UserProfile).uid}`;
+    }
+
     let orgData: Organization | null = null;
     if (orgId) {
       const orgSnap = await getDoc(doc(serverDb, 'organizations', orgId));
       if (orgSnap.exists()) {
         orgData = { id: orgSnap.id, ...(orgSnap.data() as any) };
+        // If team user workspace is missing metaAppConfig, check and inherit from Admin's org
+        if (userRole === 'user' && orgData && !orgData.metaAppConfig) {
+          const parentAdminOrg = (targetUser as any).adminOrganizationId || orgData.parentOrganizationId;
+          if (parentAdminOrg) {
+            const adminOrgSnap = await getDoc(doc(serverDb, 'organizations', parentAdminOrg));
+            if (adminOrgSnap.exists() && adminOrgSnap.data()?.metaAppConfig) {
+              const inheritedConfig = adminOrgSnap.data()?.metaAppConfig;
+              if (orgData) orgData.metaAppConfig = inheritedConfig;
+              await updateDoc(doc(serverDb, 'organizations', orgId), {
+                metaAppConfig: inheritedConfig,
+                parentOrganizationId: parentAdminOrg,
+                updatedAt: new Date().toISOString(),
+              }).catch(() => {});
+            }
+          }
+        }
       } else {
+        // Resolve parent admin Meta config if available
+        let initialMetaConfig: any = undefined;
+        const parentAdminOrg = (targetUser as any).adminOrganizationId;
+        if (parentAdminOrg) {
+          const adminOrgSnap = await getDoc(doc(serverDb, 'organizations', parentAdminOrg));
+          if (adminOrgSnap.exists()) {
+            initialMetaConfig = adminOrgSnap.data()?.metaAppConfig;
+          }
+        }
+
         orgData = {
           id: orgId,
           name: (targetUser as UserProfile).displayName ? `${(targetUser as UserProfile).displayName}'s Workspace` : 'Workspace',
           ownerId: (targetUser as UserProfile).uid,
+          parentOrganizationId: (targetUser as any).adminOrganizationId || '',
+          adminId: (targetUser as any).managedByAdminId || '',
+          metaAppConfig: initialMetaConfig || undefined,
           status: 'active',
           subscription: {
-            planName: userRole === 'master_admin' ? 'Platform Super Admin' : 'Enterprise Unlimited',
-            maxWhatsAppNumbers: userRole === 'master_admin' ? 100 : 10,
-            maxUsers: userRole === 'master_admin' ? 1000 : 25,
+            planName: userRole === 'master_admin' ? 'Platform Super Admin' : userRole === 'user' ? 'Team Member' : 'Enterprise Unlimited',
+            maxWhatsAppNumbers: userRole === 'master_admin' ? 100 : userRole === 'user' ? 1 : 10,
+            maxUsers: userRole === 'master_admin' ? 1000 : userRole === 'user' ? 1 : 25,
             maxMonthlyBroadcasts: userRole === 'master_admin' ? 10000000 : 500000,
             maxContacts: 100000,
-            expiresAt: '2099-12-31T23:59:59.000Z',
+            expiresAt: (targetUser as any).subscription?.expiresAt || '2099-12-31T23:59:59.000Z',
             status: 'active',
           },
           createdAt: new Date().toISOString(),
@@ -1415,6 +1484,16 @@ export async function handleCreateAdminUser(req: Request, res: Response): Promis
       validityDays && Number(validityDays) > 0
         ? new Date(Date.now() + Number(validityDays) * 24 * 60 * 60 * 1000).toISOString()
         : undefined;
+
+    // Clear any residual whatsappAccounts or leftover subcollections so the new user starts 100% PURA BLANK & FRESH
+    try {
+      const leftoverAccs = await getDocs(collection(serverDb, `organizations/${userOrgId}/whatsappAccounts`));
+      for (const accDoc of leftoverAccs.docs) {
+        await deleteDoc(accDoc.ref).catch(() => {});
+      }
+    } catch (cleanErr) {
+      console.warn('[CreateUser] Account cleanup warning:', cleanErr);
+    }
 
     // 1. Create a brand-new, isolated organization workspace for this user (EMPTY subcollections = PURA BLANK NEW FRESH)
     await setDoc(doc(serverDb, 'organizations', userOrgId), {

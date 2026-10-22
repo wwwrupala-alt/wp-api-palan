@@ -22,6 +22,7 @@ import { AdminPage } from './pages/AdminPage.tsx';
 import { MasterAdminPage } from './pages/MasterAdminPage.tsx';
 import { TenantUsersPage } from './pages/TenantUsersPage.tsx';
 import { LegalPage } from './pages/LegalPage.tsx';
+import { WhatsAppPinModal } from './components/WhatsAppPinModal.tsx';
 import { Loader2, ArrowLeft, ShieldAlert } from 'lucide-react';
 
 const AppContent: React.FC = () => {
@@ -188,9 +189,21 @@ const AppContent: React.FC = () => {
           )}
           {currentTab === 'users' && (isAdmin || isMasterAdmin) && <TenantUsersPage />}
           {currentTab === 'inbox' && (isMasterAdmin || userProfile?.canAccessInbox !== false) && <InboxPage />}
-          {currentTab === 'whatsapp' && (
-            <WhatsAppAccountsPage onOpenConnectModal={() => setIsConnectModalOpen(true)} />
-          )}
+          {currentTab === 'whatsapp' &&
+            (sessionStorage.getItem('wa_numbers_unlocked') === 'true' ? (
+              <WhatsAppAccountsPage onOpenConnectModal={() => setIsConnectModalOpen(true)} />
+            ) : (
+              <WhatsAppPinModal
+                isOpen={true}
+                onSuccess={() => {
+                  // Force re-render once unlocked
+                  setCurrentTab('whatsapp');
+                }}
+                onClose={() => {
+                  setCurrentTab('dashboard');
+                }}
+              />
+            ))}
           {currentTab === 'contacts' && <ContactsPage />}
           {currentTab === 'templates' && <TemplatesPage />}
           {currentTab === 'campaigns' && (

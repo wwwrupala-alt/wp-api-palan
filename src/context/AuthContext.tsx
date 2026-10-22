@@ -126,7 +126,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const profile = userSnap.data() as UserProfile;
         setUserProfile(profile);
 
-        const targetOrgId = profile.organizationId || (user.uid === 'master_admin_root' ? 'org_master_platform' : `org_${user.uid}`);
+        let targetOrgId = profile.organizationId;
+        if (profile.role === 'user') {
+          targetOrgId =
+            profile.organizationId?.startsWith('org_usr_') || profile.organizationId?.startsWith('org_user_')
+              ? profile.organizationId
+              : `org_${user.uid}`;
+        } else if (!targetOrgId) {
+          targetOrgId = user.uid === 'master_admin_root' ? 'org_master_platform' : `org_${user.uid}`;
+        }
+
         const fallbackOrg: Organization = {
           id: targetOrgId,
           name: profile.displayName ? `${profile.displayName}'s Workspace` : 'Workspace',
@@ -183,14 +192,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       localStorage.setItem(STORAGE_LAST_ACTIVITY, String(now));
     }
 
-    // 1. Check if an impersonation session is active
+    // 1. Check if an impersonation session is active (Master Admin impersonating Admin OR Admin watching User)
     const savedImpersonation = localStorage.getItem('cw_impersonation_session');
     if (savedImpersonation) {
       try {
         const impData = JSON.parse(savedImpersonation);
-        if (impData.admin && impData.impersonator) {
-          setCurrentUser(impData.admin);
-          setUserProfile(impData.admin);
+        const watchedTarget = impData.admin || impData.user;
+        if (watchedTarget && impData.impersonator) {
+          setCurrentUser(watchedTarget);
+          setUserProfile(watchedTarget);
           setOrganization(impData.organization || null);
           setImpersonatedBy(impData.impersonator);
           setLoading(false);
@@ -207,6 +217,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       try {
         const parsed = JSON.parse(savedSession);
         if (parsed.uid) {
+          if (parsed.role === 'user') {
+            const properUserOrg = `org_${parsed.uid}`;
+            if (parsed.organizationId && !parsed.organizationId.startsWith('org_usr_') && !parsed.organizationId.startsWith('org_user_')) {
+              parsed.adminOrganizationId = parsed.organizationId;
+              parsed.organizationId = properUserOrg;
+            }
+          }
           setCurrentUser(parsed);
           setUserProfile(parsed);
           if (parsed.organizationId) {

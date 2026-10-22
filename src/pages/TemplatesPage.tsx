@@ -27,6 +27,7 @@ import {
   Shield,
   AlertTriangle,
   HelpCircle,
+  Phone,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -1045,6 +1046,8 @@ export const TemplatesPage: React.FC = () => {
                               >
                                 {b.type === 'URL' ? (
                                   <ExternalLink className="w-3 h-3 text-sky-500" />
+                                ) : b.type === 'PHONE_NUMBER' ? (
+                                  <Phone className="w-3 h-3 text-emerald-600" />
                                 ) : (
                                   <MessageSquare className="w-3 h-3 text-emerald-500" />
                                 )}

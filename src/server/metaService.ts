@@ -29,7 +29,7 @@ import {
   processWebhookStatusUpdate,
   processIncomingCustomerReply,
 } from './campaignAnalyticsService.ts';
-import type { CampaignRecipient } from '../types/index.ts';
+import type { CampaignRecipient, UserProfile, Organization } from '../types/index.ts';
 import { parseMessagingLimitTier } from '../lib/metaLimits.ts';
 
 // In-memory webhook event logs buffer and real-time observability metrics
@@ -177,15 +177,94 @@ export function getMetaConfig() {
 // Handler: Save Meta configuration from Admin
 export async function handleSaveAdminMetaConfig(req: Request, res: Response) {
   try {
-    const { appId, appSecret, configId, verifyToken, systemToken, graphVersion, appUrl } = req.body;
-    if (appId !== undefined) adminMetaConfigOverrides.appId = appId;
-    if (appSecret !== undefined) adminMetaConfigOverrides.appSecret = appSecret;
-    if (configId !== undefined) adminMetaConfigOverrides.configId = configId;
-    if (verifyToken !== undefined) adminMetaConfigOverrides.verifyToken = verifyToken;
-    if (systemToken !== undefined) adminMetaConfigOverrides.systemToken = systemToken;
-    if (graphVersion !== undefined) adminMetaConfigOverrides.graphVersion = graphVersion;
-    if (appUrl !== undefined) adminMetaConfigOverrides.appUrl = appUrl;
-    isMetaConfigLoadedFromDb = true;
+    const { appId, appSecret, configId, verifyToken, systemToken, graphVersion, appUrl, organizationId, syncGlobally } = req.body;
+
+    // 1. If syncing globally (Master Admin default)
+    if (syncGlobally) {
+      if (appId !== undefined) adminMetaConfigOverrides.appId = appId;
+      if (appSecret !== undefined) adminMetaConfigOverrides.appSecret = appSecret;
+      if (configId !== undefined) adminMetaConfigOverrides.configId = configId;
+      if (verifyToken !== undefined) adminMetaConfigOverrides.verifyToken = verifyToken;
+      if (systemToken !== undefined) adminMetaConfigOverrides.systemToken = systemToken;
+      if (graphVersion !== undefined) adminMetaConfigOverrides.graphVersion = graphVersion;
+      if (appUrl !== undefined) adminMetaConfigOverrides.appUrl = appUrl;
+      isMetaConfigLoadedFromDb = true;
+
+      try {
+        await setDoc(
+          doc(serverDb, 'system_config', 'meta_global'),
+          {
+            appId: appId || '',
+            appSecret: appSecret || '',
+            configId: configId || '',
+            systemToken: systemToken || '',
+            verifyToken: verifyToken || 'cloudwaba_verify_token_secure',
+            graphVersion: graphVersion || 'v22.0',
+            appUrl: appUrl || 'https://wp-api-palan.vercel.app',
+            updatedAt: new Date().toISOString(),
+          },
+          { merge: true }
+        );
+      } catch (e) {
+        console.warn('[MetaConfig] Failed to save meta_global in serverDb:', e);
+      }
+    }
+
+    // 2. If organizationId is provided, save dedicated Meta App to this Admin organization and cascade to child users
+    if (organizationId) {
+      const cleanCustomConfig: Record<string, any> = {
+        updatedAt: new Date().toISOString(),
+      };
+      if (appId !== undefined) cleanCustomConfig.appId = String(appId).trim();
+      if (appSecret !== undefined) cleanCustomConfig.appSecret = String(appSecret).trim();
+      if (configId !== undefined) cleanCustomConfig.configId = String(configId).trim();
+      if (verifyToken !== undefined) cleanCustomConfig.verifyToken = String(verifyToken).trim();
+      if (systemToken !== undefined) {
+        cleanCustomConfig.systemToken = String(systemToken).trim();
+        cleanCustomConfig.systemUserToken = String(systemToken).trim();
+      }
+      if (graphVersion !== undefined) cleanCustomConfig.graphVersion = String(graphVersion).trim();
+      if (appUrl !== undefined) cleanCustomConfig.appUrl = String(appUrl).trim();
+
+      try {
+        await setDoc(
+          doc(serverDb, 'organizations', organizationId),
+          {
+            metaAppConfig: cleanCustomConfig,
+            updatedAt: new Date().toISOString(),
+          },
+          { merge: true }
+        );
+
+        // Cascade update to all team users under this admin organization
+        const usersSnap = await getDocs(collection(serverDb, 'users'));
+        for (const userDoc of usersSnap.docs) {
+          const u = userDoc.data() as UserProfile;
+          if (
+            u.role === 'user' &&
+            (u.adminOrganizationId === organizationId ||
+              u.organizationId === organizationId ||
+              u.managedByAdminId === organizationId)
+          ) {
+            const userOrgId = u.organizationId && u.organizationId !== organizationId
+              ? u.organizationId
+              : `org_${u.uid}`;
+
+            await setDoc(
+              doc(serverDb, 'organizations', userOrgId),
+              {
+                metaAppConfig: cleanCustomConfig,
+                parentOrganizationId: organizationId,
+                updatedAt: new Date().toISOString(),
+              },
+              { merge: true }
+            ).catch(() => {});
+          }
+        }
+      } catch (err) {
+        console.warn('[MetaConfig] Error saving organization metaAppConfig in serverDb:', err);
+      }
+    }
 
     return res.json({
       success: true,
@@ -197,35 +276,99 @@ export async function handleSaveAdminMetaConfig(req: Request, res: Response) {
   }
 }
 
-// Multi-tenant resolution: Returns custom organization Meta credentials if saved, otherwise falls back to Master default
-export async function getEffectiveMetaConfig(organizationId?: string) {
+// Multi-tenant resolution: Returns custom organization Meta credentials if saved,
+// dynamically resolving parent Admin's dedicated Meta App if requested by a team user,
+// otherwise falls back to Master platform default
+export async function getEffectiveMetaConfig(organizationId?: string, parentOrgIdHint?: string) {
   const globalConfig = getMetaConfig();
-  if (!organizationId) {
+  if (!organizationId && !parentOrgIdHint) {
     return { ...globalConfig, isCustomTenantApp: false };
   }
 
   try {
-    const orgSnap = await getDoc(doc(serverDb, 'organizations', organizationId));
-    if (orgSnap.exists()) {
-      const orgData = orgSnap.data();
-      const custom = orgData?.metaAppConfig;
-      // If organization has custom appId and (configId or appSecret or systemUserToken)
-      if (custom && custom.appId && (custom.configId || custom.appSecret || custom.systemUserToken)) {
-        return {
-          appId: String(custom.appId || globalConfig.appId).trim(),
-          appSecret: String(custom.appSecret || globalConfig.appSecret).trim(),
-          configId: String(custom.configId || globalConfig.configId).trim(),
-          verifyToken: String(custom.verifyToken || globalConfig.verifyToken).trim(),
-          systemToken: String(custom.systemUserToken || custom.systemToken || globalConfig.systemToken).trim(),
-          graphVersion: String(custom.graphVersion || globalConfig.graphVersion).trim(),
-          appUrl: String(custom.appUrl || globalConfig.appUrl).trim(),
-          isConfigured: Boolean(
-            (custom.appId || globalConfig.appId) &&
-            (custom.configId || globalConfig.configId)
-          ),
-          isCustomTenantApp: true,
-          organizationName: orgData.name || organizationId,
-        };
+    let orgData: any = null;
+    let custom: any = null;
+
+    if (organizationId) {
+      const orgSnap = await getDoc(doc(serverDb, 'organizations', organizationId));
+      if (orgSnap.exists()) {
+        orgData = orgSnap.data();
+        custom = orgData?.metaAppConfig;
+      }
+    }
+
+    // 1. Direct check on custom organization credentials
+    if (custom && custom.appId && (custom.configId || custom.appSecret || custom.systemUserToken || custom.systemToken)) {
+      return {
+        appId: String(custom.appId || globalConfig.appId).trim(),
+        appSecret: String(custom.appSecret || globalConfig.appSecret).trim(),
+        configId: String(custom.configId || globalConfig.configId).trim(),
+        verifyToken: String(custom.verifyToken || globalConfig.verifyToken).trim(),
+        systemToken: String(custom.systemUserToken || custom.systemToken || globalConfig.systemToken).trim(),
+        graphVersion: String(custom.graphVersion || globalConfig.graphVersion).trim(),
+        appUrl: String(custom.appUrl || globalConfig.appUrl).trim(),
+        isConfigured: Boolean(
+          (custom.appId || globalConfig.appId) &&
+          (custom.configId || globalConfig.configId)
+        ),
+        isCustomTenantApp: true,
+        organizationName: orgData?.name || organizationId,
+      };
+    }
+
+    // 2. Multi-tier resolution: If this is a team user workspace, resolve parent Admin's dedicated Meta App!
+    let parentOrgId = parentOrgIdHint || orgData?.parentOrganizationId;
+    let adminId = orgData?.adminId;
+
+    if (!parentOrgId && organizationId) {
+      const cleanUserId = organizationId.startsWith('org_') ? organizationId.slice(4) : organizationId;
+      try {
+        const userSnap = await getDoc(doc(serverDb, 'users', cleanUserId));
+        if (userSnap.exists()) {
+          const uData = userSnap.data() as UserProfile;
+          parentOrgId = (uData as any).adminOrganizationId;
+          adminId = adminId || uData.managedByAdminId;
+        }
+      } catch (e) {}
+    }
+
+    if (!parentOrgId && adminId) {
+      try {
+        const adminSnap = await getDoc(doc(serverDb, 'users', adminId));
+        if (adminSnap.exists()) {
+          const aData = adminSnap.data() as UserProfile;
+          parentOrgId = aData.organizationId;
+        }
+      } catch (e) {}
+    }
+
+    // If parent Admin organization is resolved, load its dedicated Meta App
+    if (parentOrgId && parentOrgId !== organizationId) {
+      const parentOrgSnap = await getDoc(doc(serverDb, 'organizations', parentOrgId));
+      if (parentOrgSnap.exists()) {
+        const parentOrgData = parentOrgSnap.data() as any;
+        const parentCustom = parentOrgData?.metaAppConfig;
+        if (
+          parentCustom &&
+          parentCustom.appId &&
+          (parentCustom.configId || parentCustom.appSecret || parentCustom.systemUserToken || parentCustom.systemToken)
+        ) {
+          return {
+            appId: String(parentCustom.appId || globalConfig.appId).trim(),
+            appSecret: String(parentCustom.appSecret || globalConfig.appSecret).trim(),
+            configId: String(parentCustom.configId || globalConfig.configId).trim(),
+            verifyToken: String(parentCustom.verifyToken || globalConfig.verifyToken).trim(),
+            systemToken: String(parentCustom.systemUserToken || parentCustom.systemToken || globalConfig.systemToken).trim(),
+            graphVersion: String(parentCustom.graphVersion || globalConfig.graphVersion).trim(),
+            appUrl: String(parentCustom.appUrl || globalConfig.appUrl).trim(),
+            isConfigured: Boolean(
+              (parentCustom.appId || globalConfig.appId) &&
+              (parentCustom.configId || globalConfig.configId)
+            ),
+            isCustomTenantApp: true,
+            organizationName: parentOrgData.name || orgData?.name || organizationId,
+          };
+        }
       }
     }
   } catch (err) {
@@ -235,7 +378,7 @@ export async function getEffectiveMetaConfig(organizationId?: string) {
   return { ...globalConfig, isCustomTenantApp: false };
 }
 
-// Handler: Check Meta Configuration status (supports per-tenant custom Meta App or Master default)
+// Handler: Check Meta Configuration status (supports per-tenant custom Meta App, parent Admin dedicated Meta App, or Master default)
 export async function handleGetMetaStatus(req: Request, res: Response) {
   await loadMetaConfigFromDb();
   const orgId =
@@ -243,7 +386,11 @@ export async function handleGetMetaStatus(req: Request, res: Response) {
     (req.headers['x-organization-id'] as string) ||
     (req.query.orgId as string);
 
-  const config = await getEffectiveMetaConfig(orgId);
+  const parentOrgId =
+    (req.query.parentOrganizationId as string) ||
+    (req.headers['x-parent-organization-id'] as string);
+
+  const config = await getEffectiveMetaConfig(orgId, parentOrgId);
   res.json({
     isConfigured: config.isConfigured,
     appIdSet: Boolean(config.appId),
@@ -263,8 +410,14 @@ export async function handleGetMetaStatus(req: Request, res: Response) {
 // Handler: Meta Embedded Signup Code Exchange (uses Admin's dedicated Meta App or Master default)
 export async function handleEmbeddedSignupExchange(req: Request, res: Response) {
   try {
-    const { code, wabaId: passedWabaId, phoneNumberId: passedPhoneNumberId, organizationId } = req.body;
-    const config = await getEffectiveMetaConfig(organizationId);
+    const {
+      code,
+      wabaId: passedWabaId,
+      phoneNumberId: passedPhoneNumberId,
+      organizationId,
+      parentOrganizationId,
+    } = req.body;
+    const config = await getEffectiveMetaConfig(organizationId, parentOrganizationId);
 
     if (!config.appId || !config.appSecret) {
       return res.status(400).json({
@@ -946,26 +1099,54 @@ export async function handleCreateTemplate(req: Request, res: Response) {
             if (Object.keys(updated.example).length === 0) delete updated.example;
           }
         } else if (type === 'BUTTONS' && Array.isArray(comp.buttons)) {
-          // Sanitize buttons for Meta Cloud API limits:
-          // 1. Up to 3 buttons
-          // 2. Button text max 25 chars
-          // 3. URLs must be valid http/https
-          const validButtons = comp.buttons
+          // Sanitize buttons for Meta Cloud API specifications:
+          // 1. Max 1 PHONE_NUMBER button allowed per template
+          // 2. Max 2 URL buttons allowed per template
+          // 3. Up to 3 total buttons when mixing CTA & Quick Replies
+          // 4. Contiguous grouping: CTA buttons (URL, PHONE_NUMBER) must be grouped together (never interleaved with QUICK_REPLY)
+          // 5. Button text max 25 chars
+          let phoneCount = 0;
+          let urlCount = 0;
+
+          const rawList = comp.buttons
             .slice(0, 3)
-            .filter((b: any) => b && typeof b.text === 'string' && b.text.trim())
-            .map((b: any) => {
-              const bType = String(b.type || 'QUICK_REPLY').toUpperCase();
-              const text = String(b.text).trim().slice(0, 25);
-              if (bType === 'URL') {
+            .filter((b: any) => b && typeof b.text === 'string' && b.text.trim());
+
+          const validButtons: any[] = [];
+          for (const b of rawList) {
+            const bType = String(b.type || 'QUICK_REPLY').toUpperCase();
+            const text = String(b.text).trim().slice(0, 25);
+
+            if (bType === 'URL') {
+              if (urlCount < 2) {
+                urlCount++;
                 let url = String(b.url || 'https://example.com').trim();
                 if (!url.startsWith('http://') && !url.startsWith('https://')) {
                   url = `https://${url}`;
                 }
-                return { type: 'URL', text, url };
+                validButtons.push({ type: 'URL', text, url });
               }
-              return { type: 'QUICK_REPLY', text };
-            });
-          updated.buttons = validButtons;
+            } else if (bType === 'PHONE_NUMBER') {
+              if (phoneCount < 1) {
+                phoneCount++;
+                let phone = String(b.phone_number || b.phoneNumber || '').trim();
+                if (phone && !phone.startsWith('+')) {
+                  phone = `+${phone}`;
+                }
+                if (!phone || phone === '+' || phone.replace(/\D/g, '').length < 7) {
+                  phone = '+919974428034';
+                }
+                validButtons.push({ type: 'PHONE_NUMBER', text, phone_number: phone });
+              }
+            } else {
+              validButtons.push({ type: 'QUICK_REPLY', text });
+            }
+          }
+
+          // Meta grouping rule: Group all CTA buttons together before QUICK_REPLY buttons
+          const ctaButtons = validButtons.filter((b) => b.type === 'URL' || b.type === 'PHONE_NUMBER');
+          const qrButtons = validButtons.filter((b) => b.type === 'QUICK_REPLY');
+          updated.buttons = [...ctaButtons, ...qrButtons];
         }
 
         return updated;
@@ -1017,6 +1198,13 @@ export async function handleCreateTemplate(req: Request, res: Response) {
         humanReadableError = `Too many variables for the message length. Meta requires more descriptive text around variables. We have added context words, please try clicking submit again.`;
       } else if (errCode === 131009 || subcode === 2494102 || rawMsg.toLowerCase().includes('handle') || humanReadableError.toLowerCase().includes('handle')) {
         humanReadableError = `Uploaded media handle is invalid or expired. Please upload the image/document again from your PC or use a public image URL.`;
+      } else if (
+        subcode === 2388044 ||
+        rawMsg.toLowerCase().includes('button combination') ||
+        humanReadableError.toLowerCase().includes('button combination') ||
+        humanReadableError.toLowerCase().includes('carousel card')
+      ) {
+        humanReadableError = `Meta WhatsApp Button Rule: Buttons combination is not supported. Meta allows a maximum of 3 buttons (up to 1 Call button with country code and up to 2 Website URL buttons). All Call/URL buttons must appear before Quick Reply buttons, and phone numbers must include country code (e.g. +91...).`;
       }
 
       console.error('[handleCreateTemplate] Meta template creation error:', createData.error);
@@ -1547,12 +1735,16 @@ export async function executeCampaignDispatchCore(params: {
   if (organizationId && campaignId) {
     try {
       const campDocRef = doc(serverDb, `organizations/${organizationId}/campaigns`, campaignId);
-      await updateDoc(campDocRef, {
-        status: 'completed',
-        completedAt: nowIso,
-        stats: campaignStats,
-        updatedAt: nowIso,
-      });
+      await setDoc(
+        campDocRef,
+        {
+          status: 'completed',
+          completedAt: nowIso,
+          stats: campaignStats,
+          updatedAt: nowIso,
+        },
+        { merge: true }
+      );
     } catch (campErr) {
       console.warn('[Broadcast] Error updating campaign stats:', campErr);
     }

@@ -23,6 +23,7 @@ import {
   Activity,
   Clock,
   Sparkles,
+  Lock,
 } from 'lucide-react';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
 import { useToast } from '../context/ToastContext.tsx';
@@ -36,10 +37,12 @@ import { buildMetaBillingHubUrl } from '../utils/metaBilling.ts';
 
 interface WhatsAppAccountsPageProps {
   onOpenConnectModal: () => void;
+  onLock?: () => void;
 }
 
 export const WhatsAppAccountsPage: React.FC<WhatsAppAccountsPageProps> = ({
   onOpenConnectModal,
+  onLock,
 }) => {
   const {
     accounts,
@@ -264,6 +267,18 @@ export const WhatsAppAccountsPage: React.FC<WhatsAppAccountsPageProps> = ({
         </div>
 
         <div className="flex items-center space-x-2.5 flex-wrap gap-y-2">
+          {onLock && (
+            <button
+              type="button"
+              onClick={onLock}
+              className="inline-flex items-center space-x-1.5 px-3.5 py-2.5 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-300 font-medium text-xs sm:text-sm shadow-2xs transition-colors cursor-pointer"
+              title="Lock WhatsApp Numbers access with PIN"
+            >
+              <Lock className="w-3.5 h-3.5 text-amber-500" />
+              <span>Lock Section</span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={handleVerifyAllAccounts}
@@ -622,7 +637,10 @@ export const WhatsAppAccountsPage: React.FC<WhatsAppAccountsPageProps> = ({
                             Daily Messaging Limit (24h)
                           </span>
                         </div>
-                        <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold tracking-tight bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
+                        <span
+                          className="px-2.5 py-0.5 rounded-full text-[11px] font-bold tracking-tight bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800"
+                          title="Daily messaging limit assigned automatically by Meta Cloud API"
+                        >
                           {acc.messagingLimitLabel || limitInfo.label}
                         </span>
                       </div>
