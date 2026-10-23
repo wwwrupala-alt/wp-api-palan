@@ -349,9 +349,14 @@ export async function checkAndExecuteDripCampaigns(): Promise<void> {
               updatedAt: nowIso,
             }).catch(() => {});
 
+            const newCompleted = (camp.completedSubscribers || 0) + 1;
+            const newActive = Math.max(0, (camp.activeSubscribers || 1) - 1);
+            const isAllDone = newActive === 0;
+
             await updateDoc(dripDoc.ref, {
-              completedSubscribers: (camp.completedSubscribers || 0) + 1,
-              activeSubscribers: Math.max(0, (camp.activeSubscribers || 1) - 1),
+              completedSubscribers: newCompleted,
+              activeSubscribers: newActive,
+              status: isAllDone ? 'completed' : camp.status,
               updatedAt: nowIso,
             }).catch(() => {});
           }
@@ -771,14 +776,47 @@ export async function handleRescanDripCampaign(req: Request, res: Response): Pro
       }
     });
 
+    // Query actual recipient logs for each step to get exact read & delivered counts
+    const stepReadCounts: Record<number, number> = {};
+    const stepDeliveredCounts: Record<number, number> = {};
+    for (const st of (camp.steps || [])) {
+      stepReadCounts[st.stepNumber] = st.stats?.read || 0;
+      stepDeliveredCounts[st.stepNumber] = st.stats?.delivered || 0;
+      try {
+        const stepRecsSnap = await getDocs(
+          collection(serverDb, `organizations/${orgId}/campaigns/${id}_step_${st.stepNumber}/recipients`)
+        );
+        if (!stepRecsSnap.empty) {
+          let rCount = 0;
+          let dCount = 0;
+          stepRecsSnap.forEach((rd) => {
+            const rData: any = rd.data();
+            if (rData.currentStatus === 'read' || rData.readAt) rCount++;
+            if (rData.currentStatus === 'delivered' || rData.deliveredAt || rData.currentStatus === 'read' || rData.readAt) dCount++;
+          });
+          stepReadCounts[st.stepNumber] = Math.max(stepReadCounts[st.stepNumber], rCount);
+          stepDeliveredCounts[st.stepNumber] = Math.max(stepDeliveredCounts[st.stepNumber], dCount);
+        }
+      } catch (rErr) {
+        // preserve current count
+      }
+    }
+
+    let overallRead = 0;
+    let overallDelivered = 0;
+
     const updatedSteps = (camp.steps || []).map((st: any) => {
       const sMap = stepStatsMap[st.stepNumber] || { sent: 0, failed: 0, waiting: 0, nextExecutionAt: null };
+      const r = stepReadCounts[st.stepNumber] || st.stats?.read || 0;
+      const d = Math.max(sMap.sent, stepDeliveredCounts[st.stepNumber] || st.stats?.delivered || 0);
+      overallRead += r;
+      overallDelivered += d;
       return {
         ...st,
         stats: {
           sent: sMap.sent,
-          delivered: sMap.sent,
-          read: 0,
+          delivered: d,
+          read: r,
           failed: sMap.failed,
         },
         waitingSubscribers: sMap.waiting,
@@ -786,16 +824,20 @@ export async function handleRescanDripCampaign(req: Request, res: Response): Pro
       };
     });
 
+    const isAllCompleted = totalSubscribers > 0 && activeSubscribers === 0 && completedSubscribers >= totalSubscribers;
+    const finalStatus = isAllCompleted ? 'completed' : camp.status;
+
     const nowIso = new Date().toISOString();
     await updateDoc(campRef, {
       enrolledCount: totalSubscribers,
       activeSubscribers,
       completedSubscribers,
+      status: finalStatus,
       steps: updatedSteps,
       stats: {
         totalMessagesSent,
-        delivered: totalMessagesSent,
-        read: 0,
+        delivered: overallDelivered || totalMessagesSent,
+        read: overallRead,
         failed: failedMessages,
       },
       lastScannedAt: nowIso,

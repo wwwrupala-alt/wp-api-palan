@@ -51,6 +51,7 @@ interface CreateDripCampaignModalProps {
   isOpen: boolean;
   onClose: () => void;
   campaignToEdit?: DripCampaign | null;
+  cloneFromCampaign?: DripCampaign | null;
   onSuccess?: (campaignId: string) => void;
 }
 
@@ -58,6 +59,7 @@ export const CreateDripCampaignModal: React.FC<CreateDripCampaignModalProps> = (
   isOpen,
   onClose,
   campaignToEdit,
+  cloneFromCampaign,
   onSuccess,
 }) => {
   const { organization } = useAuth();
@@ -78,7 +80,7 @@ export const CreateDripCampaignModal: React.FC<CreateDripCampaignModalProps> = (
   const [manualPhoneList, setManualPhoneList] = useState('');
   const [autoEnrollExisting, setAutoEnrollExisting] = useState(true);
 
-  // Steps State
+  // Steps State - ONLY Step 1 by default (user clicks "Add Next Step" to add more)
   const [steps, setSteps] = useState<DripStep[]>([
     {
       id: 'step_1',
@@ -86,17 +88,6 @@ export const CreateDripCampaignModal: React.FC<CreateDripCampaignModalProps> = (
       title: 'Step 1: Immediate Welcome & Greeting',
       delayValue: 0,
       delayUnit: 'minutes',
-      templateId: '',
-      templateName: '',
-      condition: 'always',
-      variableValues: { body_1: 'Customer' },
-    },
-    {
-      id: 'step_2',
-      stepNumber: 2,
-      title: 'Step 2: Day 1 Value & Proof Follow-Up',
-      delayValue: 24,
-      delayUnit: 'hours',
       templateId: '',
       templateName: '',
       condition: 'always',
@@ -165,10 +156,48 @@ export const CreateDripCampaignModal: React.FC<CreateDripCampaignModalProps> = (
         templateId: s.templateId || '',
         templateName: s.templateName || '',
         headerMediaUrl: s.headerMediaUrl || '',
+        headerMediaId: (s as any).headerMediaId || '',
         variableValues: s.variableValues || {},
       }));
       setSteps(sanitized.length > 0 ? sanitized : []);
       setAutoEnrollExisting(false);
+    } else if (cloneFromCampaign) {
+      // Cloned Sequence Setup: Duplicate campaign configuration with new step IDs
+      setName(`${cloneFromCampaign.name} (Copy)`);
+      setDescription(cloneFromCampaign.description || '');
+      setWhatsAppAccountId(cloneFromCampaign.whatsAppAccountId || activeAccount?.phoneNumberId || '');
+      setTriggerType(cloneFromCampaign.triggerType || 'manual_contacts');
+      setTargetGroupId(cloneFromCampaign.targetGroupId || '');
+      setManualPhoneList('');
+      setAutoEnrollExisting(true);
+      const clonedSteps = (cloneFromCampaign.steps || []).map((s, idx) => ({
+        ...s,
+        id: `step_${Date.now()}_${idx + 1}`,
+        stepNumber: idx + 1,
+        title: s.title || `Step ${idx + 1}`,
+        delayValue: s.delayValue ?? (idx === 0 ? 0 : 24),
+        delayUnit: s.delayUnit || (idx === 0 ? 'minutes' : 'hours'),
+        condition: s.condition || 'always',
+        templateId: s.templateId || '',
+        templateName: s.templateName || '',
+        template: s.template,
+        headerMediaUrl: s.headerMediaUrl || '',
+        headerMediaId: (s as any).headerMediaId || '',
+        variableValues: s.variableValues ? { ...s.variableValues } : { body_1: 'Customer' },
+      }));
+      setSteps(clonedSteps.length > 0 ? clonedSteps : [
+        {
+          id: `step_${Date.now()}_1`,
+          stepNumber: 1,
+          title: 'Step 1: Immediate Welcome & Greeting',
+          delayValue: 0,
+          delayUnit: 'minutes',
+          templateId: '',
+          templateName: '',
+          condition: 'always',
+          variableValues: { body_1: 'Customer' },
+        },
+      ]);
     } else {
       setName('');
       setDescription('');
@@ -177,6 +206,7 @@ export const CreateDripCampaignModal: React.FC<CreateDripCampaignModalProps> = (
       setTargetGroupId(groups[0]?.id || '');
       setManualPhoneList('');
       setAutoEnrollExisting(true);
+      // ONLY Step 1 by default! (Next steps added via "Add Next Step" button)
       setSteps([
         {
           id: `step_${Date.now()}_1`,
@@ -189,20 +219,9 @@ export const CreateDripCampaignModal: React.FC<CreateDripCampaignModalProps> = (
           condition: 'always',
           variableValues: { body_1: 'Customer' },
         },
-        {
-          id: `step_${Date.now()}_2`,
-          stepNumber: 2,
-          title: 'Step 2: Day 1 Value & Proof Follow-Up',
-          delayValue: 24,
-          delayUnit: 'hours',
-          templateId: '',
-          templateName: '',
-          condition: 'if_not_replied',
-          variableValues: { body_1: 'Customer' },
-        },
       ]);
     }
-  }, [isOpen, campaignToEdit?.id, activeAccount?.phoneNumberId]);
+  }, [isOpen, campaignToEdit?.id, cloneFromCampaign?.id, activeAccount?.phoneNumberId]);
 
   // Add Step
   const handleAddStep = () => {
@@ -336,9 +355,10 @@ export const CreateDripCampaignModal: React.FC<CreateDripCampaignModalProps> = (
     setUploadingStepIndex(stepIndex);
     try {
       const selectedAccount = accounts.find((a) => a.phoneNumberId === whatsAppAccountId);
-      const res = await uploadMediaFile(file, selectedAccount?.customToken);
+      const res = await uploadMediaFile(file, selectedAccount?.customToken, whatsAppAccountId);
       handleUpdateStep(stepIndex, {
         headerMediaUrl: res.url || res.fullUrl,
+        headerMediaId: res.metaMediaId || res.id,
       });
       toast.showSuccess('Media Ready', `Uploaded "${file.name}" for Step ${steps[stepIndex].stepNumber}.`);
     } catch (err: any) {
@@ -572,13 +592,21 @@ export const CreateDripCampaignModal: React.FC<CreateDripCampaignModalProps> = (
             </div>
             <div>
               <h3 className="font-bold text-neutral-900 dark:text-white text-base flex items-center space-x-2">
-                <span>{campaignToEdit ? 'Edit Drip Campaign' : 'Create Multi-Step Drip Campaign'}</span>
+                <span>
+                  {campaignToEdit
+                    ? 'Edit Drip Campaign'
+                    : cloneFromCampaign
+                    ? 'Clone & Launch Drip Sequence'
+                    : 'Create Multi-Step Drip Campaign'}
+                </span>
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300">
                   Automated Sequence
                 </span>
               </h3>
               <p className="text-xs text-neutral-500">
-                Design automated time-delayed WhatsApp sequences with smart reply conditions.
+                {cloneFromCampaign
+                  ? 'Cloned sequence: modify phone numbers, templates, images or delays before launching.'
+                  : 'Design automated time-delayed WhatsApp sequences with smart reply conditions.'}
               </p>
             </div>
           </div>

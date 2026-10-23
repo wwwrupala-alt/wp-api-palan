@@ -66,7 +66,13 @@ export function formatTemplateComponentsForSending(
           });
         }
       } else if (headerFormat === 'IMAGE') {
-        if (resolvedHeaderMedia?.id) {
+        const directMediaId = variableValues?.header_media_id || variableValues?.media_id || resolvedHeaderMedia?.id;
+        if (directMediaId && /^\d{10,}$/.test(String(directMediaId))) {
+          result.push({
+            type: 'header',
+            parameters: [{ type: 'image', image: { id: String(directMediaId) } }],
+          });
+        } else if (resolvedHeaderMedia?.id) {
           result.push({
             type: 'header',
             parameters: [{ type: 'image', image: { id: resolvedHeaderMedia.id } }],
@@ -102,17 +108,17 @@ export function formatTemplateComponentsForSending(
                 parameters: [{ type: 'image', image: { link: imgRef } }],
               });
             } else {
-              // High-reliability public fallback image to satisfy Meta's mandatory header parameter requirement
+              // High-reliability public fallback image (verified HTTP 200) to satisfy Meta's mandatory header parameter requirement
               result.push({
                 type: 'header',
-                parameters: [{ type: 'image', image: { link: 'https://images.unsplash.com/photo-1579203438237-49dcf6133f6a?w=800&auto=format&fit=crop&q=80' } }],
+                parameters: [{ type: 'image', image: { link: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/25.png' } }],
               });
             }
           } else {
             // Mandatory header parameter when template format is IMAGE
             result.push({
               type: 'header',
-              parameters: [{ type: 'image', image: { link: 'https://images.unsplash.com/photo-1579203438237-49dcf6133f6a?w=800&auto=format&fit=crop&q=80' } }],
+              parameters: [{ type: 'image', image: { link: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/25.png' } }],
             });
           }
         }

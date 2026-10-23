@@ -25,6 +25,7 @@ import {
   ChevronRight,
   Smartphone,
   RefreshCw,
+  Copy,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -69,6 +70,7 @@ export const DripCampaignsPage: React.FC<DripCampaignsPageProps> = ({
   // Modals state
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [campaignToEdit, setCampaignToEdit] = useState<DripCampaign | null>(null);
+  const [cloneTargetCampaign, setCloneTargetCampaign] = useState<DripCampaign | null>(null);
 
   const [selectedSubscribersCampaign, setSelectedSubscribersCampaign] = useState<DripCampaign | null>(null);
   const [selectedFlowCampaign, setSelectedFlowCampaign] = useState<DripCampaign | null>(null);
@@ -119,7 +121,9 @@ export const DripCampaignsPage: React.FC<DripCampaignsPageProps> = ({
         (c.name || '').toLowerCase().includes(q) ||
         (c.description || '').toLowerCase().includes(q);
 
-      const matchStatus = statusFilter === 'all' || c.status === statusFilter;
+      const isCompleted = c.status === 'completed' || ((c.enrolledCount || 0) > 0 && (c.completedSubscribers || 0) >= (c.enrolledCount || 0) && (c.activeSubscribers || 0) === 0);
+      const effectiveStatus = isCompleted ? 'completed' : c.status;
+      const matchStatus = statusFilter === 'all' || effectiveStatus === statusFilter;
       return matchSearch && matchStatus;
     });
   }, [scopedCampaigns, searchQuery, statusFilter]);
@@ -372,6 +376,18 @@ export const DripCampaignsPage: React.FC<DripCampaignsPageProps> = ({
           >
             Paused ({scopedCampaigns.filter((c) => c.status === 'paused').length})
           </button>
+          <button
+            type="button"
+            onClick={() => setStatusFilter('completed')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center space-x-1.5 ${
+              statusFilter === 'completed'
+                ? 'bg-blue-600 text-white'
+                : 'bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-400 hover:bg-blue-100'
+            }`}
+          >
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            <span>Completed ({scopedCampaigns.filter((c) => c.status === 'completed' || ((c.enrolledCount || 0) > 0 && (c.completedSubscribers || 0) >= (c.enrolledCount || 0) && (c.activeSubscribers || 0) === 0)).length})</span>
+          </button>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
@@ -466,7 +482,8 @@ export const DripCampaignsPage: React.FC<DripCampaignsPageProps> = ({
         <div className="space-y-4">
           {filteredCampaigns.map((camp) => {
             const steps = camp.steps || [];
-            const isActive = camp.status === 'active';
+            const isCompleted = camp.status === 'completed' || ((camp.enrolledCount || 0) > 0 && (camp.completedSubscribers || 0) >= (camp.enrolledCount || 0) && (camp.activeSubscribers || 0) === 0);
+            const isActive = camp.status === 'active' && !isCompleted;
             const isToggling = togglingId === camp.id;
 
             return (
@@ -487,13 +504,19 @@ export const DripCampaignsPage: React.FC<DripCampaignsPageProps> = ({
                         </h3>
                         <span
                           className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center space-x-1 ${
-                            isActive
+                            isCompleted
+                              ? 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300 border border-blue-200 dark:border-blue-800'
+                              : isActive
                               ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
                               : 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
                           }`}
                         >
-                          {isActive && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />}
-                          <span>{camp.status}</span>
+                          {isCompleted ? (
+                            <CheckCircle2 className="w-3 h-3 text-blue-600 dark:text-blue-400" />
+                          ) : isActive ? (
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                          ) : null}
+                          <span>{isCompleted ? 'Completed' : camp.status}</span>
                         </span>
                       </div>
                       {camp.description && (
@@ -506,25 +529,47 @@ export const DripCampaignsPage: React.FC<DripCampaignsPageProps> = ({
 
                   {/* Primary Row Action Buttons */}
                   <div className="flex items-center space-x-2 self-end sm:self-auto">
-                    {/* Status Toggle Play/Pause */}
+                    {/* Status Toggle Play/Pause or Completed indicator */}
+                    {isCompleted ? (
+                      <span className="px-3 py-1.5 rounded-xl text-xs font-bold flex items-center space-x-1.5 bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 shadow-2xs">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>Completed</span>
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={isToggling}
+                        onClick={() => handleToggleStatus(camp)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center space-x-1.5 transition-all cursor-pointer shadow-2xs ${
+                          isActive
+                            ? 'border border-amber-300 dark:border-amber-800 text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/60'
+                            : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                        }`}
+                      >
+                        {isToggling ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : isActive ? (
+                          <Pause className="w-3.5 h-3.5" />
+                        ) : (
+                          <Play className="w-3.5 h-3.5" />
+                        )}
+                        <span>{isActive ? 'Pause' : 'Activate'}</span>
+                      </button>
+                    )}
+
+                    {/* Clone Sequence Button (Duplicate & Modify) */}
                     <button
                       type="button"
-                      disabled={isToggling}
-                      onClick={() => handleToggleStatus(camp)}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center space-x-1.5 transition-all cursor-pointer shadow-2xs ${
-                        isActive
-                          ? 'border border-amber-300 dark:border-amber-800 text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/60'
-                          : 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                      }`}
+                      title="Clone sequence (Duplicate & change numbers/template/text)"
+                      onClick={() => {
+                        setCloneTargetCampaign(camp);
+                        setCampaignToEdit(null);
+                        setCreateModalOpen(true);
+                      }}
+                      className="px-3 py-1.5 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50/80 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-xs font-bold flex items-center space-x-1.5 cursor-pointer transition-all shadow-2xs"
                     >
-                      {isToggling ? (
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      ) : isActive ? (
-                        <Pause className="w-3.5 h-3.5" />
-                      ) : (
-                        <Play className="w-3.5 h-3.5" />
-                      )}
-                      <span>{isActive ? 'Pause' : 'Activate'}</span>
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>Clone Sequence</span>
                     </button>
 
                     {/* Flowchart Modal Button */}
@@ -710,8 +755,10 @@ export const DripCampaignsPage: React.FC<DripCampaignsPageProps> = ({
         onClose={() => {
           setCreateModalOpen(false);
           setCampaignToEdit(null);
+          setCloneTargetCampaign(null);
         }}
         campaignToEdit={campaignToEdit}
+        cloneFromCampaign={cloneTargetCampaign}
       />
 
       {/* Subscribers Progression Modal */}
@@ -726,8 +773,15 @@ export const DripCampaignsPage: React.FC<DripCampaignsPageProps> = ({
         isOpen={Boolean(selectedFlowCampaign)}
         onClose={() => setSelectedFlowCampaign(null)}
         campaign={selectedFlowCampaign}
+        onCloneCampaign={(camp) => {
+          setSelectedFlowCampaign(null);
+          setCloneTargetCampaign(camp);
+          setCampaignToEdit(null);
+          setCreateModalOpen(true);
+        }}
         onEditCampaign={(camp) => {
           setCampaignToEdit(camp);
+          setCloneTargetCampaign(null);
           setCreateModalOpen(true);
         }}
       />

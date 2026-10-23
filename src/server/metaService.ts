@@ -3289,6 +3289,66 @@ export async function processIncomingWhatsAppStatusUpdate(statusObj: any, metada
           updatedAt: nowIso,
         }).catch(() => {});
 
+        // If this broadcast belongs to a Drip Campaign step (e.g. drip_1792741007698_step_1)
+        if (targetCampaignId.includes('_step_')) {
+          try {
+            const parts = targetCampaignId.split('_step_');
+            const parentDripId = parts[0];
+            const stepNum = parseInt(parts[1], 10) || 1;
+
+            const dripDocRef = doc(serverDb, `organizations/${targetOrgId}/drip_campaigns`, parentDripId);
+            const dripSnap = await getDoc(dripDocRef);
+
+            if (dripSnap.exists()) {
+              const dripData = dripSnap.data();
+              const updatedSteps = (dripData.steps || []).map((st: any) => {
+                if (st.stepNumber === stepNum) {
+                  return {
+                    ...st,
+                    stats: {
+                      total: totalCount,
+                      sent: Math.max(sentCount, deliveredCount, readCount),
+                      delivered: deliveredCount,
+                      read: readCount,
+                      failed: failedCount,
+                      replied: repliedCount,
+                    },
+                  };
+                }
+                return st;
+              });
+
+              // Aggregate overall drip campaign stats
+              let dripTotalSent = 0;
+              let dripTotalDelivered = 0;
+              let dripTotalRead = 0;
+              let dripTotalFailed = 0;
+
+              updatedSteps.forEach((st: any) => {
+                const s = st.stats || {};
+                dripTotalSent += s.sent || 0;
+                dripTotalDelivered += s.delivered || 0;
+                dripTotalRead += s.read || 0;
+                dripTotalFailed += s.failed || 0;
+              });
+
+              await updateDoc(dripDocRef, {
+                steps: updatedSteps,
+                stats: {
+                  totalMessagesSent: dripTotalSent,
+                  delivered: dripTotalDelivered,
+                  read: dripTotalRead,
+                  failed: dripTotalFailed,
+                },
+                updatedAt: nowIso,
+              });
+              console.log(`[Webhook] Synced Parent Drip Campaign ${parentDripId} Step ${stepNum} stats: read=${readCount}, delivered=${deliveredCount}`);
+            }
+          } catch (dripSyncErr) {
+            console.warn('[processIncomingWhatsAppStatusUpdate] Error syncing parent drip stats:', dripSyncErr);
+          }
+        }
+
       } catch (err) {
         console.warn('[processIncomingWhatsAppStatusUpdate] Recipient update error:', err);
       }
@@ -3692,14 +3752,42 @@ export async function handleUploadMedia(req: Request, res: Response) {
     const proto = req.get('x-forwarded-proto') || (req.protocol === 'https' ? 'https' : 'http');
     const fullUrl = `${proto}://${host}${relativeUrl}`;
 
-    // Optionally generate Meta Resumable Upload handle
+    // Generate Meta Media ID or Resumable Upload handle
     let headerHandle: string | undefined;
+    let metaMediaId: string | undefined;
+
     try {
       await loadMetaConfigFromDb();
       const config = getMetaConfig();
       const token = customToken || (req.headers['x-meta-token'] as string) || config.systemToken;
+      const targetPhoneId = req.body.phoneNumberId || (req.query.phoneNumberId as string);
+
+      if (token && targetPhoneId) {
+        try {
+          const blob = new Blob([new Uint8Array(buffer)], { type: mimeType });
+          const formData = new FormData();
+          formData.append('messaging_product', 'whatsapp');
+          formData.append('type', mimeType);
+          formData.append('file', blob, filename);
+
+          const uploadUrl = `https://graph.facebook.com/${config.graphVersion}/${targetPhoneId}/media`;
+          const mRes = await fetch(uploadUrl, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` },
+            body: formData,
+          });
+          const mData = await mRes.json();
+          if (mRes.ok && mData.id) {
+            metaMediaId = mData.id;
+            console.log(`[UploadMedia] Direct Meta Media ID created: ${metaMediaId}`);
+          }
+        } catch (mErr) {
+          console.warn('[UploadMedia] Direct Meta upload notice:', mErr);
+        }
+      }
+
       const appId = config.appId || '28291855670435316';
-      if (token && appId) {
+      if (token && appId && !metaMediaId) {
         const format = ext === '.mp4' || ext === '.3gp' ? 'VIDEO' : ext === '.pdf' ? 'DOCUMENT' : 'IMAGE';
         headerHandle = await getMetaHeaderHandleForMedia(
           relativeUrl,
@@ -3719,6 +3807,8 @@ export async function handleUploadMedia(req: Request, res: Response) {
       originalName: filename,
       url: relativeUrl,
       fullUrl,
+      id: metaMediaId,
+      metaMediaId,
       headerHandle,
       size: buffer.length,
       contentType: contentType || 'application/octet-stream',

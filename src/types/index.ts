@@ -324,6 +324,7 @@ export interface DripStep {
   templateCategory?: string;
   template?: Template;
   headerMediaUrl?: string;
+  headerMediaId?: string;
   variableValues?: Record<string, string>;
   condition?: 'always' | 'if_not_replied' | 'if_read';
   stats?: {

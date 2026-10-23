@@ -13,6 +13,7 @@ import {
   ShieldAlert,
   Send,
   Zap,
+  Copy,
 } from 'lucide-react';
 import type { DripCampaign, DripStep } from '../../types/index.ts';
 import { DripStepCountdown } from './DripStepCountdown.tsx';
@@ -22,6 +23,7 @@ interface DripFlowModalProps {
   onClose: () => void;
   campaign: DripCampaign | null;
   onEditCampaign?: (campaign: DripCampaign) => void;
+  onCloneCampaign?: (campaign: DripCampaign) => void;
 }
 
 export const DripFlowModal: React.FC<DripFlowModalProps> = ({
@@ -29,6 +31,7 @@ export const DripFlowModal: React.FC<DripFlowModalProps> = ({
   onClose,
   campaign,
   onEditCampaign,
+  onCloneCampaign,
 }) => {
   if (!isOpen || !campaign) return null;
 
@@ -99,6 +102,20 @@ export const DripFlowModal: React.FC<DripFlowModalProps> = ({
           </div>
 
           <div className="flex items-center space-x-2">
+            {onCloneCampaign && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onCloneCampaign(campaign);
+                }}
+                className="px-3 py-1.5 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 text-xs font-semibold flex items-center space-x-1.5 cursor-pointer"
+                title="Duplicate sequence to modify numbers, templates or delays"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                <span>Clone Sequence</span>
+              </button>
+            )}
             {onEditCampaign && (
               <button
                 type="button"

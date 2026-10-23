@@ -2016,13 +2016,16 @@ export async function compressImageIfNeeded(file: File): Promise<File> {
  */
 export async function uploadMediaFile(
   file: File,
-  customToken?: string
+  customToken?: string,
+  phoneNumberId?: string
 ): Promise<{
   success: boolean;
   filename: string;
   originalName: string;
   url: string;
   fullUrl: string;
+  id?: string;
+  metaMediaId?: string;
   headerHandle?: string;
   size: number;
   contentType: string;
@@ -2045,6 +2048,7 @@ export async function uploadMediaFile(
             base64,
             contentType: processedFile.type,
             customToken,
+            phoneNumberId,
           }),
         });
         const data = await parseJsonResponse(res, 'Failed to upload media file from device.');
