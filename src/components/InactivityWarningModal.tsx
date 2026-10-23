@@ -30,10 +30,10 @@ export const InactivityWarningModal: React.FC<InactivityWarningModalProps> = ({
 
           <div className="space-y-1.5">
             <h3 className="text-lg font-bold text-neutral-900 dark:text-white">
-              Inactivity Timeout Warning
+              Session Security Warning
             </h3>
             <p className="text-xs text-neutral-600 dark:text-neutral-400 leading-relaxed">
-              You have been inactive for almost 3 hours. For security reasons, your session will automatically end soon.
+              Suraksha compliance ke tehat active session 3 ghante inactivity ya 24 ghante validity ke baad auto logout ho jata hai.
             </p>
           </div>
 

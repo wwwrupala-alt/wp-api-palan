@@ -1,8 +1,57 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { initializeFirestore, doc, setDoc, getDoc, getDocs, collection, query, where, updateDoc, deleteDoc } from 'firebase/firestore';
+import {
+  initializeFirestore,
+  setLogLevel,
+  memoryLocalCache,
+  doc,
+  setDoc,
+  getDoc,
+  getDocs,
+  collection,
+  query,
+  where,
+  updateDoc,
+  deleteDoc,
+} from 'firebase/firestore';
 import fs from 'fs';
 import path from 'path';
 import { createRequire } from 'module';
+
+// Silence non-fatal internal SDK watch-stream bloom filter warnings on backend server
+setLogLevel('error');
+
+// Filter benign BloomFilter warnings from node process output
+const isBloomFilterMsg = (args: any[]) =>
+  args.some(
+    (a) =>
+      (typeof a === 'string' && (a.includes('BloomFilter') || a.includes('bloom filter'))) ||
+      (a instanceof Error &&
+        (a.name === 'BloomFilterError' ||
+          a.message.includes('BloomFilter') ||
+          a.message.includes('Invalid hash count')))
+  );
+
+const origWarn = console.warn;
+console.warn = (...args: any[]) => {
+  if (isBloomFilterMsg(args)) return;
+  origWarn.apply(console, args);
+};
+
+const origError = console.error;
+console.error = (...args: any[]) => {
+  if (isBloomFilterMsg(args)) return;
+  origError.apply(console, args);
+};
+
+process.on('unhandledRejection', (reason: any) => {
+  if (
+    reason?.name === 'BloomFilterError' ||
+    (typeof reason?.message === 'string' &&
+      (reason.message.includes('BloomFilter') || reason.message.includes('Invalid hash count')))
+  ) {
+    return;
+  }
+});
 
 const require = createRequire(import.meta.url);
 
@@ -42,6 +91,7 @@ export const serverDb = initializeFirestore(
   app,
   {
     experimentalForceLongPolling: true,
+    localCache: memoryLocalCache(),
   },
   firebaseConfig.firestoreDatabaseId
 );

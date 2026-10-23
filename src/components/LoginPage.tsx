@@ -53,10 +53,14 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onOpenLegal }) => {
   const [error, setError] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
 
-  // Clean up any residual logout notice from storage immediately
+  // Load and display any auto-logout security notice from storage
   useEffect(() => {
     try {
-      localStorage.removeItem('cw_logout_notice');
+      const notice = localStorage.getItem('cw_logout_notice');
+      if (notice) {
+        setInfoMessage(notice);
+        localStorage.removeItem('cw_logout_notice');
+      }
     } catch {}
   }, []);
 
@@ -255,9 +259,9 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onOpenLegal }) => {
           )}
 
           {infoMessage && (
-            <div className="p-3.5 rounded-xl bg-neutral-100 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 text-xs text-neutral-700 dark:text-neutral-300 flex items-start space-x-2">
-              <AlertCircle className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
-              <p className="flex-1">{infoMessage}</p>
+            <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/80 text-xs text-amber-900 dark:text-amber-200 flex items-start space-x-2.5 shadow-xs animate-fadeIn">
+              <ShieldCheck className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+              <p className="flex-1 font-medium leading-relaxed">{infoMessage}</p>
             </div>
           )}
 

@@ -28,17 +28,20 @@ export interface ImpersonationInfo {
 
 // Session security timeouts
 export const IDLE_TIMEOUT_MS = 3 * 60 * 60 * 1000; // 3 hours (10,800,000 ms) of inactivity
+export const MAX_SESSION_DURATION_MS = 24 * 60 * 60 * 1000; // 24 hours absolute maximum session lifetime (Daily expiry)
 export const IDLE_WARNING_BUFFER_MS = 5 * 60 * 1000; // Show warning modal when 5 minutes remaining
 
 export const STORAGE_SESSION_START = 'cw_session_start_time';
 export const STORAGE_LAST_ACTIVITY = 'cw_last_activity_time';
 export const STORAGE_LOGOUT_NOTICE = 'cw_logout_notice';
 
-const clearAllSessionStorage = () => {
+export const clearAllSessionStorage = (preserveNotice = false) => {
   localStorage.removeItem(STORAGE_SESSION_START);
   localStorage.removeItem(STORAGE_LAST_ACTIVITY);
-  localStorage.removeItem(STORAGE_LOGOUT_NOTICE);
-  localStorage.removeItem('cw_logout_notice');
+  if (!preserveNotice) {
+    localStorage.removeItem(STORAGE_LOGOUT_NOTICE);
+    localStorage.removeItem('cw_logout_notice');
+  }
   localStorage.removeItem('cw_multi_tenant_session');
   localStorage.removeItem('cw_custom_session');
   localStorage.removeItem('cw_impersonation_session');
@@ -173,22 +176,44 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   useEffect(() => {
-    // Clear any residual session expired notices immediately
-    localStorage.removeItem(STORAGE_LOGOUT_NOTICE);
-    localStorage.removeItem('cw_logout_notice');
-
     const now = Date.now();
     const sessionStartStr = localStorage.getItem(STORAGE_SESSION_START);
+    const lastActivityStr = localStorage.getItem(STORAGE_LAST_ACTIVITY);
+    const sessionStart = sessionStartStr ? Number(sessionStartStr) : 0;
+    const lastActivity = lastActivityStr ? Number(lastActivityStr) : 0;
 
     const hasStoredSession =
       Boolean(localStorage.getItem('cw_impersonation_session')) ||
       Boolean(localStorage.getItem('cw_multi_tenant_session')) ||
       Boolean(localStorage.getItem('cw_custom_session'));
 
+    // Check if stored session has exceeded limits (either 24h daily lifetime or 3h inactivity)
     if (hasStoredSession) {
-      if (!sessionStartStr) {
-        localStorage.setItem(STORAGE_SESSION_START, String(now));
+      const isDailyExpired = sessionStart > 0 && now - sessionStart >= MAX_SESSION_DURATION_MS;
+      const isIdleExpired = lastActivity > 0 && now - lastActivity >= IDLE_TIMEOUT_MS;
+      // Missing timestamps on existing session -> force clean security re-login
+      const isMissingTimestamps = !sessionStart || !lastActivity;
+
+      if (isDailyExpired || isIdleExpired || isMissingTimestamps) {
+        const noticeMsg = isDailyExpired
+          ? 'Aapka daily session expire ho chuka hai (24 ghante validity). Suraksha ke liye kripya dobara login karein.'
+          : 'Aapka session 3 ghante inactivity ke kaaran auto logout ho chuka hai. Suraksha ke liye kripya dobara login karein.';
+
+        clearAllSessionStorage(true);
+        localStorage.setItem(STORAGE_LOGOUT_NOTICE, noticeMsg);
+        localStorage.setItem('cw_logout_notice', noticeMsg);
+        setCurrentUser(null);
+        setUserProfile(null);
+        setOrganization(null);
+        setImpersonatedBy(null);
+        try {
+          fbSignOut(auth);
+        } catch {}
+        setLoading(false);
+        return;
       }
+
+      // Valid active session - update last activity timestamp to now
       localStorage.setItem(STORAGE_LAST_ACTIVITY, String(now));
     }
 
@@ -248,12 +273,48 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // 3. Fallback to Firebase Auth
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
+        const authNow = Date.now();
+        const authSessionStart = Number(localStorage.getItem(STORAGE_SESSION_START)) || 0;
+        const authLastActivity = Number(localStorage.getItem(STORAGE_LAST_ACTIVITY)) || 0;
+
+        const isAuthDailyExpired = authSessionStart > 0 && authNow - authSessionStart >= MAX_SESSION_DURATION_MS;
+        const isAuthIdleExpired = authLastActivity > 0 && authNow - authLastActivity >= IDLE_TIMEOUT_MS;
+
+        if (isAuthDailyExpired || isAuthIdleExpired) {
+          const reasonMsg = isAuthDailyExpired
+            ? 'Aapka daily session expire ho chuka hai (24 ghante validity). Suraksha ke liye kripya dobara login karein.'
+            : 'Aapka session 3 ghante inactivity ke kaaran auto logout ho chuka hai. Suraksha ke liye kripya dobara login karein.';
+
+          clearAllSessionStorage(true);
+          localStorage.setItem(STORAGE_LOGOUT_NOTICE, reasonMsg);
+          localStorage.setItem('cw_logout_notice', reasonMsg);
+          setCurrentUser(null);
+          setUserProfile(null);
+          setOrganization(null);
+          try {
+            await fbSignOut(auth);
+          } catch {}
+          setLoading(false);
+          return;
+        }
+
+        // Initialize timestamps if not set
+        if (!authSessionStart) {
+          localStorage.setItem(STORAGE_SESSION_START, String(authNow));
+          localStorage.setItem(STORAGE_LAST_ACTIVITY, String(authNow));
+        }
+
         setCurrentUser(user);
         await loadUserData(user);
       } else {
-        setCurrentUser(null);
-        setUserProfile(null);
-        setOrganization(null);
+        const hasCustom =
+          Boolean(localStorage.getItem('cw_multi_tenant_session')) ||
+          Boolean(localStorage.getItem('cw_impersonation_session'));
+        if (!hasCustom) {
+          setCurrentUser(null);
+          setUserProfile(null);
+          setOrganization(null);
+        }
       }
       setLoading(false);
     });
@@ -284,24 +345,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     };
 
-    // Evaluate idle limits
+    // Evaluate idle limits and 24-hour daily session limit
     const evaluateSessionStatus = () => {
       const currentNow = Date.now();
+      const sessionStart = Number(localStorage.getItem(STORAGE_SESSION_START)) || currentNow;
       const lastActivity = Number(localStorage.getItem(STORAGE_LAST_ACTIVITY)) || currentNow;
 
-      // Idle 3-hour inactivity timeout check
+      // 1. Check 24-hour daily maximum session duration
+      const sessionElapsed = currentNow - sessionStart;
+      if (sessionElapsed >= MAX_SESSION_DURATION_MS) {
+        signOut('daily_timeout');
+        return;
+      }
+
+      // 2. Idle 3-hour inactivity timeout check
       const idleElapsed = currentNow - lastActivity;
       if (idleElapsed >= IDLE_TIMEOUT_MS) {
         signOut('inactivity');
         return;
       }
 
-      // 3. Inactivity warning modal when within 5 minutes of 3-hour timeout
+      // 3. Inactivity or daily session warning modal when within 5 minutes of timeout
+      const remainingDaily = MAX_SESSION_DURATION_MS - sessionElapsed;
       const remainingIdle = IDLE_TIMEOUT_MS - idleElapsed;
-      if (remainingIdle <= IDLE_WARNING_BUFFER_MS && remainingIdle > 0) {
+      const remainingLimit = Math.min(remainingIdle, remainingDaily);
+
+      if (remainingLimit <= IDLE_WARNING_BUFFER_MS && remainingLimit > 0) {
         setIsIdleWarningOpen(true);
-        setIdleSecondsRemaining(Math.ceil(remainingIdle / 1000));
-      } else if (remainingIdle > IDLE_WARNING_BUFFER_MS && isIdleWarningOpen) {
+        setIdleSecondsRemaining(Math.ceil(remainingLimit / 1000));
+      } else if (remainingLimit > IDLE_WARNING_BUFFER_MS && isIdleWarningOpen) {
         setIsIdleWarningOpen(false);
         setIdleSecondsRemaining(0);
       }
@@ -573,10 +645,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const signOut = async (_reason?: string) => {
-    localStorage.removeItem(STORAGE_LOGOUT_NOTICE);
-    localStorage.removeItem('cw_logout_notice');
-    clearAllSessionStorage();
+  const signOut = async (reason?: string) => {
+    let noticeMessage = '';
+    if (reason === 'inactivity') {
+      noticeMessage = 'Aapka session 3 ghante inactivity ke kaaran auto logout ho chuka hai. Suraksha ke liye kripya dobara login karein.';
+    } else if (reason === 'daily_timeout' || reason === 'session_expired') {
+      noticeMessage = 'Aapka daily session expire ho chuka hai (24 ghante validity). Suraksha ke liye kripya dobara login karein.';
+    } else if (reason === 'plan_expired') {
+      noticeMessage = 'Aapka subscription plan expire ho chuka hai. Kripya renew karwayein.';
+    }
+
+    clearAllSessionStorage(Boolean(noticeMessage));
+
+    if (noticeMessage) {
+      localStorage.setItem('cw_logout_notice', noticeMessage);
+      localStorage.setItem(STORAGE_LOGOUT_NOTICE, noticeMessage);
+    }
+
     setImpersonatedBy(null);
     setCurrentUser(null);
     setUserProfile(null);

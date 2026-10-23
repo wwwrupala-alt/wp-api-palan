@@ -1,3 +1,36 @@
+// Filter non-fatal SDK BloomFilter warnings from node process output
+const isBloomFilterMsg = (args: any[]) =>
+  args.some(
+    (a) =>
+      (typeof a === 'string' && (a.includes('BloomFilter') || a.includes('bloom filter'))) ||
+      (a instanceof Error &&
+        (a.name === 'BloomFilterError' ||
+          a.message.includes('BloomFilter') ||
+          a.message.includes('Invalid hash count')))
+  );
+
+const origWarn = console.warn;
+console.warn = (...args: any[]) => {
+  if (isBloomFilterMsg(args)) return;
+  origWarn.apply(console, args);
+};
+
+const origError = console.error;
+console.error = (...args: any[]) => {
+  if (isBloomFilterMsg(args)) return;
+  origError.apply(console, args);
+};
+
+process.on('unhandledRejection', (reason: any) => {
+  if (
+    reason?.name === 'BloomFilterError' ||
+    (typeof reason?.message === 'string' &&
+      (reason.message.includes('BloomFilter') || reason.message.includes('Invalid hash count')))
+  ) {
+    return;
+  }
+});
+
 import express from 'express';
 import path from 'path';
 import fs from 'fs';

@@ -1733,7 +1733,7 @@ export async function createManagedUser(
   const isEmail = params.phoneOrEmail.includes('@');
   const userDoc: UserProfile = {
     uid: userId,
-    email: isEmail ? params.phoneOrEmail : `${cleanId}@wp-api-palan.vercel.app`,
+    email: isEmail ? params.phoneOrEmail : `${cleanId}@wabacloud.in`,
     displayName: params.displayName,
     phone: isEmail ? undefined : params.phoneOrEmail,
     role: params.role || 'owner',

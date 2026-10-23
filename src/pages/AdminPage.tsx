@@ -756,12 +756,12 @@ export const AdminPage: React.FC = () => {
                     <input
                       type="text"
                       readOnly
-                      value={typeof window !== 'undefined' ? `${window.location.origin}/` : 'https://wp-api-palan.vercel.app/'}
+                      value={typeof window !== 'undefined' ? `${window.location.origin}/` : 'https://www.wabacloud.in/'}
                       className="flex-1 px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 font-mono text-xs text-neutral-900 dark:text-white"
                     />
                     <button
                       type="button"
-                      onClick={() => copyText(typeof window !== 'undefined' ? `${window.location.origin}/` : 'https://wp-api-palan.vercel.app/', 'redirect')}
+                      onClick={() => copyText(typeof window !== 'undefined' ? `${window.location.origin}/` : 'https://www.wabacloud.in/', 'redirect')}
                       className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs flex items-center space-x-1 cursor-pointer shrink-0"
                     >
                       {copiedRedirect ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
@@ -782,12 +782,12 @@ export const AdminPage: React.FC = () => {
                     <input
                       type="text"
                       readOnly
-                      value={typeof window !== 'undefined' ? `${window.location.origin}/api/meta/webhook` : 'https://wp-api-palan.vercel.app/api/meta/webhook'}
+                      value={typeof window !== 'undefined' ? `${window.location.origin}/api/meta/webhook` : 'https://www.wabacloud.in/api/meta/webhook'}
                       className="flex-1 px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 font-mono text-xs text-neutral-900 dark:text-white"
                     />
                     <button
                       type="button"
-                      onClick={() => copyText(typeof window !== 'undefined' ? `${window.location.origin}/api/meta/webhook` : 'https://wp-api-palan.vercel.app/api/meta/webhook', 'url')}
+                      onClick={() => copyText(typeof window !== 'undefined' ? `${window.location.origin}/api/meta/webhook` : 'https://www.wabacloud.in/api/meta/webhook', 'url')}
                       className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs flex items-center space-x-1 cursor-pointer shrink-0"
                     >
                       {copiedUrl ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
@@ -830,7 +830,7 @@ export const AdminPage: React.FC = () => {
                   <div className="p-3 rounded-xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 space-y-1">
                     <span className="text-[10px] font-bold text-neutral-500 uppercase">App Domain</span>
                     <p className="font-mono text-xs text-neutral-900 dark:text-white select-all">
-                      {typeof window !== 'undefined' ? window.location.hostname : 'wp-api-palan.vercel.app'}
+                      {typeof window !== 'undefined' ? window.location.hostname : 'www.wabacloud.in'}
                     </p>
                     <p className="text-[10px] text-neutral-400">Settings &gt; Basic &gt; App Domains</p>
                   </div>
@@ -838,7 +838,7 @@ export const AdminPage: React.FC = () => {
                   <div className="p-3 rounded-xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 space-y-1">
                     <span className="text-[10px] font-bold text-neutral-500 uppercase">Privacy Policy URL</span>
                     <p className="font-mono text-xs text-neutral-900 dark:text-white select-all">
-                      {typeof window !== 'undefined' ? `${window.location.origin}/privacy` : 'https://wp-api-palan.vercel.app/privacy'}
+                      {typeof window !== 'undefined' ? `${window.location.origin}/privacy` : 'https://www.wabacloud.in/privacy'}
                     </p>
                     <p className="text-[10px] text-neutral-400">Settings &gt; Basic &gt; Privacy Policy URL</p>
                   </div>

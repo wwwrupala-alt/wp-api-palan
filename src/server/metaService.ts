@@ -161,7 +161,7 @@ export function getMetaConfig() {
   const verifyToken = (adminMetaConfigOverrides.verifyToken || process.env.META_WEBHOOK_VERIFY_TOKEN || 'cloudwaba_verify_token_secure').trim();
   const systemToken = (adminMetaConfigOverrides.systemToken || process.env.META_SYSTEM_USER_ACCESS_TOKEN || '').trim();
   const graphVersion = (adminMetaConfigOverrides.graphVersion || process.env.META_GRAPH_VERSION || 'v22.0').trim();
-  const appUrl = (adminMetaConfigOverrides.appUrl || process.env.APP_URL || 'https://wp-api-palan.vercel.app').trim();
+  const appUrl = (adminMetaConfigOverrides.appUrl || process.env.APP_URL || 'https://www.wabacloud.in').trim();
 
   return {
     appId,
@@ -201,7 +201,7 @@ export async function handleSaveAdminMetaConfig(req: Request, res: Response) {
             systemToken: systemToken || '',
             verifyToken: verifyToken || 'cloudwaba_verify_token_secure',
             graphVersion: graphVersion || 'v22.0',
-            appUrl: appUrl || 'https://wp-api-palan.vercel.app',
+            appUrl: appUrl || 'https://www.wabacloud.in',
             updatedAt: new Date().toISOString(),
           },
           { merge: true }
