@@ -11,6 +11,7 @@ import {
   resolveMetaMediaObject,
   getUploadsWritableDir,
   inMemoryMediaBufferCache,
+  metaMediaIdCache,
 } from './metaMediaManager.ts';
 import {
   serverDb,
@@ -1559,21 +1560,32 @@ export async function executeCampaignDispatchCore(params: {
   if (headerComp) {
     const headerFormat = String(headerComp.format || '').toUpperCase();
     if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerFormat)) {
-      const rawMedia =
-        variableValues?.header_media_url ||
-        variableValues?.media_url ||
-        recipients[0]?.variableValues?.header_media_url ||
-        recipients[0]?.variableValues?.media_url ||
-        headerComp.example?.header_handle?.[0];
+      const directMediaId =
+        variableValues?.header_media_id ||
+        variableValues?.media_id ||
+        recipients[0]?.variableValues?.header_media_id ||
+        recipients[0]?.variableValues?.media_id;
 
-      if (rawMedia) {
-        resolvedHeaderMedia = await resolveMetaMediaObject(
-          rawMedia,
-          phoneNumberId,
-          token,
-          headerFormat.toLowerCase() as any,
-          config.graphVersion
-        );
+      if (directMediaId && /^\d{10,}$/.test(String(directMediaId).trim())) {
+        resolvedHeaderMedia = { id: String(directMediaId).trim() };
+        console.log(`[executeCampaignDispatchCore] Using directly supplied Meta Media ID: ${directMediaId}`);
+      } else {
+        const rawMedia =
+          variableValues?.header_media_url ||
+          variableValues?.media_url ||
+          recipients[0]?.variableValues?.header_media_url ||
+          recipients[0]?.variableValues?.media_url ||
+          headerComp.example?.header_handle?.[0];
+
+        if (rawMedia) {
+          resolvedHeaderMedia = await resolveMetaMediaObject(
+            rawMedia,
+            phoneNumberId,
+            token,
+            headerFormat.toLowerCase() as any,
+            config.graphVersion
+          );
+        }
       }
     }
   }
@@ -2585,6 +2597,173 @@ export function handleWebhookVerification(req: Request, res: Response) {
   return res.sendStatus(400);
 }
 
+/**
+ * Correlates an incoming WhatsApp customer reply with recent broadcast campaigns and drip steps.
+ * Automatically marks the recipient as 'read' and 'replied', persists read receipts to Firestore,
+ * and synchronizes parent Drip Campaign and step statistics in real time!
+ */
+export async function correlateInboundReplyToCampaignsAndDrips(
+  organizationId: string,
+  cleanPhone: string,
+  replyText: string,
+  timestampSeconds?: number | string
+) {
+  try {
+    const nowIso = new Date().toISOString();
+    const eventTimeIso = timestampSeconds
+      ? new Date(Number(timestampSeconds) * 1000).toISOString()
+      : nowIso;
+
+    // Search campaigns in this organization
+    const campsSnap = await getDocs(collection(serverDb, `organizations/${organizationId}/campaigns`));
+    const campList: any[] = [];
+    campsSnap.forEach((d) => campList.push({ id: d.id, ...d.data() }));
+    // Sort recent first
+    campList.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+
+    for (const camp of campList.slice(0, 30)) {
+      const campId = camp.id;
+      const recsSnap = await getDocs(collection(serverDb, `organizations/${organizationId}/campaigns/${campId}/recipients`));
+
+      let recipientMatched = false;
+
+      for (const rDoc of recsSnap.docs) {
+        const rData: any = rDoc.data();
+        const rPhone = String(rData.phoneNumber || '').replace(/[^0-9]/g, '');
+        if (rPhone === cleanPhone || rPhone.endsWith(cleanPhone) || cleanPhone.endsWith(rPhone)) {
+          recipientMatched = true;
+
+          const existingTimeline: any[] = Array.isArray(rData.timeline) ? rData.timeline : [];
+          const updateFields: any = {
+            currentStatus: 'read',
+            readAt: rData.readAt || eventTimeIso,
+            deliveredAt: rData.deliveredAt || eventTimeIso,
+            hasReplied: true,
+            repliedAt: rData.repliedAt || eventTimeIso,
+            updatedAt: nowIso,
+            timeline: [
+              ...existingTimeline,
+              {
+                status: 'read',
+                timestamp: eventTimeIso,
+                description: `Customer read & replied: "${(replyText || '').slice(0, 60)}"`,
+              },
+            ],
+          };
+
+          await updateDoc(rDoc.ref, updateFields).catch(() => {});
+
+          if (rData.whatsappMessageId) {
+            await setDoc(
+              doc(serverDb, 'wamidTracker', rData.whatsappMessageId),
+              { status: 'read', updatedAt: nowIso },
+              { merge: true }
+            ).catch(() => {});
+          }
+          break;
+        }
+      }
+
+      if (recipientMatched) {
+        // Recalculate campaign stats
+        const refreshedRecsSnap = await getDocs(collection(serverDb, `organizations/${organizationId}/campaigns/${campId}/recipients`));
+        let sentCount = 0;
+        let deliveredCount = 0;
+        let readCount = 0;
+        let failedCount = 0;
+        let repliedCount = 0;
+        let totalCount = 0;
+
+        refreshedRecsSnap.forEach((d) => {
+          totalCount++;
+          const r: any = d.data();
+          if (r.currentStatus === 'sent' || r.sentAt) sentCount++;
+          if (r.currentStatus === 'delivered' || r.deliveredAt) deliveredCount++;
+          if (r.currentStatus === 'read' || r.readAt) {
+            readCount++;
+            if (!r.deliveredAt) deliveredCount++;
+          }
+          if (r.currentStatus === 'failed') failedCount++;
+          if (r.hasReplied || r.repliedAt) repliedCount++;
+        });
+
+        await updateDoc(doc(serverDb, `organizations/${organizationId}/campaigns`, campId), {
+          stats: {
+            total: totalCount,
+            sent: Math.max(sentCount, deliveredCount, readCount),
+            delivered: deliveredCount,
+            read: readCount,
+            failed: failedCount,
+            replied: repliedCount,
+          },
+          updatedAt: nowIso,
+        }).catch(() => {});
+
+        // If this campaign is a step of a Drip Campaign (e.g. drip_1792744674024_step_1)
+        if (campId.includes('_step_')) {
+          try {
+            const parts = campId.split('_step_');
+            const parentDripId = parts[0];
+            const stepNum = parseInt(parts[1], 10) || 1;
+
+            const dripDocRef = doc(serverDb, `organizations/${organizationId}/drip_campaigns`, parentDripId);
+            const dripSnap = await getDoc(dripDocRef);
+
+            if (dripSnap.exists()) {
+              const dripData = dripSnap.data();
+              const updatedSteps = (dripData.steps || []).map((st: any) => {
+                if (st.stepNumber === stepNum) {
+                  return {
+                    ...st,
+                    stats: {
+                      total: totalCount,
+                      sent: Math.max(sentCount, deliveredCount, readCount),
+                      delivered: deliveredCount,
+                      read: readCount,
+                      failed: failedCount,
+                      replied: repliedCount,
+                    },
+                  };
+                }
+                return st;
+              });
+
+              let dripTotalSent = 0;
+              let dripTotalDelivered = 0;
+              let dripTotalRead = 0;
+              let dripTotalFailed = 0;
+
+              updatedSteps.forEach((st: any) => {
+                const s = st.stats || {};
+                dripTotalSent += s.sent || 0;
+                dripTotalDelivered += s.delivered || 0;
+                dripTotalRead += s.read || 0;
+                dripTotalFailed += s.failed || 0;
+              });
+
+              await updateDoc(dripDocRef, {
+                steps: updatedSteps,
+                stats: {
+                  totalMessagesSent: dripTotalSent,
+                  delivered: dripTotalDelivered,
+                  read: dripTotalRead,
+                  failed: dripTotalFailed,
+                },
+                updatedAt: nowIso,
+              });
+              console.log(`[correlateInboundReply] Updated Drip ${parentDripId} Step ${stepNum}: read=${readCount}`);
+            }
+          } catch (dripErr) {
+            console.warn('[correlateInboundReply] Drip sync warning:', dripErr);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[correlateInboundReplyToCampaignsAndDrips] Error:', err);
+  }
+}
+
 // Helper: Process incoming WhatsApp messages, persist to Firestore Inbox and trigger active Bot Flow
 async function processIncomingWhatsAppWebhookPayload(value: any) {
   try {
@@ -2707,6 +2886,15 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
       });
 
       // Correlate with campaign delivery: mark recipient as replied and read in real-time
+      correlateInboundReplyToCampaignsAndDrips(
+        targetOrgId,
+        cleanPhone,
+        textBody,
+        msg.timestamp
+      ).catch((err) => {
+        console.warn('[Webhook] correlateInboundReplyToCampaignsAndDrips error:', err);
+      });
+
       processIncomingCustomerReply({
         fromPhone: cleanPhone,
         messageText: textBody,
@@ -3757,10 +3945,39 @@ export async function handleUploadMedia(req: Request, res: Response) {
     let metaMediaId: string | undefined;
 
     try {
+      const publicUploadsDir = path.join(process.cwd(), 'public', 'uploads');
+      if (!fs.existsSync(publicUploadsDir)) fs.mkdirSync(publicUploadsDir, { recursive: true });
+      fs.writeFileSync(path.join(publicUploadsDir, uniqueName), buffer);
+    } catch (diskErr) {
+      console.warn('[UploadMedia] Disk public write notice:', diskErr);
+    }
+
+    try {
       await loadMetaConfigFromDb();
       const config = getMetaConfig();
-      const token = customToken || (req.headers['x-meta-token'] as string) || config.systemToken;
-      const targetPhoneId = req.body.phoneNumberId || (req.query.phoneNumberId as string);
+      const orgId = (req.headers['x-organization-id'] as string) || req.body.organizationId || 'org_usr_9974292240';
+      const effectiveCfg = orgId ? await getEffectiveMetaConfig(orgId) : await getEffectiveMetaConfig('default');
+      let token = customToken || (req.headers['x-meta-token'] as string) || effectiveCfg.systemToken || config.systemToken;
+      let targetPhoneId = req.body.phoneNumberId || (req.query.phoneNumberId as string);
+
+      if (!targetPhoneId && orgId) {
+        try {
+          const accSnap = await getDocs(collection(serverDb, `organizations/${orgId}/whatsappAccounts`));
+          if (!accSnap.empty) {
+            targetPhoneId = accSnap.docs[0].id;
+          }
+        } catch {}
+      }
+
+      if (!token && targetPhoneId && orgId) {
+        try {
+          const accSnap = await getDoc(doc(serverDb, `organizations/${orgId}/whatsappAccounts/${targetPhoneId}`));
+          if (accSnap.exists()) {
+            const accData = accSnap.data();
+            token = accData.customToken || accData.permanentToken || accData.userAccessToken;
+          }
+        } catch {}
+      }
 
       if (token && targetPhoneId) {
         try {
@@ -3778,8 +3995,12 @@ export async function handleUploadMedia(req: Request, res: Response) {
           });
           const mData = await mRes.json();
           if (mRes.ok && mData.id) {
-            metaMediaId = mData.id;
+            metaMediaId = String(mData.id);
+            metaMediaIdCache.set(uniqueName, metaMediaId);
+            metaMediaIdCache.set(relativeUrl, metaMediaId);
             console.log(`[UploadMedia] Direct Meta Media ID created: ${metaMediaId}`);
+          } else {
+            console.warn('[UploadMedia] Meta media upload API notice:', mData);
           }
         } catch (mErr) {
           console.warn('[UploadMedia] Direct Meta upload notice:', mErr);

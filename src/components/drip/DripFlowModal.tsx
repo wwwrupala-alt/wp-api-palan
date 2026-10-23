@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   X,
   Workflow,
@@ -14,9 +14,12 @@ import {
   Send,
   Zap,
   Copy,
+  RefreshCw,
 } from 'lucide-react';
 import type { DripCampaign, DripStep } from '../../types/index.ts';
 import { DripStepCountdown } from './DripStepCountdown.tsx';
+import { rescanDripCampaignApi } from '../../lib/services.ts';
+import { useToast } from '../../context/ToastContext.tsx';
 
 interface DripFlowModalProps {
   isOpen: boolean;
@@ -33,7 +36,23 @@ export const DripFlowModal: React.FC<DripFlowModalProps> = ({
   onEditCampaign,
   onCloneCampaign,
 }) => {
+  const toast = useToast();
+  const [isSyncing, setIsSyncing] = useState(false);
+
   if (!isOpen || !campaign) return null;
+
+  const handleSyncReadReceipts = async () => {
+    if (!campaign) return;
+    setIsSyncing(true);
+    try {
+      await rescanDripCampaignApi(campaign.organizationId, campaign.id);
+      toast.showSuccess('Status Synced', 'Refreshed live WhatsApp delivery & read receipts.');
+    } catch (err: any) {
+      toast.showError('Sync Failed', err?.message || 'Could not sync status.');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   const steps: DripStep[] = campaign.steps || [];
 
@@ -102,6 +121,16 @@ export const DripFlowModal: React.FC<DripFlowModalProps> = ({
           </div>
 
           <div className="flex items-center space-x-2">
+            <button
+              type="button"
+              disabled={isSyncing}
+              onClick={handleSyncReadReceipts}
+              className="px-3 py-1.5 rounded-xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 text-xs font-semibold flex items-center space-x-1.5 cursor-pointer shadow-2xs"
+              title="Sync live WhatsApp read receipts & delivery status"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-emerald-600' : ''}`} />
+              <span>{isSyncing ? 'Syncing...' : 'Sync Live Status'}</span>
+            </button>
             {onCloneCampaign && (
               <button
                 type="button"

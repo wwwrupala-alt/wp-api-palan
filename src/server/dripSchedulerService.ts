@@ -237,6 +237,7 @@ export async function checkAndExecuteDripCampaigns(): Promise<void> {
         }
 
         const stepHeaderMedia = currentStep.headerMediaUrl || currentStep.variableValues?.header_media_url || currentStep.variableValues?.media_url;
+        const stepMediaId = currentStep.headerMediaId || currentStep.variableValues?.header_media_id || currentStep.variableValues?.media_id;
         const subCustom = sub.customFields || {};
         const recipient = {
           phone: sub.phone,
@@ -245,6 +246,7 @@ export async function checkAndExecuteDripCampaigns(): Promise<void> {
             ...(currentStep.variableValues || {}),
             ...subCustom,
             body_1: subCustom.var1 || subCustom.body_1 || sub.name || currentStep.variableValues?.body_1 || 'Customer',
+            ...(stepMediaId ? { header_media_id: stepMediaId, media_id: stepMediaId } : {}),
             ...(stepHeaderMedia ? { header_media_url: stepHeaderMedia, media_url: stepHeaderMedia } : {}),
           },
         };
@@ -601,12 +603,14 @@ export async function handleTestDripStep(req: Request, res: Response): Promise<v
       return;
     }
     const stepHeaderMedia = step.headerMediaUrl || step.variableValues?.header_media_url || step.variableValues?.media_url;
+    const stepMediaId = step.headerMediaId || step.variableValues?.header_media_id || step.variableValues?.media_id;
     const recipient = {
       phone: testPhone.trim(),
       name: 'Test Recipient',
       variableValues: {
         ...(step.variableValues || {}),
         body_1: step.variableValues?.body_1 || 'Test Name',
+        ...(stepMediaId ? { header_media_id: stepMediaId, media_id: stepMediaId } : {}),
         ...(stepHeaderMedia ? { header_media_url: stepHeaderMedia, media_url: stepHeaderMedia } : {}),
       },
     };
@@ -776,6 +780,34 @@ export async function handleRescanDripCampaign(req: Request, res: Response): Pro
       }
     });
 
+    // Query inbound customer replies to accurately correlate reads across contacts
+    const inboundPhoneMap = new Map<string, string>();
+    try {
+      const msgsQuery = query(
+        collection(serverDb, `organizations/${orgId}/messages`),
+        where('direction', '==', 'inbound')
+      );
+      const msgsSnap = await getDocs(msgsQuery);
+      msgsSnap.forEach((mDoc) => {
+        const m = mDoc.data();
+        const p = String(m.recipientPhone || m.contactId || m.from || '').replace(/[^0-9]/g, '');
+        if (p) {
+          const t = m.timestamp || new Date().toISOString();
+          if (!inboundPhoneMap.has(p) || t > inboundPhoneMap.get(p)!) {
+            inboundPhoneMap.set(p, t);
+          }
+          const p10 = p.slice(-10);
+          if (p10.length >= 7) {
+            if (!inboundPhoneMap.has(p10) || t > inboundPhoneMap.get(p10)!) {
+              inboundPhoneMap.set(p10, t);
+            }
+          }
+        }
+      });
+    } catch (inboundErr) {
+      console.warn('[handleRescanDripCampaign] Inbound replies lookup notice:', inboundErr);
+    }
+
     // Query actual recipient logs for each step to get exact read & delivered counts
     const stepReadCounts: Record<number, number> = {};
     const stepDeliveredCounts: Record<number, number> = {};
@@ -789,11 +821,43 @@ export async function handleRescanDripCampaign(req: Request, res: Response): Pro
         if (!stepRecsSnap.empty) {
           let rCount = 0;
           let dCount = 0;
-          stepRecsSnap.forEach((rd) => {
+          for (const rd of stepRecsSnap.docs) {
             const rData: any = rd.data();
-            if (rData.currentStatus === 'read' || rData.readAt) rCount++;
-            if (rData.currentStatus === 'delivered' || rData.deliveredAt || rData.currentStatus === 'read' || rData.readAt) dCount++;
-          });
+            let isRead = rData.currentStatus === 'read' || !!rData.readAt;
+            let isDelivered = rData.currentStatus === 'delivered' || !!rData.deliveredAt || isRead;
+
+            const rPhone = String(rData.phoneNumber || '').replace(/[^0-9]/g, '');
+            const rPhone10 = rPhone.slice(-10);
+            // Check if contact replied on WhatsApp after the message was sent (proves the message was read)
+            const replyTime = inboundPhoneMap.get(rPhone) || (rPhone10.length >= 7 ? inboundPhoneMap.get(rPhone10) : undefined);
+            if (!isRead && rPhone && replyTime) {
+              const sentTime = rData.sentAt || camp.createdAt || '1970-01-01';
+              if (replyTime >= sentTime || (new Date(replyTime).getTime() - new Date(sentTime).getTime()) > -60000) {
+                isRead = true;
+                isDelivered = true;
+                // Persist read and reply status directly back to the recipient document
+                await updateDoc(rd.ref, {
+                  currentStatus: 'read',
+                  readAt: replyTime,
+                  deliveredAt: rData.deliveredAt || replyTime,
+                  hasReplied: true,
+                  repliedAt: replyTime,
+                  updatedAt: new Date().toISOString(),
+                }).catch(() => {});
+
+                if (rData.whatsappMessageId) {
+                  await setDoc(
+                    doc(serverDb, 'wamidTracker', rData.whatsappMessageId),
+                    { status: 'read', updatedAt: new Date().toISOString() },
+                    { merge: true }
+                  ).catch(() => {});
+                }
+              }
+            }
+
+            if (isRead) rCount++;
+            if (isDelivered) dCount++;
+          }
           stepReadCounts[st.stepNumber] = Math.max(stepReadCounts[st.stepNumber], rCount);
           stepDeliveredCounts[st.stepNumber] = Math.max(stepDeliveredCounts[st.stepNumber], dCount);
         }

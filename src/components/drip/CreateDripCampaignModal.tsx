@@ -356,9 +356,17 @@ export const CreateDripCampaignModal: React.FC<CreateDripCampaignModalProps> = (
     try {
       const selectedAccount = accounts.find((a) => a.phoneNumberId === whatsAppAccountId);
       const res = await uploadMediaFile(file, selectedAccount?.customToken, whatsAppAccountId);
+      const mediaId = res.metaMediaId || res.id;
+      const mediaUrl = res.url || res.fullUrl;
+      const prevStep = steps[stepIndex];
       handleUpdateStep(stepIndex, {
-        headerMediaUrl: res.url || res.fullUrl,
-        headerMediaId: res.metaMediaId || res.id,
+        headerMediaUrl: mediaUrl,
+        headerMediaId: mediaId,
+        variableValues: {
+          ...(prevStep?.variableValues || {}),
+          ...(mediaId ? { header_media_id: mediaId, media_id: mediaId } : {}),
+          ...(mediaUrl ? { header_media_url: mediaUrl, media_url: mediaUrl } : {}),
+        },
       });
       toast.showSuccess('Media Ready', `Uploaded "${file.name}" for Step ${steps[stepIndex].stepNumber}.`);
     } catch (err: any) {

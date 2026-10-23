@@ -3,7 +3,7 @@ import path from 'path';
 import os from 'os';
 
 // In-memory cache to avoid re-uploading the same file during a broadcast campaign
-const metaMediaIdCache = new Map<string, string>();
+export const metaMediaIdCache = new Map<string, string>();
 
 export interface InMemoryMediaFile {
   buffer: Buffer;
