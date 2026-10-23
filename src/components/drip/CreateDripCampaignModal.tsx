@@ -99,7 +99,7 @@ export const CreateDripCampaignModal: React.FC<CreateDripCampaignModalProps> = (
       delayUnit: 'hours',
       templateId: '',
       templateName: '',
-      condition: 'if_not_replied',
+      condition: 'always',
       variableValues: { body_1: 'Customer' },
     },
   ]);
@@ -215,7 +215,7 @@ export const CreateDripCampaignModal: React.FC<CreateDripCampaignModalProps> = (
       delayUnit: 'hours',
       templateId: '',
       templateName: '',
-      condition: 'if_not_replied',
+      condition: 'always',
       variableValues: { body_1: 'Customer' },
     };
     setSteps([...steps, newStep]);
@@ -894,13 +894,15 @@ export const CreateDripCampaignModal: React.FC<CreateDripCampaignModalProps> = (
                           onChange={(e) => handleUpdateStep(index, { condition: e.target.value as any })}
                           className="w-full px-3 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-xs font-semibold"
                         >
-                          <option value="always">Always Send (Unconditional)</option>
+                          <option value="always">Always Send (Recommended - Dispatches after delay)</option>
                           <option value="if_not_replied">Stop / Skip if Customer Replied (Smart Reply Guard)</option>
-                          <option value="if_read">Only Send If Previous Message Was Read</option>
+                          <option value="if_read">Wait for Read Receipt (Blue Tick Gate)</option>
                         </select>
                         <p className="text-[10px] text-neutral-500 mt-1">
                           {st.condition === 'if_not_replied'
                             ? 'Protects marketing budget & avoids spamming contacts who already engaged.'
+                            : st.condition === 'if_read'
+                            ? 'Waits for contact to read previous message. (If contact disabled blue ticks, auto-releases after 1 hour).'
                             : 'Fires automatically once the scheduled delay elapses.'}
                         </p>
                       </div>

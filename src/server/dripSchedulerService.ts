@@ -129,25 +129,79 @@ export async function checkAndExecuteDripCampaigns(): Promise<void> {
         if (currentStep.condition === 'if_read' && sub.lastStepSentAt) {
           try {
             const cleanPhone = (sub.phone || '').replace(/[^0-9]/g, '');
-            const msgQuery = query(
-              collection(serverDb, `organizations/${orgId}/messages`),
-              where('direction', '==', 'outbound')
-            );
-            const msgSnap = await getDocs(msgQuery);
-            const isRead = msgSnap.docs.some((d) => {
-              const m = d.data();
-              const mPhone = (m.contactId || m.recipientPhone || m.to || '').replace(/[^0-9]/g, '');
-              return mPhone.includes(cleanPhone) && m.timestamp >= sub.lastStepSentAt && m.status === 'read';
-            });
+            let isRead = false;
+            let isDelivered = false;
+
+            // A. Check recipient records in previous campaign step
+            const prevStepNum = currentStepNum - 1;
+            try {
+              const prevRecsQuery = query(
+                collection(serverDb, `organizations/${orgId}/campaigns/${campaignId}_step_${prevStepNum}/recipients`)
+              );
+              const prevRecsSnap = await getDocs(prevRecsQuery);
+              for (const rDoc of prevRecsSnap.docs) {
+                const r = rDoc.data();
+                const rPhone = (r.phoneNumber || r.phone || '').replace(/[^0-9]/g, '');
+                if (rPhone.includes(cleanPhone) || cleanPhone.includes(rPhone)) {
+                  if (r.currentStatus === 'read' || r.status === 'read' || r.timeline?.some((t: any) => t.status === 'read')) {
+                    isRead = true;
+                    break;
+                  }
+                  if (r.currentStatus === 'delivered' || r.status === 'delivered') {
+                    isDelivered = true;
+                  }
+                }
+              }
+            } catch (prevErr) {
+              console.warn('[DripScheduler] Prev step recipients check notice:', prevErr);
+            }
+
+            // B. Check messages collection
+            if (!isRead) {
+              try {
+                const msgQuery = query(
+                  collection(serverDb, `organizations/${orgId}/messages`),
+                  where('direction', '==', 'outbound')
+                );
+                const msgSnap = await getDocs(msgQuery);
+                for (const d of msgSnap.docs) {
+                  const m = d.data();
+                  const mPhone = (m.contactId || m.recipientPhone || m.to || '').replace(/[^0-9]/g, '');
+                  if ((mPhone.includes(cleanPhone) || cleanPhone.includes(mPhone)) && m.timestamp >= sub.lastStepSentAt) {
+                    if (m.status === 'read') {
+                      isRead = true;
+                      break;
+                    }
+                    if (m.status === 'delivered') {
+                      isDelivered = true;
+                    }
+                  }
+                }
+              } catch (msgErr) {
+                console.warn('[DripScheduler] Messages check notice:', msgErr);
+              }
+            }
+
+            // C. WhatsApp Privacy Grace Policy:
+            // WhatsApp contacts frequently have "Read Receipts" (blue ticks) turned off in settings.
+            // If the message was delivered and more than 30 minutes have elapsed, or if more than 60 minutes
+            // have elapsed since sending, release the step so the sequence does not freeze permanently.
+            const timeSinceLastStepMs = Date.now() - new Date(sub.lastStepSentAt).getTime();
+            const MAX_READ_WAIT_MS = 60 * 60 * 1000; // 1 hour
 
             if (!isRead) {
-              console.log(`[DripScheduler] Previous message for ${sub.phone} not yet read; holding step.`);
-              // Postpone check by 5 minutes to wait for customer to read the message
-              await updateDoc(subDoc.ref, {
-                nextExecutionAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
-                updatedAt: nowIso,
-              });
-              continue;
+              if (timeSinceLastStepMs > MAX_READ_WAIT_MS || (isDelivered && timeSinceLastStepMs > 30 * 60 * 1000)) {
+                console.log(`[DripScheduler] Read receipt wait timeout reached for ${sub.phone} (${Math.round(timeSinceLastStepMs / 60000)} mins); auto-releasing step.`);
+                isRead = true;
+              } else {
+                console.log(`[DripScheduler] Previous message for ${sub.phone} not yet read; holding step for up to 1 hr.`);
+                // Postpone check by 2 minutes
+                await updateDoc(subDoc.ref, {
+                  nextExecutionAt: new Date(Date.now() + 2 * 60 * 1000).toISOString(),
+                  updatedAt: nowIso,
+                });
+                continue;
+              }
             }
           } catch (readCheckErr) {
             console.warn('[DripScheduler] Read check warning:', readCheckErr);
@@ -156,7 +210,32 @@ export async function checkAndExecuteDripCampaigns(): Promise<void> {
 
         // 3. Prepare dispatch for this subscriber's step
         const phoneNumberId = camp.whatsAppAccountId || camp.phoneNumberId;
-        const template = currentStep.template;
+        let template = currentStep.template;
+
+        // Fallback: If template object is missing or incomplete, load it by templateId or templateName
+        if ((!template || !template.name) && (currentStep.templateId || currentStep.templateName)) {
+          try {
+            if (currentStep.templateId) {
+              const tDoc = await getDoc(doc(serverDb, `organizations/${orgId}/templates/${currentStep.templateId}`));
+              if (tDoc.exists()) {
+                template = tDoc.data();
+              }
+            }
+            if (!template && currentStep.templateName) {
+              const tQuery = query(
+                collection(serverDb, `organizations/${orgId}/templates`),
+                where('name', '==', currentStep.templateName)
+              );
+              const tSnap = await getDocs(tQuery);
+              if (!tSnap.empty) {
+                template = tSnap.docs[0].data();
+              }
+            }
+          } catch (tErr) {
+            console.warn('[DripScheduler] Could not fetch template fallback:', tErr);
+          }
+        }
+
         const stepHeaderMedia = currentStep.headerMediaUrl || currentStep.variableValues?.header_media_url || currentStep.variableValues?.media_url;
         const subCustom = sub.customFields || {};
         const recipient = {
@@ -241,7 +320,8 @@ export async function checkAndExecuteDripCampaigns(): Promise<void> {
 
           if (nextStep) {
             const delayUnit = nextStep.delayUnit || 'hours';
-            const delayVal = Number(nextStep.delayValue) || 1;
+            const rawDelay = Number(nextStep.delayValue);
+            const delayVal = isNaN(rawDelay) ? 0 : Math.max(0, rawDelay);
             const delayMs =
               delayUnit === 'minutes'
                 ? delayVal * 60 * 1000
