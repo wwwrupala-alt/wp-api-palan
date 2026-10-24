@@ -180,29 +180,89 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         );
 
         // For tenant users, synchronize the parent Admin's custom logo and support contact phone in real time
-        if (profile.role === 'user' && profile.adminOrganizationId) {
-          try {
-            const parentOrgRef = doc(db, 'organizations', profile.adminOrganizationId);
-            onSnapshot(
-              parentOrgRef,
-              (parentSnap) => {
-                if (parentSnap.exists()) {
-                  const pData = parentSnap.data() as Organization;
-                  setOrganization((prev) => {
-                    if (!prev) return prev;
-                    return {
-                      ...prev,
-                      logoUrl: pData.logoUrl || prev.logoUrl,
-                      contactPhone: pData.contactPhone || prev.contactPhone,
-                      adminBrandName: pData.name || (prev as any).adminBrandName,
-                    };
-                  });
+        if (profile.role === 'user') {
+          const parentAdminOrgId =
+            profile.adminOrganizationId ||
+            (profile as any).parentOrganizationId;
+          const parentAdminId =
+            profile.managedByAdminId ||
+            (profile as any).adminId;
+
+          const applyAdminBranding = (logo?: string, phone?: string, brand?: string) => {
+            if (logo) {
+              setOrganization((prev) => (prev ? { ...prev, logoUrl: logo } : prev));
+              setUserProfile((prev) => (prev ? { ...prev, adminLogoUrl: logo, logoUrl: logo } : prev));
+            }
+            if (phone) {
+              setOrganization((prev) => (prev ? { ...prev, contactPhone: phone } : prev));
+              setUserProfile((prev) => (prev ? { ...prev, adminContactPhone: phone, contactPhone: phone } : prev));
+            }
+            if (brand) {
+              setOrganization((prev) => (prev ? { ...prev, adminBrandName: brand } : prev));
+              setUserProfile((prev) => (prev ? { ...prev, adminBrandName: brand } : prev));
+            }
+          };
+
+          // Immediate query to parent admin org
+          if (parentAdminOrgId) {
+            getDoc(doc(db, 'organizations', parentAdminOrgId))
+              .then((snap) => {
+                if (snap.exists()) {
+                  const d = snap.data() as Organization;
+                  applyAdminBranding(d.logoUrl, d.contactPhone, d.adminBrandName || d.name);
                 }
-              },
-              () => {}
-            );
-          } catch (pErr) {
-            console.warn('[AuthContext] Parent admin org listener error:', pErr);
+              })
+              .catch(() => {});
+          }
+
+          // Immediate query to parent admin user profile
+          if (parentAdminId) {
+            getDoc(doc(db, 'users', parentAdminId))
+              .then((snap) => {
+                if (snap.exists()) {
+                  const d = snap.data() as UserProfile;
+                  applyAdminBranding(d.logoUrl || d.adminLogoUrl, d.contactPhone || d.phone, d.adminBrandName || d.displayName);
+                }
+              })
+              .catch(() => {});
+          }
+
+          // Real-time synchronization on parent admin organization
+          if (parentAdminOrgId) {
+            try {
+              const parentOrgRef = doc(db, 'organizations', parentAdminOrgId);
+              onSnapshot(
+                parentOrgRef,
+                (parentSnap) => {
+                  if (parentSnap.exists()) {
+                    const pData = parentSnap.data() as Organization;
+                    applyAdminBranding(pData.logoUrl, pData.contactPhone, pData.adminBrandName || pData.name);
+                  }
+                },
+                () => {}
+              );
+            } catch (pErr) {
+              console.warn('[AuthContext] Parent admin org listener error:', pErr);
+            }
+          }
+
+          // Real-time synchronization on parent admin user document
+          if (parentAdminId) {
+            try {
+              const parentAdminUserRef = doc(db, 'users', parentAdminId);
+              onSnapshot(
+                parentAdminUserRef,
+                (pSnap) => {
+                  if (pSnap.exists()) {
+                    const pData = pSnap.data() as UserProfile;
+                    applyAdminBranding(pData.logoUrl || pData.adminLogoUrl, pData.contactPhone || pData.phone, pData.adminBrandName || pData.displayName);
+                  }
+                },
+                () => {}
+              );
+            } catch (uErr) {
+              console.warn('[AuthContext] Parent admin user listener error:', uErr);
+            }
           }
         }
       }
@@ -258,7 +318,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setUserProfile(watchedTarget);
           setOrganization(impData.organization || null);
           setImpersonatedBy(impData.impersonator);
-          setLoading(false);
+          if (watchedTarget.role === 'user') {
+            loadUserData(watchedTarget).finally(() => setLoading(false));
+          } else {
+            setLoading(false);
+          }
           return;
         }
       } catch (e) {

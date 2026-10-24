@@ -150,26 +150,58 @@ export const MasterAdminPage: React.FC = () => {
   const [newAdminLogoUrl, setNewAdminLogoUrl] = useState('');
   const [newAdminContactPhone, setNewAdminContactPhone] = useState('');
 
-  // Logo upload from PC helper
+  // Logo upload from PC helper with auto-optimization for both rectangular & square shapes
   const handleLogoUpload = (file: File | undefined, mode: 'new' | 'edit') => {
     if (!file) return;
     if (!file.type.startsWith('image/')) {
       toast.showError('Invalid Image', 'Please choose a valid image file (PNG, JPG, SVG, WebP).');
       return;
     }
-    if (file.size > 2 * 1024 * 1024) {
-      toast.showError('File Too Large', 'Please select an image smaller than 2MB.');
-      return;
-    }
     const reader = new FileReader();
     reader.onload = (e) => {
-      const dataUrl = e.target?.result as string;
-      if (mode === 'new') {
-        setNewAdminLogoUrl(dataUrl);
-      } else {
-        setEditAdminLogoUrl(dataUrl);
-      }
-      toast.showSuccess('Logo Selected', 'Logo preview loaded from your PC.');
+      const rawDataUrl = e.target?.result as string;
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_WIDTH = 450;
+        const MAX_HEIGHT = 200;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > MAX_WIDTH || height > MAX_HEIGHT) {
+          const ratio = Math.min(MAX_WIDTH / width, MAX_HEIGHT / height);
+          width = Math.round(width * ratio);
+          height = Math.round(height * ratio);
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          const optimized = canvas.toDataURL('image/png');
+          if (mode === 'new') {
+            setNewAdminLogoUrl(optimized);
+          } else {
+            setEditAdminLogoUrl(optimized);
+          }
+          toast.showSuccess('Logo Selected', 'Logo loaded and optimized successfully from PC.');
+        } else {
+          if (mode === 'new') {
+            setNewAdminLogoUrl(rawDataUrl);
+          } else {
+            setEditAdminLogoUrl(rawDataUrl);
+          }
+        }
+      };
+      img.onerror = () => {
+        if (mode === 'new') {
+          setNewAdminLogoUrl(rawDataUrl);
+        } else {
+          setEditAdminLogoUrl(rawDataUrl);
+        }
+      };
+      img.src = rawDataUrl;
     };
     reader.readAsDataURL(file);
   };
@@ -1243,8 +1275,8 @@ export const MasterAdminPage: React.FC = () => {
                           <td className="py-3.5 px-4">
                             <div className="flex items-center space-x-2.5">
                               {adm.logoUrl ? (
-                                <div className="w-9 h-9 rounded-xl overflow-hidden border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 p-0.5 shrink-0 shadow-2xs">
-                                  <img src={adm.logoUrl} alt="Logo" className="w-full h-full object-contain rounded-lg" />
+                                <div className="h-9 max-w-[64px] min-w-[36px] rounded-lg overflow-hidden border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 p-0.5 shrink-0 shadow-2xs flex items-center justify-center">
+                                  <img src={adm.logoUrl} alt="Logo" className="max-h-8 max-w-[58px] w-auto h-auto object-contain rounded" />
                                 </div>
                               ) : (
                                 <div className="w-9 h-9 rounded-xl bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-400 flex items-center justify-center font-bold text-xs shrink-0">

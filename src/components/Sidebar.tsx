@@ -216,37 +216,46 @@ export const Sidebar: React.FC<SidebarProps> = ({
           isMobileOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        {/* Brand Header with Admin's Custom Logo & Identity */}
-        <div className="h-16 px-4 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
-          <div className="flex items-center space-x-2.5 overflow-hidden">
-            {organization?.logoUrl || userProfile?.adminLogoUrl ? (
-              <div className="w-10 h-10 rounded-xl overflow-hidden bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 flex items-center justify-center p-0.5 shrink-0 shadow-2xs">
+        {/* Brand Header with Admin's Custom Logo & Identity (Flexible for Square & Rectangular Logos) */}
+        <div className="h-16 px-3.5 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
+          <div className="flex items-center space-x-2.5 overflow-hidden w-full">
+            {(organization?.logoUrl || userProfile?.adminLogoUrl || userProfile?.logoUrl) ? (
+              <div className="h-11 max-w-[145px] min-w-[42px] px-1.5 py-1 rounded-xl bg-white dark:bg-neutral-800/90 border border-neutral-200/90 dark:border-neutral-700/80 flex items-center justify-center shrink-0 shadow-2xs">
                 <img
-                  src={organization?.logoUrl || userProfile?.adminLogoUrl}
-                  alt={organization?.name || 'Admin Logo'}
-                  className="w-full h-full object-contain rounded-lg"
+                  src={organization?.logoUrl || userProfile?.adminLogoUrl || userProfile?.logoUrl}
+                  alt={(userProfile?.role === 'user' ? (userProfile?.adminBrandName || (organization as any)?.adminBrandName || organization?.name) : organization?.name) || 'Admin Logo'}
+                  className="max-h-9 max-w-[135px] w-auto h-auto object-contain rounded-md"
                 />
               </div>
             ) : (
-              <div className="w-9 h-9 rounded-xl bg-emerald-600 flex items-center justify-center text-white shadow-sm shadow-emerald-500/30 shrink-0">
+              <div className="w-10 h-10 rounded-xl bg-emerald-600 flex items-center justify-center text-white shadow-sm shadow-emerald-500/30 shrink-0">
                 <MessageSquare className="w-5 h-5 fill-white/20" />
               </div>
             )}
-            <div className="truncate">
-              <span className="font-bold text-sm tracking-tight text-neutral-900 dark:text-white flex items-center space-x-1.5 truncate">
-                <span className="truncate">
-                  {userProfile?.role === 'user' && (userProfile?.adminBrandName || (organization as any)?.adminBrandName)
-                    ? (userProfile.adminBrandName || (organization as any).adminBrandName)
-                    : (organization?.name || 'CloudWABA')}
-                </span>
+            <div className="truncate min-w-0 flex-1">
+              <span className="font-bold text-sm tracking-tight text-neutral-900 dark:text-white block truncate" title={(userProfile?.role === 'user' && (userProfile?.adminBrandName || (organization as any)?.adminBrandName) ? (userProfile.adminBrandName || (organization as any).adminBrandName) : (organization?.name || 'Workspace'))}>
+                {userProfile?.role === 'user' && (userProfile?.adminBrandName || (organization as any)?.adminBrandName)
+                  ? (userProfile.adminBrandName || (organization as any).adminBrandName)
+                  : (organization?.name || 'Workspace')}
               </span>
               <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold truncate">
                 {userProfile?.role === 'user'
                   ? 'Official Customer Portal'
+                  : isMasterAdmin
+                  ? 'Platform Control Center'
                   : 'WhatsApp Business Portal'}
               </p>
             </div>
           </div>
+          {isMobileOpen && (
+            <button
+              onClick={() => setIsMobileOpen(false)}
+              className="lg:hidden p-1 text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 rounded-lg ml-1 shrink-0"
+              aria-label="Close sidebar"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
 
         {/* WhatsApp Connection Status Badge */}
@@ -303,39 +312,42 @@ export const Sidebar: React.FC<SidebarProps> = ({
           })}
         </nav>
 
-        {/* White-Label Admin Support Desk Card (Shown to Users and Admins) */}
-        {(organization?.contactPhone || userProfile?.adminContactPhone) && (
-          <div className="mx-3 my-2 p-2.5 rounded-2xl bg-gradient-to-br from-emerald-50 to-teal-50 dark:from-emerald-950/40 dark:to-teal-950/30 border border-emerald-200/80 dark:border-emerald-800/60 shadow-2xs space-y-1.5">
+        {/* White-Label Admin Support Desk Card (Call Admin & WhatsApp removed; Business Brand Name displayed) */}
+        {(organization?.contactPhone || userProfile?.adminContactPhone || (userProfile?.role === 'user' ? (userProfile?.adminBrandName || (organization as any)?.adminBrandName) : organization?.name)) && (
+          <div className="mx-3 my-2 p-2.5 rounded-xl bg-gradient-to-br from-emerald-50/90 to-teal-50/70 dark:from-emerald-950/40 dark:to-teal-950/30 border border-emerald-200/80 dark:border-emerald-800/60 shadow-2xs space-y-2">
             <div className="flex items-center space-x-2">
               <div className="w-6 h-6 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
                 <Phone className="w-3.5 h-3.5" />
               </div>
-              <div className="truncate">
+              <div className="truncate min-w-0 flex-1">
                 <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-900 dark:text-emerald-200">
-                  {userProfile?.role === 'user' ? 'Admin Support Desk' : 'Admin Helpline'}
+                  {userProfile?.role === 'user' ? 'Admin Support Helpline' : 'Admin Helpline'}
                 </p>
-                <p className="text-[11px] font-mono font-bold text-emerald-700 dark:text-emerald-400 truncate">
-                  {organization?.contactPhone || userProfile?.adminContactPhone}
-                </p>
+                {(organization?.contactPhone || userProfile?.adminContactPhone) ? (
+                  <p className="text-[11px] font-mono font-bold text-emerald-700 dark:text-emerald-400 truncate">
+                    {organization?.contactPhone || userProfile?.adminContactPhone}
+                  </p>
+                ) : (
+                  <p className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 truncate">
+                    Active Support Desk
+                  </p>
+                )}
               </div>
             </div>
-            <div className="flex items-center space-x-1.5 pt-0.5">
-              <a
-                href={`tel:${(organization?.contactPhone || userProfile?.adminContactPhone || '').replace(/[^0-9+]/g, '')}`}
-                className="flex-1 py-1 px-2 rounded-lg bg-white dark:bg-neutral-800 border border-emerald-200 dark:border-emerald-800/60 text-[10px] font-bold text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-neutral-700 text-center transition-colors flex items-center justify-center space-x-1"
+
+            {/* Business Brand Name Display */}
+            <div className="pt-1.5 border-t border-emerald-200/70 dark:border-emerald-800/50 flex items-center justify-between text-xs">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+                Business Brand
+              </span>
+              <span
+                className="font-bold text-emerald-900 dark:text-emerald-200 truncate max-w-[130px]"
+                title={(userProfile?.role === 'user' && (userProfile?.adminBrandName || (organization as any)?.adminBrandName) ? (userProfile.adminBrandName || (organization as any).adminBrandName) : (organization?.name || 'Workspace'))}
               >
-                <Phone className="w-3 h-3" />
-                <span>Call Admin</span>
-              </a>
-              <a
-                href={`https://wa.me/${(organization?.contactPhone || userProfile?.adminContactPhone || '').replace(/[^0-9]/g, '')}`}
-                target="_blank"
-                rel="noreferrer"
-                className="flex-1 py-1 px-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold text-center transition-colors flex items-center justify-center space-x-1"
-              >
-                <MessageSquare className="w-3 h-3" />
-                <span>WhatsApp</span>
-              </a>
+                {userProfile?.role === 'user' && (userProfile?.adminBrandName || (organization as any)?.adminBrandName)
+                  ? (userProfile.adminBrandName || (organization as any).adminBrandName)
+                  : (organization?.name || 'Workspace')}
+              </span>
             </div>
           </div>
         )}

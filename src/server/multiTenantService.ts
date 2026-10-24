@@ -639,6 +639,73 @@ export async function handleTenantAuthLogin(req: Request, res: Response): Promis
       ip: req.ip || '',
     });
 
+    // For team users: guarantee parent Admin's custom logo, contact phone, and brand name are always inherited
+    if (userRole === 'user') {
+      const parentAdminOrgId = (targetUser as any).adminOrganizationId || orgData?.parentOrganizationId;
+      const parentAdminId = (targetUser as any).managedByAdminId || orgData?.adminId;
+
+      let inheritedLogo = (targetUser as any).adminLogoUrl || (targetUser as any).logoUrl || orgData?.logoUrl || '';
+      let inheritedContactPhone = (targetUser as any).adminContactPhone || (targetUser as any).contactPhone || orgData?.contactPhone || '';
+      let inheritedBrandName = (targetUser as any).adminBrandName || (orgData as any)?.adminBrandName || '';
+
+      if (!inheritedLogo || !inheritedContactPhone || !inheritedBrandName) {
+        if (parentAdminOrgId) {
+          try {
+            const pOrgSnap = await getDoc(doc(serverDb, 'organizations', parentAdminOrgId));
+            if (pOrgSnap.exists()) {
+              const pData = pOrgSnap.data() as any;
+              if (!inheritedLogo && pData.logoUrl) inheritedLogo = pData.logoUrl;
+              if (!inheritedContactPhone && pData.contactPhone) inheritedContactPhone = pData.contactPhone;
+              if (!inheritedBrandName && (pData.adminBrandName || pData.name)) inheritedBrandName = pData.adminBrandName || pData.name;
+            }
+          } catch {}
+        }
+        if ((!inheritedLogo || !inheritedContactPhone || !inheritedBrandName) && parentAdminId) {
+          try {
+            const pAdminSnap = await getDoc(doc(serverDb, 'users', parentAdminId));
+            if (pAdminSnap.exists()) {
+              const pData = pAdminSnap.data() as any;
+              if (!inheritedLogo && pData.logoUrl) inheritedLogo = pData.logoUrl;
+              if (!inheritedContactPhone && (pData.contactPhone || pData.phone)) inheritedContactPhone = pData.contactPhone || pData.phone;
+              if (!inheritedBrandName && (pData.adminBrandName || pData.displayName)) inheritedBrandName = pData.adminBrandName || pData.displayName;
+            }
+          } catch {}
+        }
+      }
+
+      if (inheritedLogo) {
+        (targetUser as any).logoUrl = inheritedLogo;
+        (targetUser as any).adminLogoUrl = inheritedLogo;
+        if (orgData) orgData.logoUrl = inheritedLogo;
+      }
+      if (inheritedContactPhone) {
+        (targetUser as any).contactPhone = inheritedContactPhone;
+        (targetUser as any).adminContactPhone = inheritedContactPhone;
+        if (orgData) orgData.contactPhone = inheritedContactPhone;
+      }
+      if (inheritedBrandName) {
+        (targetUser as any).adminBrandName = inheritedBrandName;
+        if (orgData) (orgData as any).adminBrandName = inheritedBrandName;
+      }
+
+      // Persist to database
+      if (inheritedLogo || inheritedContactPhone || inheritedBrandName) {
+        updateDoc(doc(serverDb, 'users', (targetUser as UserProfile).uid), {
+          ...(inheritedLogo ? { logoUrl: inheritedLogo, adminLogoUrl: inheritedLogo } : {}),
+          ...(inheritedContactPhone ? { contactPhone: inheritedContactPhone, adminContactPhone: inheritedContactPhone } : {}),
+          ...(inheritedBrandName ? { adminBrandName: inheritedBrandName } : {}),
+        }).catch(() => {});
+
+        if (orgId) {
+          updateDoc(doc(serverDb, 'organizations', orgId), {
+            ...(inheritedLogo ? { logoUrl: inheritedLogo } : {}),
+            ...(inheritedContactPhone ? { contactPhone: inheritedContactPhone } : {}),
+            ...(inheritedBrandName ? { adminBrandName: inheritedBrandName } : {}),
+          }).catch(() => {});
+        }
+      }
+    }
+
     // Sanitized user profile without password hash
     const { loginPassword, ...sanitizedProfile } = targetUser as any;
 
@@ -1050,6 +1117,44 @@ export async function handleUpdateMasterAdmin(req: Request, res: Response): Prom
         ...(businessName ? { name: businessName, adminBrandName: businessName } : {}),
         updatedAt: new Date().toISOString(),
       }, { merge: true });
+    }
+
+    // Propagate updated branding to all child team users under this admin
+    if (logoUrl !== undefined || contactPhone !== undefined || businessName) {
+      try {
+        const allUsersSnap = await getDocs(collection(serverDb, 'users'));
+        for (const uDoc of allUsersSnap.docs) {
+          const uData = uDoc.data() as any;
+          if (
+            uData.role === 'user' &&
+            (uData.managedByAdminId === adminId || uData.adminOrganizationId === orgId)
+          ) {
+            const childUpdates: any = { updatedAt: new Date().toISOString() };
+            if (logoUrl !== undefined) {
+              childUpdates.logoUrl = logoUrl;
+              childUpdates.adminLogoUrl = logoUrl;
+            }
+            if (contactPhone !== undefined) {
+              childUpdates.contactPhone = contactPhone;
+              childUpdates.adminContactPhone = contactPhone;
+            }
+            if (businessName) {
+              childUpdates.adminBrandName = businessName;
+            }
+            await updateDoc(uDoc.ref, childUpdates).catch(() => {});
+            if (uData.organizationId) {
+              await updateDoc(doc(serverDb, 'organizations', uData.organizationId), {
+                ...(logoUrl !== undefined ? { logoUrl } : {}),
+                ...(contactPhone !== undefined ? { contactPhone } : {}),
+                ...(businessName ? { adminBrandName: businessName } : {}),
+                updatedAt: new Date().toISOString(),
+              }).catch(() => {});
+            }
+          }
+        }
+      } catch (propErr) {
+        console.warn('[UpdateAdmin] Child branding propagation warning:', propErr);
+      }
     }
 
     await recordAuditLog({
@@ -1913,7 +2018,54 @@ export async function handleAdminImpersonate(req: Request, res: Response): Promi
       await setDoc(doc(serverDb, 'organizations', userOrgId), orgData).catch(() => {});
     }
 
-    const { loginPassword, ...safeUser } = { ...userData, organizationId: userOrgId } as any;
+    // Guarantee parent admin branding (logo, contact phone, brand name) is populated
+    let adminLogo = userData.adminLogoUrl || userData.logoUrl || orgData?.logoUrl || '';
+    let adminContact = userData.adminContactPhone || userData.contactPhone || orgData?.contactPhone || '';
+    let adminBrand = userData.adminBrandName || (orgData as any)?.adminBrandName || '';
+
+    const parentAdminOrg = orgId || (userData as any).adminOrganizationId;
+    const parentAdminId = adminId || userData.managedByAdminId;
+
+    if (!adminLogo || !adminContact || !adminBrand) {
+      if (parentAdminOrg) {
+        try {
+          const pSnap = await getDoc(doc(serverDb, 'organizations', parentAdminOrg));
+          if (pSnap.exists()) {
+            const pD = pSnap.data() as any;
+            if (!adminLogo && pD.logoUrl) adminLogo = pD.logoUrl;
+            if (!adminContact && pD.contactPhone) adminContact = pD.contactPhone;
+            if (!adminBrand && (pD.adminBrandName || pD.name)) adminBrand = pD.adminBrandName || pD.name;
+          }
+        } catch {}
+      }
+      if ((!adminLogo || !adminContact || !adminBrand) && parentAdminId) {
+        try {
+          const aSnap = await getDoc(doc(serverDb, 'users', parentAdminId));
+          if (aSnap.exists()) {
+            const aD = aSnap.data() as any;
+            if (!adminLogo && aD.logoUrl) adminLogo = aD.logoUrl;
+            if (!adminContact && (aD.contactPhone || aD.phone)) adminContact = aD.contactPhone || aD.phone;
+            if (!adminBrand && (aD.adminBrandName || aD.displayName)) adminBrand = aD.adminBrandName || aD.displayName;
+          }
+        } catch {}
+      }
+    }
+
+    const { loginPassword, ...safeUser } = {
+      ...userData,
+      organizationId: userOrgId,
+      logoUrl: adminLogo || userData.logoUrl || '',
+      adminLogoUrl: adminLogo || userData.adminLogoUrl || '',
+      contactPhone: adminContact || userData.contactPhone || '',
+      adminContactPhone: adminContact || userData.adminContactPhone || '',
+      adminBrandName: adminBrand || userData.adminBrandName || '',
+    } as any;
+
+    if (orgData) {
+      orgData.logoUrl = adminLogo || orgData.logoUrl || '';
+      orgData.contactPhone = adminContact || orgData.contactPhone || '';
+      orgData.adminBrandName = adminBrand || orgData.adminBrandName || '';
+    }
 
     res.json({
       success: true,
