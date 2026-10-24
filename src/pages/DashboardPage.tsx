@@ -164,14 +164,14 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
     <div className="p-4 sm:p-6 space-y-6 max-w-7xl mx-auto animate-fadeIn">
       {/* White-Label Admin Identity Card (Shown to Users & Workspace) */}
       {(userProfile?.role === 'user' || Boolean(organization?.logoUrl || userProfile?.adminLogoUrl || organization?.contactPhone || userProfile?.adminContactPhone)) && (
-        <div className="p-4 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+        <div className="p-4 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 shadow-xs flex items-center justify-between gap-3">
           <div className="flex items-center space-x-3.5">
             {organization?.logoUrl || userProfile?.adminLogoUrl ? (
-              <div className="w-12 h-12 rounded-xl overflow-hidden bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 flex items-center justify-center p-1 shrink-0 shadow-2xs">
+              <div className="h-12 max-w-[150px] min-w-[44px] rounded-xl overflow-hidden bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 flex items-center justify-center p-1 shrink-0 shadow-2xs">
                 <img
                   src={organization?.logoUrl || userProfile?.adminLogoUrl}
                   alt="Admin Logo"
-                  className="w-full h-full object-contain rounded-lg"
+                  className="max-h-10 max-w-[140px] w-auto h-auto object-contain rounded-lg"
                 />
               </div>
             ) : (
@@ -202,27 +202,6 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
               </p>
             </div>
           </div>
-
-          {(organization?.contactPhone || userProfile?.adminContactPhone) && (
-            <div className="flex items-center space-x-2 shrink-0 self-end sm:self-center">
-              <a
-                href={`tel:${(organization?.contactPhone || userProfile?.adminContactPhone || '').replace(/[^0-9+]/g, '')}`}
-                className="px-3 py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-700 text-xs font-semibold text-neutral-800 dark:text-neutral-200 transition-colors flex items-center space-x-1.5 cursor-pointer"
-              >
-                <Phone className="w-3.5 h-3.5 text-emerald-600" />
-                <span>Call Helpline</span>
-              </a>
-              <a
-                href={`https://wa.me/${(organization?.contactPhone || userProfile?.adminContactPhone || '').replace(/[^0-9]/g, '')}`}
-                target="_blank"
-                rel="noreferrer"
-                className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors flex items-center space-x-1.5 shadow-2xs cursor-pointer"
-              >
-                <MessageSquare className="w-3.5 h-3.5" />
-                <span>WhatsApp Admin</span>
-              </a>
-            </div>
-          )}
         </div>
       )}
 

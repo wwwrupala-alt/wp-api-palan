@@ -535,7 +535,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         throw new Error(serverMsg);
       }
       if (response.status === 403) {
-        throw new Error('Subscription plan expire ho chuka hai (0 days remaining) ya account suspended hai. Kripya Master Admin se plan renew ya validity extend karwayein.');
+        throw new Error(
+          expectedRole === 'user'
+            ? 'Your account subscription has expired (0 days remaining) or has been suspended. Please contact your administrator.'
+            : 'Your subscription plan has expired (0 days remaining) or has been suspended. Please contact platform administration.'
+        );
       }
       throw new Error(`Authentication failed (${response.status}). Please verify credentials.`);
     }

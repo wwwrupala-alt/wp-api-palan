@@ -311,27 +311,6 @@ export const WhatsAppAccountsPage: React.FC<WhatsAppAccountsPageProps> = ({
         </div>
       )}
 
-      {/* Meta September-October 2026 Coexistence & Migration Notice */}
-      <div className="p-4 rounded-2xl bg-linear-to-r from-emerald-500/10 via-teal-500/5 to-transparent border border-emerald-500/20 text-xs space-y-2">
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <div className="flex items-center space-x-2">
-            <span className="text-base">✨</span>
-            <span className="font-bold text-neutral-900 dark:text-white">
-              Meta WhatsApp 2026 Updates (Naya Account Model &bull; 14-Day Coexistence Rule)
-            </span>
-          </div>
-          <button
-            onClick={onOpenConnectModal}
-            className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 hover:underline flex items-center space-x-1 cursor-pointer"
-          >
-            <span>Fix Error #2655093 (Unlink Wbbox)</span>
-            <ExternalLink className="w-3 h-3" />
-          </button>
-        </div>
-        <p className="text-neutral-600 dark:text-neutral-300 leading-relaxed text-[11px]">
-          📱 <strong>14-Day Rule:</strong> Agar aap Coexistence mode use kar rahe hain (jahan WhatsApp Business Mobile App aur Cloud API dono chalte hain), to Meta ke rule ke mutabiq physical mobile par WhatsApp Business app ko har 14 din me kam-se-kam ek baar open zaroor karein taaki link auto-disconnect na ho. Agar aapka number purane provider (Wbbox) pe atka hai, to connect modal me &quot;Fix #2655093&quot; tab se unbind karein.
-        </p>
-      </div>
 
       {/* Account List */}
       {accounts.length === 0 ? (

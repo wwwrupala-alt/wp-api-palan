@@ -335,13 +335,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </div>
             </div>
 
-            {/* Business Brand Name Display */}
-            <div className="pt-1.5 border-t border-emerald-200/70 dark:border-emerald-800/50 flex items-center justify-between text-xs">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
-                Business Brand
-              </span>
+            {/* Business Brand Name Display (without the redundant 'Business Brand' label) */}
+            <div className="pt-1.5 border-t border-emerald-200/70 dark:border-emerald-800/50 flex items-center justify-center text-center">
               <span
-                className="font-bold text-emerald-900 dark:text-emerald-200 truncate max-w-[130px]"
+                className="font-bold text-xs text-emerald-900 dark:text-emerald-200 truncate w-full text-center tracking-wide"
                 title={(userProfile?.role === 'user' && (userProfile?.adminBrandName || (organization as any)?.adminBrandName) ? (userProfile.adminBrandName || (organization as any).adminBrandName) : (organization?.name || 'Workspace'))}
               >
                 {userProfile?.role === 'user' && (userProfile?.adminBrandName || (organization as any)?.adminBrandName)

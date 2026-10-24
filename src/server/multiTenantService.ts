@@ -603,26 +603,96 @@ export async function handleTenantAuthLogin(req: Request, res: Response): Promis
       }
     }
 
-    // Check if account or organization is suspended
+    // 1. Account Suspended Check
     const isAccountSuspended =
       orgData?.status === 'suspended' ||
       (targetUser as UserProfile).subscription?.status === 'suspended';
 
     if (isAccountSuspended) {
-      res.status(403).json({
-        success: false,
-        error: 'Aapka account ya workspace Master Admin dwara Suspend kar diya gaya hai. Kripya Master Admin se reactivate karwayein.',
-      });
+      if (userRole === 'user') {
+        res.status(403).json({
+          success: false,
+          error: 'Your account has been suspended. Please contact your administrator for assistance.',
+        });
+      } else {
+        res.status(403).json({
+          success: false,
+          error: 'Your workspace account has been suspended. Please contact platform administration to reactivate your access.',
+        });
+      }
       return;
     }
 
-    // Check if subscription has expired (except for Master Admin)
+    // 2. Subscription Plan Validity / Expiry Check (0 Days Remaining)
     if (userRole !== 'master_admin') {
       const expiresAt = (targetUser as UserProfile).subscription?.expiresAt || orgData?.subscription?.expiresAt;
       if (expiresAt && !isNaN(new Date(expiresAt).getTime()) && new Date(expiresAt).getTime() < Date.now()) {
+        if (userRole === 'user') {
+          res.status(403).json({
+            success: false,
+            error: 'Your subscription plan has expired (0 days remaining). Please contact your administrator to renew or extend your plan.',
+          });
+        } else {
+          res.status(403).json({
+            success: false,
+            error: `Your subscription plan has expired (0 days remaining - Expired on ${new Date(expiresAt).toLocaleDateString()}). Please renew your plan or contact support to extend your account validity.`,
+          });
+        }
+        return;
+      }
+    }
+
+    // 3. For team users: Verify parent Admin account validity (Parent Admin's expiry is the master cutoff)
+    // IMPORTANT: Message NEVER exposes parent admin hierarchy to the team user
+    if (userRole === 'user') {
+      const parentAdminOrgId = (targetUser as any).adminOrganizationId || orgData?.parentOrganizationId;
+      const parentAdminId = (targetUser as any).managedByAdminId || orgData?.adminId;
+
+      let parentExpired = false;
+      let parentSuspended = false;
+
+      if (parentAdminOrgId) {
+        try {
+          const pOrgSnap = await getDoc(doc(serverDb, 'organizations', parentAdminOrgId));
+          if (pOrgSnap.exists()) {
+            const pD = pOrgSnap.data() as any;
+            if (pD.status === 'suspended') parentSuspended = true;
+            const pExp = pD.subscription?.expiresAt;
+            if (pExp && !isNaN(new Date(pExp).getTime()) && new Date(pExp).getTime() < Date.now()) {
+              parentExpired = true;
+            }
+          }
+        } catch {}
+      }
+
+      if (!parentExpired && !parentSuspended && parentAdminId) {
+        try {
+          const pAdminSnap = await getDoc(doc(serverDb, 'users', parentAdminId));
+          if (pAdminSnap.exists()) {
+            const pD = pAdminSnap.data() as any;
+            if (pD.subscription?.status === 'suspended') parentSuspended = true;
+            const pExp = pD.subscription?.expiresAt;
+            if (pExp && !isNaN(new Date(pExp).getTime()) && new Date(pExp).getTime() < Date.now()) {
+              parentExpired = true;
+            }
+          }
+        } catch {}
+      }
+
+      if (parentSuspended) {
+        // Disguised as standard account suspension so team user has zero idea about parent admin
         res.status(403).json({
           success: false,
-          error: `Subscription plan expire ho chuka hai (0 days remaining - Expired on ${new Date(expiresAt).toLocaleDateString()}). Kripya Master Admin se plan renew ya validity extend karwayein.`,
+          error: 'Your account has been suspended. Please contact your administrator for assistance.',
+        });
+        return;
+      }
+
+      if (parentExpired) {
+        // Disguised as standard subscription expiration so team user has zero idea about parent admin
+        res.status(403).json({
+          success: false,
+          error: 'Your subscription plan has expired (0 days remaining). Please contact your administrator to renew or extend your plan.',
         });
         return;
       }
@@ -1643,10 +1713,31 @@ export async function handleCreateAdminUser(req: Request, res: Response): Promis
       } catch (e) {}
     }
 
-    const expiresAt =
+    // Resolve Admin's expiry date to ensure User validity never exceeds Admin's validity
+    let adminExpiresAt = orgSnap.exists() ? (orgSnap.data() as any).subscription?.expiresAt : undefined;
+    if (!adminExpiresAt && adminId) {
+      try {
+        const adminSnap = await getDoc(doc(serverDb, 'users', adminId));
+        if (adminSnap.exists()) {
+          adminExpiresAt = (adminSnap.data() as any).subscription?.expiresAt;
+        }
+      } catch {}
+    }
+
+    let calculatedUserExpiry =
       validityDays && Number(validityDays) > 0
         ? new Date(Date.now() + Number(validityDays) * 24 * 60 * 60 * 1000).toISOString()
         : undefined;
+
+    // Hard ceiling: User cannot have validity beyond their parent Admin's plan
+    if (adminExpiresAt && calculatedUserExpiry) {
+      const adminExpiryMs = new Date(adminExpiresAt).getTime();
+      const userExpiryMs = new Date(calculatedUserExpiry).getTime();
+      if (userExpiryMs > adminExpiryMs) {
+        calculatedUserExpiry = adminExpiresAt;
+      }
+    }
+    const expiresAt = calculatedUserExpiry;
 
     // Clear any residual whatsappAccounts or leftover subcollections so the new user starts 100% PURA BLANK & FRESH
     try {
