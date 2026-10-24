@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import type { UserRole } from '../types/index.ts';
+import { CaptchaBox, generateCaptchaCode } from './CaptchaBox.tsx';
 
 interface LoginPageProps {
   onOpenLegal?: (doc: 'privacy' | 'terms') => void;
@@ -51,16 +52,22 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onOpenLegal }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [infoMessage, setInfoMessage] = useState<string | null>(null);
 
-  // Load and display any auto-logout security notice from storage
+  // Security CAPTCHA State
+  const [captchaCode, setCaptchaCode] = useState(() => generateCaptchaCode(5));
+  const [captchaInput, setCaptchaInput] = useState('');
+
+  const refreshCaptcha = () => {
+    setCaptchaCode(generateCaptchaCode(5));
+    setCaptchaInput('');
+  };
+
+  // Clear any legacy logout notices from storage
   useEffect(() => {
     try {
-      const notice = localStorage.getItem('cw_logout_notice');
-      if (notice) {
-        setInfoMessage(notice);
-        localStorage.removeItem('cw_logout_notice');
-      }
+      localStorage.removeItem('cw_logout_notice');
+      localStorage.removeItem('cw_session_start_time');
+      localStorage.removeItem('cw_last_activity_time');
     } catch {}
   }, []);
 
@@ -124,7 +131,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onOpenLegal }) => {
   const handleSelectRole = (role: 'user' | 'admin' | 'master_admin') => {
     setLoginRole(role);
     setError(null);
-    setInfoMessage(null);
     if (role === 'master_admin') {
       if (!identifier.trim()) {
         setIdentifier('master@cloudwaba.com');
@@ -142,8 +148,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onOpenLegal }) => {
     setIdentifier('');
     setPassword('');
     setError(null);
-    setInfoMessage(null);
     setDetectedRoleInfo(null);
+    refreshCaptcha();
   };
 
   const handleCredentialAuth = async (e: React.FormEvent) => {
@@ -153,9 +159,20 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onOpenLegal }) => {
       return;
     }
 
+    // Advanced CAPTCHA Anti-Bot Security Validation
+    if (!captchaInput.trim()) {
+      setError('Please enter the security verification CAPTCHA code.');
+      return;
+    }
+
+    if (captchaInput.trim().toUpperCase() !== captchaCode.toUpperCase()) {
+      setError('Invalid CAPTCHA code. Please enter the characters shown in the security box.');
+      refreshCaptcha();
+      return;
+    }
+
     setLoading(true);
     setError(null);
-    setInfoMessage(null);
 
     try {
       // If detected role is specific, use that; otherwise use active loginRole
@@ -164,6 +181,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onOpenLegal }) => {
     } catch (err: any) {
       const msg = err?.message || 'Authentication failed. Please verify credentials.';
       setError(msg);
+      refreshCaptcha();
     } finally {
       setLoading(false);
     }
@@ -247,7 +265,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onOpenLegal }) => {
           {!dbConnected && (
             <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 text-xs text-amber-800 dark:text-amber-300 flex items-center space-x-2">
               <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>Connecting to Cloud Firestore database...</span>
+              <span>Connecting to secure enterprise database...</span>
             </div>
           )}
 
@@ -255,13 +273,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onOpenLegal }) => {
             <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-xs text-rose-700 dark:text-rose-300 flex items-start space-x-2 animate-fadeIn">
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
               <p className="flex-1 font-semibold">{error}</p>
-            </div>
-          )}
-
-          {infoMessage && (
-            <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/80 text-xs text-amber-900 dark:text-amber-200 flex items-start space-x-2.5 shadow-xs animate-fadeIn">
-              <ShieldCheck className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-              <p className="flex-1 font-medium leading-relaxed">{infoMessage}</p>
             </div>
           )}
 
@@ -365,6 +376,21 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onOpenLegal }) => {
                 </button>
               </div>
             </div>
+
+            {/* Advanced Anti-Bot Security CAPTCHA */}
+            <CaptchaBox
+              captchaCode={captchaCode}
+              userInput={captchaInput}
+              onChange={(val) => {
+                setError(null);
+                setCaptchaInput(val);
+              }}
+              onRefresh={refreshCaptcha}
+              isMatched={
+                captchaInput.trim().length === captchaCode.length &&
+                captchaInput.trim().toUpperCase() === captchaCode.toUpperCase()
+              }
+            />
 
             <button
               type="submit"

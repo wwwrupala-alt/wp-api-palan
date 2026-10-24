@@ -101,8 +101,14 @@ const AppContent: React.FC = () => {
     userProfile?.canAccessAutomations,
     userProfile?.canAccessInbox,
     userProfile?.canAccessDripCampaigns,
-    (userProfile?.subscription?.features as any)?.canAutomations,
   ]);
+
+  // Re-lock WhatsApp tab on navigating to another menu unless master 1646 PIN was used
+  React.useEffect(() => {
+    if (currentTab !== 'whatsapp' && sessionStorage.getItem('wa_numbers_master_unlocked') !== 'true') {
+      sessionStorage.removeItem('wa_numbers_unlocked');
+    }
+  }, [currentTab]);
 
   if (legalDoc) {
     return (
@@ -190,7 +196,8 @@ const AppContent: React.FC = () => {
           {currentTab === 'users' && (isAdmin || isMasterAdmin) && <TenantUsersPage />}
           {currentTab === 'inbox' && (isMasterAdmin || userProfile?.canAccessInbox !== false) && <InboxPage />}
           {currentTab === 'whatsapp' &&
-            (sessionStorage.getItem('wa_numbers_unlocked') === 'true' ? (
+            (sessionStorage.getItem('wa_numbers_master_unlocked') === 'true' ||
+            sessionStorage.getItem('wa_numbers_unlocked') === 'true' ? (
               <WhatsAppAccountsPage onOpenConnectModal={() => setIsConnectModalOpen(true)} />
             ) : (
               <WhatsAppPinModal

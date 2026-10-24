@@ -1051,32 +1051,11 @@ export async function handleCreateTemplate(req: Request, res: Response) {
             }
           }
         } else if (type === 'BODY' && comp.text) {
-          let cleanText = String(comp.text || '').trim();
-
-          // Meta WhatsApp Rule: Variables cannot be at the very start or very end of the template text
-          if (/^\{\{\d+\}\}/.test(cleanText)) {
-            cleanText = `Hello ${cleanText}`;
-          }
-          if (/\{\{\d+\}\}[.!?,;:\s]*$/.test(cleanText)) {
-            cleanText = `${cleanText.replace(/[.!?,;:\s]*$/, '')}. Thank you for choosing us!`;
-          }
-
-          // Meta WhatsApp Rule: Consecutive variables {{1}}{{2}} are prohibited
-          cleanText = cleanText.replace(/\{\{(\d+)\}\}\s*\{\{(\d+)\}\}/g, '{{$1}} - {{$2}}');
+          // Strictly preserve exact text as entered by the user
+          const cleanText = String(comp.text || '').trim();
 
           const matches = cleanText.match(/\{\{(\d+)\}\}/g) || [];
           const uniqueIndices = Array.from(new Set(matches.map((m: string) => m.replace(/[\{\}]/g, ''))));
-
-          // Meta Rule: "Parameters words ratio exceeds limit" (code: 100, subcode: 2388293)
-          // Meta requires sufficient non-variable text surrounding variables.
-          if (uniqueIndices.length > 0) {
-            const textOnly = cleanText.replace(/\{\{\d+\}\}/g, ' ').replace(/\s+/g, ' ').trim();
-            const wordCount = textOnly ? textOnly.split(/\s+/).length : 0;
-            const minWordsNeeded = uniqueIndices.length * 4;
-            if (wordCount < minWordsNeeded) {
-              cleanText = `${cleanText} We truly value your business and are here to provide the best service. Please let us know if you need any assistance.`;
-            }
-          }
 
           updated.text = cleanText;
 

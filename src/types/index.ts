@@ -81,6 +81,11 @@ export interface UserProfile {
   photoURL?: string;
   role: UserRole;
   phone?: string;
+  contactPhone?: string;
+  logoUrl?: string;
+  adminLogoUrl?: string;
+  adminContactPhone?: string;
+  adminBrandName?: string;
   loginPassword?: string;
   displayPassword?: string;
   managedByAdminId?: string;
@@ -103,6 +108,9 @@ export interface Organization {
   adminId?: string;
   parentOrganizationId?: string;
   status: 'active' | 'suspended';
+  logoUrl?: string;
+  contactPhone?: string;
+  adminBrandName?: string;
   metaAppConfig?: OrganizationMetaConfig;
   subscription?: UserSubscription;
   createdAt: string;

@@ -119,7 +119,11 @@ export const MiniTemplatePhonePreview: React.FC<MiniTemplatePhonePreviewProps> =
 
   const renderBodyContent = () => {
     if (!bodyComp?.text) return 'Hello, thank you for contacting us!';
-    const rawText = bodyComp.text;
+    let rawText = bodyComp.text;
+    // Strip legacy auto-injected text so templates display cleanly as user intended
+    rawText = rawText
+      .replace(/\s*We truly value your business and are here to provide the best service\. Please let us know if you need any assistance\./g, '')
+      .replace(/\s*Thank you for choosing us!/g, '');
 
     const sampleList: string[] =
       bodyComp.example?.body_text?.[0] ||
@@ -392,8 +396,8 @@ export const MiniTemplatePhonePreview: React.FC<MiniTemplatePhonePreviewProps> =
                 isLarge
                   ? 'text-xs'
                   : isCompact
-                  ? 'text-[8.5px] line-clamp-4'
-                  : 'text-[10px] line-clamp-6'
+                  ? 'text-[8.5px] max-h-36 overflow-y-auto pr-0.5'
+                  : 'text-[10px]'
               }`}
             >
               {renderBodyContent()}

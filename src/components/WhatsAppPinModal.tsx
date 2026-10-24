@@ -3,7 +3,7 @@ import { Lock, ShieldAlert, KeyRound, X, CheckCircle2 } from 'lucide-react';
 
 interface WhatsAppPinModalProps {
   isOpen: boolean;
-  onSuccess: () => void;
+  onSuccess: (isMasterSession?: boolean) => void;
   onClose: () => void;
 }
 
@@ -26,12 +26,20 @@ export const WhatsAppPinModal: React.FC<WhatsAppPinModalProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (pin === '4616') {
+    if (pin === '1646') {
+      // Master Persistent PIN: Remains unlocked for whole session until user logs out
+      sessionStorage.setItem('wa_numbers_master_unlocked', 'true');
       sessionStorage.setItem('wa_numbers_unlocked', 'true');
       setError('');
-      onSuccess();
+      onSuccess(true);
+    } else if (pin === '4616') {
+      // Standard PIN: Unlocks for this visit only; navigating away requires entering PIN again
+      sessionStorage.removeItem('wa_numbers_master_unlocked');
+      sessionStorage.setItem('wa_numbers_unlocked', 'true');
+      setError('');
+      onSuccess(false);
     } else {
-      setError('Incorrect Security PIN. Default PIN is 4616.');
+      setError('Incorrect Security PIN. Please try again.');
       setPin('');
     }
   };
@@ -83,9 +91,6 @@ export const WhatsAppPinModal: React.FC<WhatsAppPinModalProps> = ({
                 className="w-full px-4 py-3 text-center tracking-[0.5em] text-2xl font-bold rounded-xl border border-neutral-300 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800 text-neutral-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
               />
             </div>
-            <p className="text-[11px] text-neutral-400 dark:text-neutral-500 text-center mt-1.5">
-              Default PIN: <span className="font-mono font-bold text-neutral-600 dark:text-neutral-300">4616</span>
-            </p>
           </div>
 
           {error && (

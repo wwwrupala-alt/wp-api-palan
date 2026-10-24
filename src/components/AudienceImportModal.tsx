@@ -440,7 +440,7 @@ export const AudienceImportModal: React.FC<AudienceImportModalProps> = ({
         throw new Error('No valid contacts to import.');
       }
 
-      setProgressMsg(`Saving ${contactsToImport.length} contacts to Firestore database...`);
+      setProgressMsg(`Saving ${contactsToImport.length} contacts to database...`);
       const res = await bulkAddOrUpdateContacts(organizationId, contactsToImport);
 
       toast.showSuccess(

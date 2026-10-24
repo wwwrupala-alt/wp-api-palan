@@ -759,6 +759,14 @@ export async function handleGetMasterAdmins(req: Request, res: Response): Promis
 
         if (orgId) {
           try {
+            const orgDoc = await getDoc(doc(serverDb, 'organizations', orgId));
+            if (orgDoc.exists()) {
+              const od = orgDoc.data() as any;
+              if (od.logoUrl && !u.logoUrl) (u as any).logoUrl = od.logoUrl;
+              if (od.contactPhone && !u.contactPhone) (u as any).contactPhone = od.contactPhone;
+              if (od.name && !(u as any).businessName) (u as any).businessName = od.name;
+            }
+
             // Count users under this admin's organization
             const orgUsersQuery = query(collection(serverDb, 'users'), where('organizationId', '==', orgId));
             const orgUsersSnap = await getDocs(orgUsersQuery);
@@ -810,6 +818,8 @@ export async function handleCreateMasterAdmin(req: Request, res: Response): Prom
       canWatchWorkspaceLive,
       canAccessInbox,
       canAccessDripCampaigns,
+      logoUrl,
+      contactPhone,
     } = req.body;
 
     if (!adminName || !password || (!email && !phone)) {
@@ -819,6 +829,7 @@ export async function handleCreateMasterAdmin(req: Request, res: Response): Prom
 
     const cleanPhone = String(phone || '').trim().replace(/[^0-9]/g, '');
     const cleanEmail = String(email || '').trim().toLowerCase();
+    const cleanContactPhone = String(contactPhone || cleanPhone || '').trim();
     const uniqueSuffix = cleanPhone || `${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const adminUid = `admin_${uniqueSuffix}`;
 
@@ -843,6 +854,9 @@ export async function handleCreateMasterAdmin(req: Request, res: Response): Prom
       name: businessName || `${adminName}'s Workspace`,
       ownerId: adminUid,
       status: 'active',
+      logoUrl: logoUrl || '',
+      contactPhone: cleanContactPhone,
+      adminBrandName: businessName || `${adminName}'s Workspace`,
       subscription: {
         planId: planId || 'plan_pro',
         planName,
@@ -865,6 +879,11 @@ export async function handleCreateMasterAdmin(req: Request, res: Response): Prom
       displayName: adminName,
       email: cleanEmail || `${cleanPhone || uniqueSuffix}@cloudwaba.internal`,
       phone: cleanPhone,
+      contactPhone: cleanContactPhone,
+      logoUrl: logoUrl || '',
+      adminLogoUrl: logoUrl || '',
+      adminContactPhone: cleanContactPhone,
+      adminBrandName: businessName || `${adminName}'s Workspace`,
       role: 'admin',
       organizationId: newOrgId,
       loginPassword: hashPassword(password),
@@ -936,6 +955,9 @@ export async function handleUpdateMasterAdmin(req: Request, res: Response): Prom
       maxWhatsAppNumbers,
       maxUsers,
       displayName,
+      businessName,
+      logoUrl,
+      contactPhone,
       newPassword,
       canAccessSettingsMetaApi,
       canAccessAutomations,
@@ -986,6 +1008,17 @@ export async function handleUpdateMasterAdmin(req: Request, res: Response): Prom
     };
 
     if (displayName) updates.displayName = displayName;
+    if (logoUrl !== undefined) {
+      updates.logoUrl = logoUrl;
+      updates.adminLogoUrl = logoUrl;
+    }
+    if (contactPhone !== undefined) {
+      updates.contactPhone = contactPhone;
+      updates.adminContactPhone = contactPhone;
+    }
+    if (businessName) {
+      updates.adminBrandName = businessName;
+    }
     if (canAccessSettingsMetaApi !== undefined) {
       updates.canAccessSettingsMetaApi = Boolean(canAccessSettingsMetaApi);
     }
@@ -1012,6 +1045,9 @@ export async function handleUpdateMasterAdmin(req: Request, res: Response): Prom
       await setDoc(doc(serverDb, 'organizations', orgId), {
         status: status || currentData.subscription?.status || 'active',
         subscription: updatedSub,
+        ...(logoUrl !== undefined ? { logoUrl } : {}),
+        ...(contactPhone !== undefined ? { contactPhone } : {}),
+        ...(businessName ? { name: businessName, adminBrandName: businessName } : {}),
         updatedAt: new Date().toISOString(),
       }, { merge: true });
     }
@@ -1474,10 +1510,32 @@ export async function handleCreateAdminUser(req: Request, res: Response): Promis
     const userId = `usr_${cleanPhone || Date.now().toString()}`;
     const userOrgId = `org_${userId}`;
 
-    // Get Admin's organization to inherit metaAppConfig if configured
+    // Get Admin's organization to inherit metaAppConfig, logoUrl, contactPhone, and branding
     let adminMetaConfig: any = undefined;
+    let adminLogoUrl = '';
+    let adminContactPhone = '';
+    let adminBrandName = '';
+
     if (orgSnap.exists()) {
-      adminMetaConfig = (orgSnap.data() as Organization).metaAppConfig;
+      const adminOrg = orgSnap.data() as Organization;
+      adminMetaConfig = adminOrg.metaAppConfig;
+      adminLogoUrl = adminOrg.logoUrl || '';
+      adminContactPhone = adminOrg.contactPhone || '';
+      adminBrandName = adminOrg.name || '';
+    }
+
+    if (adminId && (!adminLogoUrl || !adminContactPhone)) {
+      try {
+        const adminUserSnap = await getDoc(doc(serverDb, 'users', adminId));
+        if (adminUserSnap.exists()) {
+          const aData = adminUserSnap.data() as UserProfile;
+          if (!adminLogoUrl && aData.logoUrl) adminLogoUrl = aData.logoUrl;
+          if (!adminContactPhone && (aData.contactPhone || aData.phone)) {
+            adminContactPhone = aData.contactPhone || aData.phone || '';
+          }
+          if (!adminBrandName && aData.displayName) adminBrandName = aData.displayName;
+        }
+      } catch (e) {}
     }
 
     const expiresAt =
@@ -1503,6 +1561,9 @@ export async function handleCreateAdminUser(req: Request, res: Response): Promis
       adminId: adminId || '',
       parentOrganizationId: orgId,
       status: status || 'active',
+      logoUrl: adminLogoUrl || '',
+      contactPhone: adminContactPhone || '',
+      adminBrandName: adminBrandName || '',
       metaAppConfig: adminMetaConfig || undefined,
       subscription: {
         planName: designation || 'Team Member',
@@ -1523,6 +1584,11 @@ export async function handleCreateAdminUser(req: Request, res: Response): Promis
       displayName: name,
       email: cleanEmail || `${cleanPhone}@cloudwaba.internal`,
       phone: cleanPhone,
+      contactPhone: adminContactPhone || '',
+      logoUrl: adminLogoUrl || '',
+      adminLogoUrl: adminLogoUrl || '',
+      adminContactPhone: adminContactPhone || '',
+      adminBrandName: adminBrandName || '',
       role: 'user',
       organizationId: userOrgId, // User's own isolated workspace (BLANK & FRESH)
       adminOrganizationId: orgId, // Parent admin organization

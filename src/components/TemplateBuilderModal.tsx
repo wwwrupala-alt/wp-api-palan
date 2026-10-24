@@ -181,7 +181,12 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
 
       // 3. Body
       const bodyComp = initialTemplate.components?.find((c) => c.type === 'BODY');
-      const bText = bodyComp?.text || '';
+      let bText = bodyComp?.text || '';
+      // Strip any legacy auto-injected boilerplate text so user gets their exact original message
+      bText = bText
+        .replace(/\s*We truly value your business and are here to provide the best service\. Please let us know if you need any assistance\./g, '')
+        .replace(/\s*Thank you for choosing us!/g, '')
+        .trim();
       setBodyText(bText);
 
       // Extract existing variables from example if available
@@ -419,14 +424,7 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
     }
 
     // 2. Body
-    let cleanBodyText = bodyText.trim();
-    // Meta Rule: Variables cannot be at the very start or end
-    if (/^\{\{\d+\}\}/.test(cleanBodyText)) {
-      cleanBodyText = `Hello ${cleanBodyText}`;
-    }
-    if (/\{\{\d+\}\}[.!?,;:\s]*$/.test(cleanBodyText)) {
-      cleanBodyText = `${cleanBodyText.replace(/[.!?,;:\s]*$/, '')}. Thank you for choosing us!`;
-    }
+    const cleanBodyText = bodyText.trim();
 
     const matches = cleanBodyText.match(/\{\{(\d+)\}\}/g) || [];
     const orderedIndices = Array.from(new Set(matches.map((m) => m.replace(/[\{\}]/g, ''))));

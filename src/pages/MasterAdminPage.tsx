@@ -42,6 +42,9 @@ import {
   Radio,
   MessageSquare,
   Workflow,
+  Upload,
+  Image as ImageIcon,
+  Phone,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useToast } from '../context/ToastContext.tsx';
@@ -53,6 +56,9 @@ interface AdminTenantItem {
   displayName: string;
   email: string;
   phone?: string;
+  contactPhone?: string;
+  logoUrl?: string;
+  businessName?: string;
   displayPassword?: string;
   role: string;
   organizationId: string;
@@ -141,6 +147,32 @@ export const MasterAdminPage: React.FC = () => {
   const [newCanWatchWorkspaceLive, setNewCanWatchWorkspaceLive] = useState(true);
   const [newCanAccessInbox, setNewCanAccessInbox] = useState(true);
   const [newCanAccessDripCampaigns, setNewCanAccessDripCampaigns] = useState(true);
+  const [newAdminLogoUrl, setNewAdminLogoUrl] = useState('');
+  const [newAdminContactPhone, setNewAdminContactPhone] = useState('');
+
+  // Logo upload from PC helper
+  const handleLogoUpload = (file: File | undefined, mode: 'new' | 'edit') => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      toast.showError('Invalid Image', 'Please choose a valid image file (PNG, JPG, SVG, WebP).');
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      toast.showError('File Too Large', 'Please select an image smaller than 2MB.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const dataUrl = e.target?.result as string;
+      if (mode === 'new') {
+        setNewAdminLogoUrl(dataUrl);
+      } else {
+        setEditAdminLogoUrl(dataUrl);
+      }
+      toast.showSuccess('Logo Selected', 'Logo preview loaded from your PC.');
+    };
+    reader.readAsDataURL(file);
+  };
 
   // Success Dialog: Created Admin Credentials
   const [createdAdminSuccess, setCreatedAdminSuccess] = useState<{
@@ -152,6 +184,8 @@ export const MasterAdminPage: React.FC = () => {
     organizationId?: string;
     expiresAt?: string;
     validityDays?: number;
+    logoUrl?: string;
+    contactPhone?: string;
   } | null>(null);
   const [copiedSuccessCredentials, setCopiedSuccessCredentials] = useState(false);
 
@@ -166,6 +200,9 @@ export const MasterAdminPage: React.FC = () => {
   const [editMaxUsers, setEditMaxUsers] = useState(10);
   const [editPlanName, setEditPlanName] = useState('');
   const [editStatus, setEditStatus] = useState<string>('active');
+  const [editBusinessName, setEditBusinessName] = useState('');
+  const [editAdminLogoUrl, setEditAdminLogoUrl] = useState('');
+  const [editAdminContactPhone, setEditAdminContactPhone] = useState('');
   const [editCanAccessSettings, setEditCanAccessSettings] = useState(true);
   const [editCanAccessAutomations, setEditCanAccessAutomations] = useState(true);
   const [editCanWatchWorkspaceLive, setEditCanWatchWorkspaceLive] = useState(true);
@@ -383,6 +420,8 @@ export const MasterAdminPage: React.FC = () => {
           canWatchWorkspaceLive: newCanWatchWorkspaceLive,
           canAccessInbox: newCanAccessInbox,
           canAccessDripCampaigns: newCanAccessDripCampaigns,
+          logoUrl: newAdminLogoUrl,
+          contactPhone: newAdminContactPhone.trim() || newAdminPhone.trim(),
         }),
       });
 
@@ -405,6 +444,8 @@ export const MasterAdminPage: React.FC = () => {
         organizationId: data.admin?.organizationId,
         expiresAt: data.admin?.expiresAt,
         validityDays: data.admin?.validityDays || Number(newValidityDays) || 30,
+        logoUrl: data.admin?.logoUrl || newAdminLogoUrl,
+        contactPhone: data.admin?.contactPhone || newAdminContactPhone.trim() || newAdminPhone.trim(),
       };
 
       setCreatedAdminSuccess(createdInfo);
@@ -413,6 +454,8 @@ export const MasterAdminPage: React.FC = () => {
       setNewBusinessName('');
       setNewAdminEmail('');
       setNewAdminPhone('');
+      setNewAdminContactPhone('');
+      setNewAdminLogoUrl('');
       setNewAdminPassword('Admin@12345');
       setNewMaxWhatsApp(1);
       setNewValidityDays(30);
@@ -462,6 +505,9 @@ export const MasterAdminPage: React.FC = () => {
     setEditCanWatchWorkspaceLive(adm.canWatchWorkspaceLive !== false);
     setEditCanAccessInbox(adm.canAccessInbox !== false);
     setEditCanAccessDripCampaigns(adm.canAccessDripCampaigns !== false);
+    setEditBusinessName(adm.businessName || '');
+    setEditAdminLogoUrl(adm.logoUrl || '');
+    setEditAdminContactPhone(adm.contactPhone || adm.phone || '');
   };
 
   // Handle Edit Admin / Renew / Reduce Validity
@@ -474,6 +520,9 @@ export const MasterAdminPage: React.FC = () => {
       const payload: any = {
         status: editStatus,
         planName: editPlanName,
+        businessName: editBusinessName.trim(),
+        logoUrl: editAdminLogoUrl,
+        contactPhone: editAdminContactPhone.trim(),
         maxWhatsAppNumbers: Number(editMaxWhatsApp),
         maxUsers: Number(editMaxUsers),
         canAccessSettingsMetaApi: editCanAccessSettings,
@@ -1192,11 +1241,31 @@ export const MasterAdminPage: React.FC = () => {
                         <tr key={adm.uid} className="hover:bg-neutral-50/50 dark:hover:bg-neutral-800/40 transition-colors">
                           {/* Name & Org */}
                           <td className="py-3.5 px-4">
-                            <div>
-                              <p className="font-bold text-neutral-900 dark:text-white flex items-center space-x-1.5">
-                                <span>{adm.displayName}</span>
-                              </p>
-                              <p className="text-[10px] font-mono text-neutral-400">Org: {adm.organizationId}</p>
+                            <div className="flex items-center space-x-2.5">
+                              {adm.logoUrl ? (
+                                <div className="w-9 h-9 rounded-xl overflow-hidden border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 p-0.5 shrink-0 shadow-2xs">
+                                  <img src={adm.logoUrl} alt="Logo" className="w-full h-full object-contain rounded-lg" />
+                                </div>
+                              ) : (
+                                <div className="w-9 h-9 rounded-xl bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-400 flex items-center justify-center font-bold text-xs shrink-0">
+                                  {adm.displayName?.charAt(0).toUpperCase() || 'A'}
+                                </div>
+                              )}
+                              <div className="truncate">
+                                <p className="font-bold text-neutral-900 dark:text-white flex items-center space-x-1.5 truncate">
+                                  <span className="truncate">{adm.displayName}</span>
+                                  {adm.businessName && (
+                                    <span className="text-[10px] text-neutral-400 font-normal">({adm.businessName})</span>
+                                  )}
+                                </p>
+                                <p className="text-[10px] font-mono text-neutral-400 truncate">Org: {adm.organizationId}</p>
+                                {adm.contactPhone && (
+                                  <p className="text-[10px] text-emerald-600 dark:text-emerald-400 flex items-center space-x-1 mt-0.5 font-mono">
+                                    <Phone className="w-2.5 h-2.5 shrink-0" />
+                                    <span>Support: {adm.contactPhone}</span>
+                                  </p>
+                                )}
+                              </div>
                             </div>
                           </td>
 
@@ -1631,6 +1700,87 @@ export const MasterAdminPage: React.FC = () => {
                   onChange={(e) => setNewBusinessName(e.target.value)}
                   className="w-full px-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white"
                 />
+              </div>
+
+              {/* ADMIN WHITE-LABEL BRANDING: PC LOGO UPLOAD & CONTACT NUMBER */}
+              <div className="p-3.5 rounded-2xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-800/60 space-y-3">
+                <div className="flex items-center space-x-2">
+                  <div className="w-6 h-6 rounded-lg bg-amber-600 text-white flex items-center justify-center shrink-0">
+                    <ImageIcon className="w-3.5 h-3.5" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-xs text-amber-950 dark:text-amber-200">
+                      Admin Custom Logo &amp; Support Contact (White-Label)
+                    </h4>
+                    <p className="text-[10px] text-amber-700/80 dark:text-amber-400">
+                      Logo PC se upload karein aur contact number dalein jo is admin ke users ke panel me show hoga.
+                    </p>
+                  </div>
+                </div>
+
+                {/* PC Logo Upload */}
+                <div>
+                  <label className="font-semibold text-neutral-800 dark:text-neutral-200 mb-1.5 flex items-center justify-between text-xs">
+                    <span>Admin Panel Logo (Upload from PC)</span>
+                    <span className="text-[10px] text-neutral-400 font-normal">PNG, JPG, SVG, WebP (Max 2MB)</span>
+                  </label>
+
+                  {newAdminLogoUrl ? (
+                    <div className="flex items-center space-x-3 p-2.5 rounded-xl bg-white dark:bg-neutral-800 border border-amber-200 dark:border-amber-700/60">
+                      <div className="w-12 h-12 rounded-lg bg-neutral-100 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 flex items-center justify-center p-1 overflow-hidden shrink-0">
+                        <img src={newAdminLogoUrl} alt="Uploaded logo preview" className="w-full h-full object-contain" />
+                      </div>
+                      <div className="flex-1 truncate">
+                        <p className="font-bold text-xs text-neutral-900 dark:text-white flex items-center space-x-1">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Logo Uploaded &amp; Ready</span>
+                        </p>
+                        <p className="text-[10px] text-neutral-500 truncate">Will appear on sidebar header of Admin&apos;s user panel</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setNewAdminLogoUrl('')}
+                        className="px-2.5 py-1.5 rounded-lg border border-rose-200 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 text-[11px] font-semibold hover:bg-rose-100 transition-colors cursor-pointer"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="flex flex-col items-center justify-center p-4 rounded-xl border-2 border-dashed border-amber-300 dark:border-amber-700/70 hover:border-amber-500 bg-white/70 dark:bg-neutral-850 hover:bg-amber-50/50 dark:hover:bg-amber-950/20 transition-all cursor-pointer group">
+                      <div className="flex items-center space-x-2 text-amber-700 dark:text-amber-400">
+                        <Upload className="w-4 h-4 group-hover:scale-110 transition-transform" />
+                        <span className="font-bold text-xs">Choose Logo Image from PC</span>
+                      </div>
+                      <span className="text-[10px] text-neutral-400 mt-1">Click to browse your computer files</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handleLogoUpload(e.target.files?.[0], 'new')}
+                        className="hidden"
+                      />
+                    </label>
+                  )}
+                </div>
+
+                {/* Admin Support Contact Phone */}
+                <div>
+                  <label className="font-semibold text-neutral-800 dark:text-neutral-200 mb-1 block text-xs">
+                    Admin Contact Number (Shown in User&apos;s Panel Support Desk)
+                  </label>
+                  <div className="relative">
+                    <Phone className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400" />
+                    <input
+                      type="text"
+                      placeholder="e.g. +91 98765 43210 (Leave empty to use Login Mobile)"
+                      value={newAdminContactPhone}
+                      onChange={(e) => setNewAdminContactPhone(e.target.value)}
+                      className="w-full pl-9 pr-3.5 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white font-mono text-xs"
+                    />
+                  </div>
+                  <p className="text-[10px] text-neutral-500 dark:text-neutral-400 mt-1">
+                    💡 Yeh contact number admin ke sabhi users ke panel me Support Desk &amp; Helpline me dikhega taki unhe lage ye panel is admin ka hai.
+                  </p>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -2072,6 +2222,20 @@ export const MasterAdminPage: React.FC = () => {
                   <span className="text-neutral-500">Plan Validity:</span>
                   <span className="font-bold text-neutral-800 dark:text-neutral-200">{createdAdminSuccess.validityDays} Days</span>
                 </div>
+                {createdAdminSuccess.contactPhone && (
+                  <div className="flex justify-between">
+                    <span className="text-neutral-500">Support Phone:</span>
+                    <span className="font-bold text-emerald-600 dark:text-emerald-400">{createdAdminSuccess.contactPhone}</span>
+                  </div>
+                )}
+                {createdAdminSuccess.logoUrl && (
+                  <div className="flex justify-between items-center pt-1">
+                    <span className="text-neutral-500">Custom Logo:</span>
+                    <div className="w-6 h-6 rounded bg-neutral-100 dark:bg-neutral-800 p-0.5 border border-neutral-300 dark:border-neutral-700 flex items-center justify-center">
+                      <img src={createdAdminSuccess.logoUrl} alt="Logo" className="w-full h-full object-contain" />
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -2159,6 +2323,100 @@ export const MasterAdminPage: React.FC = () => {
                   <option value="active">Active (Normal Access)</option>
                   <option value="suspended">Suspended (Blocked Access)</option>
                 </select>
+              </div>
+
+              {/* ADMIN WHITE-LABEL BRANDING: PC LOGO & CONTACT NUMBER */}
+              <div className="p-3.5 rounded-2xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-800/60 space-y-3">
+                <div className="flex items-center space-x-2">
+                  <div className="w-6 h-6 rounded-lg bg-amber-600 text-white flex items-center justify-center shrink-0">
+                    <ImageIcon className="w-3.5 h-3.5" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-xs text-amber-950 dark:text-amber-200">
+                      Admin Custom Logo &amp; Support Contact (White-Label)
+                    </h4>
+                    <p className="text-[10px] text-amber-700/80 dark:text-amber-400">
+                      Update custom logo and contact number shown to this admin&apos;s team users.
+                    </p>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="font-semibold text-neutral-800 dark:text-neutral-200 mb-1 block text-xs">
+                    Business / Brand Name
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Apex Marketing Agency"
+                    value={editBusinessName}
+                    onChange={(e) => setEditBusinessName(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white text-xs"
+                  />
+                </div>
+
+                {/* PC Logo Upload */}
+                <div>
+                  <label className="font-semibold text-neutral-800 dark:text-neutral-200 mb-1.5 flex items-center justify-between text-xs">
+                    <span>Admin Panel Logo (Upload from PC)</span>
+                    <span className="text-[10px] text-neutral-400 font-normal">PNG, JPG, SVG, WebP</span>
+                  </label>
+
+                  {editAdminLogoUrl ? (
+                    <div className="flex items-center space-x-3 p-2.5 rounded-xl bg-white dark:bg-neutral-800 border border-amber-200 dark:border-amber-700/60">
+                      <div className="w-12 h-12 rounded-lg bg-neutral-100 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 flex items-center justify-center p-1 overflow-hidden shrink-0">
+                        <img src={editAdminLogoUrl} alt="Logo preview" className="w-full h-full object-contain" />
+                      </div>
+                      <div className="flex-1 truncate">
+                        <p className="font-bold text-xs text-neutral-900 dark:text-white flex items-center space-x-1">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Active Logo Configured</span>
+                        </p>
+                        <p className="text-[10px] text-neutral-500 truncate">Shows on user sidebar header</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setEditAdminLogoUrl('')}
+                        className="px-2.5 py-1.5 rounded-lg border border-rose-200 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 text-[11px] font-semibold hover:bg-rose-100 transition-colors cursor-pointer"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="flex flex-col items-center justify-center p-4 rounded-xl border-2 border-dashed border-amber-300 dark:border-amber-700/70 hover:border-amber-500 bg-white/70 dark:bg-neutral-850 hover:bg-amber-50/50 dark:hover:bg-amber-950/20 transition-all cursor-pointer group">
+                      <div className="flex items-center space-x-2 text-amber-700 dark:text-amber-400">
+                        <Upload className="w-4 h-4 group-hover:scale-110 transition-transform" />
+                        <span className="font-bold text-xs">Upload New Logo from PC</span>
+                      </div>
+                      <span className="text-[10px] text-neutral-400 mt-1">Click to select new image</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handleLogoUpload(e.target.files?.[0], 'edit')}
+                        className="hidden"
+                      />
+                    </label>
+                  )}
+                </div>
+
+                {/* Admin Support Contact Phone */}
+                <div>
+                  <label className="font-semibold text-neutral-800 dark:text-neutral-200 mb-1 block text-xs">
+                    Admin Support / Contact Number (Shown to Users)
+                  </label>
+                  <div className="relative">
+                    <Phone className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400" />
+                    <input
+                      type="text"
+                      placeholder="e.g. +91 98765 43210"
+                      value={editAdminContactPhone}
+                      onChange={(e) => setEditAdminContactPhone(e.target.value)}
+                      className="w-full pl-9 pr-3.5 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white font-mono text-xs"
+                    />
+                  </div>
+                  <p className="text-[10px] text-neutral-500 dark:text-neutral-400 mt-1">
+                    💡 This contact number displays in the Support Desk of this admin&apos;s users.
+                  </p>
+                </div>
               </div>
 
               {/* VALIDITY MANAGEMENT: EXTEND, REDUCE OR SET EXACT DATE */}

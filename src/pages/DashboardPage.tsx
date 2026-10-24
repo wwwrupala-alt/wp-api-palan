@@ -14,6 +14,8 @@ import {
   Zap,
   Calendar,
   Clock,
+  Phone,
+  MessageSquare,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -35,7 +37,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
   onOpenConnectModal,
   onNavigate,
 }) => {
-  const { organization } = useAuth();
+  const { organization, userProfile } = useAuth();
   const { accounts, activeAccount, loading: accountsLoading } = useWhatsAppAccounts();
 
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -160,6 +162,70 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
 
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-7xl mx-auto animate-fadeIn">
+      {/* White-Label Admin Identity Card (Shown to Users & Workspace) */}
+      {(userProfile?.role === 'user' || Boolean(organization?.logoUrl || userProfile?.adminLogoUrl || organization?.contactPhone || userProfile?.adminContactPhone)) && (
+        <div className="p-4 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          <div className="flex items-center space-x-3.5">
+            {organization?.logoUrl || userProfile?.adminLogoUrl ? (
+              <div className="w-12 h-12 rounded-xl overflow-hidden bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 flex items-center justify-center p-1 shrink-0 shadow-2xs">
+                <img
+                  src={organization?.logoUrl || userProfile?.adminLogoUrl}
+                  alt="Admin Logo"
+                  className="w-full h-full object-contain rounded-lg"
+                />
+              </div>
+            ) : (
+              <div className="w-11 h-11 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                <ShieldCheck className="w-6 h-6" />
+              </div>
+            )}
+            <div>
+              <p className="font-bold text-sm text-neutral-900 dark:text-white flex items-center space-x-2">
+                <span>
+                  {userProfile?.adminBrandName || (organization as any)?.adminBrandName || organization?.name || 'Admin Workspace'}
+                </span>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400">
+                  Verified Portal
+                </span>
+              </p>
+              <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">
+                {organization?.contactPhone || userProfile?.adminContactPhone ? (
+                  <span>
+                    Official Support Desk:{' '}
+                    <strong className="text-emerald-600 dark:text-emerald-400 font-mono">
+                      {organization?.contactPhone || userProfile?.adminContactPhone}
+                    </strong>
+                  </span>
+                ) : (
+                  <span>Authorized WhatsApp Business API Workspace</span>
+                )}
+              </p>
+            </div>
+          </div>
+
+          {(organization?.contactPhone || userProfile?.adminContactPhone) && (
+            <div className="flex items-center space-x-2 shrink-0 self-end sm:self-center">
+              <a
+                href={`tel:${(organization?.contactPhone || userProfile?.adminContactPhone || '').replace(/[^0-9+]/g, '')}`}
+                className="px-3 py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-700 text-xs font-semibold text-neutral-800 dark:text-neutral-200 transition-colors flex items-center space-x-1.5 cursor-pointer"
+              >
+                <Phone className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Call Helpline</span>
+              </a>
+              <a
+                href={`https://wa.me/${(organization?.contactPhone || userProfile?.adminContactPhone || '').replace(/[^0-9]/g, '')}`}
+                target="_blank"
+                rel="noreferrer"
+                className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors flex items-center space-x-1.5 shadow-2xs cursor-pointer"
+              >
+                <MessageSquare className="w-3.5 h-3.5" />
+                <span>WhatsApp Admin</span>
+              </a>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Connected Account Overview Banner */}
       {activeAccount && (
         <div className="p-5 rounded-2xl border border-emerald-200/80 dark:border-emerald-800/60 bg-emerald-50/50 dark:bg-emerald-950/20 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">

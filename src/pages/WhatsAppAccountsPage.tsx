@@ -89,7 +89,7 @@ export const WhatsAppAccountsPage: React.FC<WhatsAppAccountsPageProps> = ({
     try {
       const res = await syncAccountWithMeta(acc);
       if (res.success) {
-        const msg = `Meta details for ${acc.verifiedName || acc.displayPhoneNumber} updated and stored in Firestore.`;
+        const msg = `Meta details for ${acc.verifiedName || acc.displayPhoneNumber} updated and saved successfully.`;
         setSyncNotice(msg);
         toast.showSuccess('Synced with Meta Graph API', msg);
         setTimeout(() => setSyncNotice(null), 3500);
@@ -144,7 +144,7 @@ export const WhatsAppAccountsPage: React.FC<WhatsAppAccountsPageProps> = ({
   };
 
   const handleDisconnectAndRelease = async (acc: WhatsAppAccount) => {
-    const confirmMsg = `Are you sure you want to disconnect and release ${acc.displayPhoneNumber || 'this number'}?\n\nThis secure action will:\n• Deregister the phone number from Meta Cloud API\n• Revoke the Meta token\n• Clear linked webhook and configuration state\n• Update Firestore status to 'disconnected'\n\nThis ensures no 'partner/linked device' errors persist when reconnecting.`;
+    const confirmMsg = `Are you sure you want to disconnect and release ${acc.displayPhoneNumber || 'this number'}?\n\nThis secure action will:\n• Deregister the phone number from Meta Cloud API\n• Revoke the Meta token\n• Clear linked webhook and configuration state\n• Update account status to 'disconnected'\n\nThis ensures no 'partner/linked device' errors persist when reconnecting.`;
     if (!window.confirm(confirmMsg)) return;
 
     setActionLoading(`release_${acc.id}`);
@@ -758,7 +758,7 @@ export const WhatsAppAccountsPage: React.FC<WhatsAppAccountsPageProps> = ({
                       onClick={() => handleSync(acc)}
                       disabled={actionLoading === `sync_${acc.id}`}
                       className="px-3 py-1.5 rounded-lg border border-emerald-200 dark:border-emerald-800/60 bg-emerald-50/50 dark:bg-emerald-950/30 hover:bg-emerald-100/60 dark:hover:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 text-xs font-medium flex items-center space-x-1.5 transition-colors cursor-pointer"
-                      title="Fetch latest verified business name and IDs from Meta Graph API and update Firestore"
+                      title="Fetch latest verified business name and IDs from Meta Graph API and update records"
                     >
                       <RefreshCw
                         className={`w-3.5 h-3.5 ${

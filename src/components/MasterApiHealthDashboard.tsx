@@ -453,7 +453,7 @@ export const MasterApiHealthDashboard: React.FC = () => {
 
           <div className="space-y-1.5 text-xs">
             <div className="flex items-center justify-between">
-              <span className="text-neutral-600 dark:text-neutral-300">Firestore DB:</span>
+              <span className="text-neutral-600 dark:text-neutral-300">Primary Database:</span>
               <span className="text-emerald-600 dark:text-emerald-400 font-semibold font-mono flex items-center space-x-1">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                 <span>HEALTHY</span>

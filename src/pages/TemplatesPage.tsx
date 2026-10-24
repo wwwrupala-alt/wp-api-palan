@@ -353,15 +353,6 @@ export const TemplatesPage: React.FC = () => {
 
         <div className="flex items-center space-x-2">
           <button
-            onClick={() => setIsUpdateTokenModalOpen(true)}
-            disabled={!activeAccount}
-            className="px-3.5 py-2 rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-950/40 text-xs font-semibold text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/60 disabled:opacity-50 transition-colors flex items-center space-x-1.5 cursor-pointer"
-            title="Update Access Token or fix Meta permission #200"
-          >
-            <Key className="w-3.5 h-3.5 text-amber-600" />
-            <span>Fix Token / Permissions</span>
-          </button>
-          <button
             onClick={handleSyncFromMeta}
             disabled={syncing || !activeAccount}
             className="px-3.5 py-2 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-50 dark:hover:bg-neutral-700 disabled:opacity-50 transition-colors flex items-center space-x-1.5 cursor-pointer"
@@ -853,10 +844,10 @@ export const TemplatesPage: React.FC = () => {
 
                       <div className="p-2 rounded-xl bg-neutral-50 dark:bg-neutral-800/50 border border-neutral-200/60 dark:border-neutral-700/60 space-y-1">
                         <div className="flex items-center justify-between text-[8px] font-semibold text-neutral-400 uppercase tracking-wider">
-                          <span>Body</span>
+                          <span>Body Content</span>
                           <span>{bodyComp?.text?.length || 0} ch</span>
                         </div>
-                        <p className="text-[10px] leading-relaxed text-neutral-700 dark:text-neutral-300 line-clamp-4 whitespace-pre-wrap">
+                        <p className="text-[10px] leading-relaxed text-neutral-700 dark:text-neutral-300 max-h-36 overflow-y-auto whitespace-pre-wrap pr-1 custom-scrollbar">
                           {bodyComp?.text || '(Empty Body)'}
                         </p>
                       </div>

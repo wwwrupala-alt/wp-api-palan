@@ -22,6 +22,7 @@ import {
   X,
   AlertCircle,
   Workflow,
+  Phone,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -183,9 +184,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [isPinModalOpen, setIsPinModalOpen] = useState(false);
 
   const handleNavClick = (tabId: string) => {
-    if (tabId === 'whatsapp' && sessionStorage.getItem('wa_numbers_unlocked') !== 'true') {
-      setIsPinModalOpen(true);
-      return;
+    if (tabId === 'whatsapp') {
+      const isMasterUnlocked = sessionStorage.getItem('wa_numbers_master_unlocked') === 'true';
+      const isUnlocked = sessionStorage.getItem('wa_numbers_unlocked') === 'true';
+      if (!isMasterUnlocked && !isUnlocked) {
+        setIsPinModalOpen(true);
+        return;
+      }
+    } else {
+      // If leaving WhatsApp Numbers menu, re-lock unless unlocked with master 1646 PIN
+      if (sessionStorage.getItem('wa_numbers_master_unlocked') !== 'true') {
+        sessionStorage.removeItem('wa_numbers_unlocked');
+      }
     }
     setCurrentTab(tabId);
     setIsMobileOpen(false);
@@ -206,21 +216,34 @@ export const Sidebar: React.FC<SidebarProps> = ({
           isMobileOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        {/* Brand Header */}
-        <div className="h-16 px-5 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
-          <div className="flex items-center space-x-2.5">
-            <div className="w-9 h-9 rounded-xl bg-emerald-600 flex items-center justify-center text-white shadow-sm shadow-emerald-500/30">
-              <MessageSquare className="w-5 h-5 fill-white/20" />
-            </div>
-            <div>
-              <span className="font-bold text-base tracking-tight text-neutral-900 dark:text-white flex items-center space-x-1.5">
-                <span>CloudWABA</span>
-                <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400">
-                  Cloud API
+        {/* Brand Header with Admin's Custom Logo & Identity */}
+        <div className="h-16 px-4 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
+          <div className="flex items-center space-x-2.5 overflow-hidden">
+            {organization?.logoUrl || userProfile?.adminLogoUrl ? (
+              <div className="w-10 h-10 rounded-xl overflow-hidden bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 flex items-center justify-center p-0.5 shrink-0 shadow-2xs">
+                <img
+                  src={organization?.logoUrl || userProfile?.adminLogoUrl}
+                  alt={organization?.name || 'Admin Logo'}
+                  className="w-full h-full object-contain rounded-lg"
+                />
+              </div>
+            ) : (
+              <div className="w-9 h-9 rounded-xl bg-emerald-600 flex items-center justify-center text-white shadow-sm shadow-emerald-500/30 shrink-0">
+                <MessageSquare className="w-5 h-5 fill-white/20" />
+              </div>
+            )}
+            <div className="truncate">
+              <span className="font-bold text-sm tracking-tight text-neutral-900 dark:text-white flex items-center space-x-1.5 truncate">
+                <span className="truncate">
+                  {userProfile?.role === 'user' && (userProfile?.adminBrandName || (organization as any)?.adminBrandName)
+                    ? (userProfile.adminBrandName || (organization as any).adminBrandName)
+                    : (organization?.name || 'CloudWABA')}
                 </span>
               </span>
-              <p className="text-[11px] text-neutral-500 dark:text-neutral-400 truncate max-w-[140px]">
-                {organization?.name || 'WhatsApp SaaS'}
+              <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold truncate">
+                {userProfile?.role === 'user'
+                  ? 'Official Customer Portal'
+                  : 'WhatsApp Business Portal'}
               </p>
             </div>
           </div>
@@ -279,6 +302,43 @@ export const Sidebar: React.FC<SidebarProps> = ({
             );
           })}
         </nav>
+
+        {/* White-Label Admin Support Desk Card (Shown to Users and Admins) */}
+        {(organization?.contactPhone || userProfile?.adminContactPhone) && (
+          <div className="mx-3 my-2 p-2.5 rounded-2xl bg-gradient-to-br from-emerald-50 to-teal-50 dark:from-emerald-950/40 dark:to-teal-950/30 border border-emerald-200/80 dark:border-emerald-800/60 shadow-2xs space-y-1.5">
+            <div className="flex items-center space-x-2">
+              <div className="w-6 h-6 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
+                <Phone className="w-3.5 h-3.5" />
+              </div>
+              <div className="truncate">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-900 dark:text-emerald-200">
+                  {userProfile?.role === 'user' ? 'Admin Support Desk' : 'Admin Helpline'}
+                </p>
+                <p className="text-[11px] font-mono font-bold text-emerald-700 dark:text-emerald-400 truncate">
+                  {organization?.contactPhone || userProfile?.adminContactPhone}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center space-x-1.5 pt-0.5">
+              <a
+                href={`tel:${(organization?.contactPhone || userProfile?.adminContactPhone || '').replace(/[^0-9+]/g, '')}`}
+                className="flex-1 py-1 px-2 rounded-lg bg-white dark:bg-neutral-800 border border-emerald-200 dark:border-emerald-800/60 text-[10px] font-bold text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-neutral-700 text-center transition-colors flex items-center justify-center space-x-1"
+              >
+                <Phone className="w-3 h-3" />
+                <span>Call Admin</span>
+              </a>
+              <a
+                href={`https://wa.me/${(organization?.contactPhone || userProfile?.adminContactPhone || '').replace(/[^0-9]/g, '')}`}
+                target="_blank"
+                rel="noreferrer"
+                className="flex-1 py-1 px-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold text-center transition-colors flex items-center justify-center space-x-1"
+              >
+                <MessageSquare className="w-3 h-3" />
+                <span>WhatsApp</span>
+              </a>
+            </div>
+          </div>
+        )}
 
         {/* Footer: User profile, theme, logout */}
         <div className="p-3 border-t border-neutral-200 dark:border-neutral-800 space-y-2 bg-neutral-50/50 dark:bg-neutral-900/40">

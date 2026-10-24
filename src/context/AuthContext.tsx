@@ -35,19 +35,19 @@ export const STORAGE_SESSION_START = 'cw_session_start_time';
 export const STORAGE_LAST_ACTIVITY = 'cw_last_activity_time';
 export const STORAGE_LOGOUT_NOTICE = 'cw_logout_notice';
 
-export const clearAllSessionStorage = (preserveNotice = false) => {
+export const clearAllSessionStorage = () => {
   localStorage.removeItem(STORAGE_SESSION_START);
   localStorage.removeItem(STORAGE_LAST_ACTIVITY);
-  if (!preserveNotice) {
-    localStorage.removeItem(STORAGE_LOGOUT_NOTICE);
-    localStorage.removeItem('cw_logout_notice');
-  }
+  localStorage.removeItem(STORAGE_LOGOUT_NOTICE);
+  localStorage.removeItem('cw_logout_notice');
   localStorage.removeItem('cw_multi_tenant_session');
   localStorage.removeItem('cw_custom_session');
   localStorage.removeItem('cw_impersonation_session');
   localStorage.removeItem('cw_master_backup_session');
   localStorage.removeItem('cw_admin_backup_session');
   localStorage.removeItem('cw_admin_backup_org');
+  sessionStorage.removeItem('wa_numbers_unlocked');
+  sessionStorage.removeItem('wa_numbers_master_unlocked');
 };
 
 interface AuthContextType {
@@ -144,6 +144,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           name: profile.displayName ? `${profile.displayName}'s Workspace` : 'Workspace',
           ownerId: user.uid,
           status: 'active',
+          logoUrl: profile.adminLogoUrl || profile.logoUrl || '',
+          contactPhone: profile.adminContactPhone || profile.contactPhone || '',
+          adminBrandName: profile.adminBrandName || '',
           createdAt: profile.createdAt || new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         };
@@ -157,9 +160,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           (orgSnap) => {
             if (orgSnap.exists()) {
               const rawData = orgSnap.data() as Organization;
+              const logoUrl = rawData.logoUrl || profile.adminLogoUrl || profile.logoUrl || '';
+              const contactPhone = rawData.contactPhone || profile.adminContactPhone || profile.contactPhone || '';
+              const adminBrandName = rawData.adminBrandName || profile.adminBrandName || '';
               setOrganization({
                 ...rawData,
                 id: orgSnap.id,
+                ...(logoUrl ? { logoUrl } : {}),
+                ...(contactPhone ? { contactPhone } : {}),
+                ...(adminBrandName ? { adminBrandName } : {}),
               } as Organization);
             } else {
               setOrganization(fallbackOrg);
@@ -169,6 +178,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             console.warn('[AuthContext] Org snapshot listener error:', err);
           }
         );
+
+        // For tenant users, synchronize the parent Admin's custom logo and support contact phone in real time
+        if (profile.role === 'user' && profile.adminOrganizationId) {
+          try {
+            const parentOrgRef = doc(db, 'organizations', profile.adminOrganizationId);
+            onSnapshot(
+              parentOrgRef,
+              (parentSnap) => {
+                if (parentSnap.exists()) {
+                  const pData = parentSnap.data() as Organization;
+                  setOrganization((prev) => {
+                    if (!prev) return prev;
+                    return {
+                      ...prev,
+                      logoUrl: pData.logoUrl || prev.logoUrl,
+                      contactPhone: pData.contactPhone || prev.contactPhone,
+                      adminBrandName: pData.name || (prev as any).adminBrandName,
+                    };
+                  });
+                }
+              },
+              () => {}
+            );
+          } catch (pErr) {
+            console.warn('[AuthContext] Parent admin org listener error:', pErr);
+          }
+        }
       }
     } catch (error) {
       console.warn('Profile load resilient fallback:', error);
@@ -195,13 +231,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const isMissingTimestamps = !sessionStart || !lastActivity;
 
       if (isDailyExpired || isIdleExpired || isMissingTimestamps) {
-        const noticeMsg = isDailyExpired
-          ? 'Aapka daily session expire ho chuka hai (24 ghante validity). Suraksha ke liye kripya dobara login karein.'
-          : 'Aapka session 3 ghante inactivity ke kaaran auto logout ho chuka hai. Suraksha ke liye kripya dobara login karein.';
-
-        clearAllSessionStorage(true);
-        localStorage.setItem(STORAGE_LOGOUT_NOTICE, noticeMsg);
-        localStorage.setItem('cw_logout_notice', noticeMsg);
+        clearAllSessionStorage();
         setCurrentUser(null);
         setUserProfile(null);
         setOrganization(null);
@@ -281,13 +311,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const isAuthIdleExpired = authLastActivity > 0 && authNow - authLastActivity >= IDLE_TIMEOUT_MS;
 
         if (isAuthDailyExpired || isAuthIdleExpired) {
-          const reasonMsg = isAuthDailyExpired
-            ? 'Aapka daily session expire ho chuka hai (24 ghante validity). Suraksha ke liye kripya dobara login karein.'
-            : 'Aapka session 3 ghante inactivity ke kaaran auto logout ho chuka hai. Suraksha ke liye kripya dobara login karein.';
-
-          clearAllSessionStorage(true);
-          localStorage.setItem(STORAGE_LOGOUT_NOTICE, reasonMsg);
-          localStorage.setItem('cw_logout_notice', reasonMsg);
+          clearAllSessionStorage();
           setCurrentUser(null);
           setUserProfile(null);
           setOrganization(null);
@@ -645,22 +669,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const signOut = async (reason?: string) => {
-    let noticeMessage = '';
-    if (reason === 'inactivity') {
-      noticeMessage = 'Aapka session 3 ghante inactivity ke kaaran auto logout ho chuka hai. Suraksha ke liye kripya dobara login karein.';
-    } else if (reason === 'daily_timeout' || reason === 'session_expired') {
-      noticeMessage = 'Aapka daily session expire ho chuka hai (24 ghante validity). Suraksha ke liye kripya dobara login karein.';
-    } else if (reason === 'plan_expired') {
-      noticeMessage = 'Aapka subscription plan expire ho chuka hai. Kripya renew karwayein.';
-    }
-
-    clearAllSessionStorage(Boolean(noticeMessage));
-
-    if (noticeMessage) {
-      localStorage.setItem('cw_logout_notice', noticeMessage);
-      localStorage.setItem(STORAGE_LOGOUT_NOTICE, noticeMessage);
-    }
+  const signOut = async (_reason?: string) => {
+    clearAllSessionStorage();
+    localStorage.removeItem('cw_logout_notice');
+    localStorage.removeItem(STORAGE_LOGOUT_NOTICE);
 
     setImpersonatedBy(null);
     setCurrentUser(null);
