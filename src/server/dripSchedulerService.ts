@@ -13,6 +13,7 @@ import {
 } from 'firebase/firestore';
 import { serverDb } from './serverDb.ts';
 import { executeCampaignDispatchCore, getEffectiveMetaConfig } from './metaService.ts';
+import { META_INDIA_RATES, resolveTemplateCategory } from '../utils/metaPricing.ts';
 
 let dripInterval: any = null;
 let isProcessingDrip = false;
@@ -924,3 +925,239 @@ export async function handleRescanDripCampaign(req: Request, res: Response): Pro
     res.status(500).json({ error: err?.message || 'Failed to scan and refresh audience progress.' });
   }
 }
+
+/**
+ * Get comprehensive analytics and step-by-step breakdown for a Drip Sequence
+ */
+export async function handleGetDripCampaignAnalytics(req: Request, res: Response) {
+  try {
+    const { id } = req.params;
+    let orgId = (req.query.organizationId as string) || (req.headers['x-organization-id'] as string);
+
+    if (!id) {
+      return res.status(400).json({ error: 'Drip campaign ID is required' });
+    }
+
+    let campDocData: any = null;
+    let campRef: any = null;
+
+    if (orgId) {
+      const docRef = doc(serverDb, `organizations/${orgId}/drip_campaigns/${id}`);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        campDocData = snap.data();
+        campRef = docRef;
+      }
+    }
+
+    if (!campDocData) {
+      const orgsSnap = await getDocs(collection(serverDb, 'organizations'));
+      for (const o of orgsSnap.docs) {
+        const docRef = doc(serverDb, `organizations/${o.id}/drip_campaigns/${id}`);
+        const snap = await getDoc(docRef);
+        if (snap.exists()) {
+          orgId = o.id;
+          campDocData = snap.data();
+          campRef = docRef;
+          break;
+        }
+      }
+    }
+
+    if (!campDocData || !orgId) {
+      return res.status(404).json({ error: 'Drip campaign sequence not found' });
+    }
+
+    // 1. Fetch all subscribers for this drip sequence
+    const subsSnap = await getDocs(
+      collection(serverDb, `organizations/${orgId}/drip_campaigns/${id}/subscribers`)
+    );
+    const subscribers: any[] = [];
+    subsSnap.forEach((d) => {
+      subscribers.push({ id: d.id, ...d.data() });
+    });
+
+    // 2. Fetch templates for template details and categories
+    const templatesMap: Record<string, any> = {};
+    try {
+      const tSnap = await getDocs(collection(serverDb, `organizations/${orgId}/templates`));
+      tSnap.forEach((td) => {
+        const t = td.data();
+        templatesMap[td.id] = t;
+        if (t.name) templatesMap[t.name.toLowerCase()] = t;
+      });
+    } catch (tErr) {
+      console.warn('[handleGetDripCampaignAnalytics] Templates lookup warning:', tErr);
+    }
+
+    // 3. Step-by-step breakdown calculation
+    const steps = Array.isArray(campDocData.steps) ? campDocData.steps : [];
+    const stepAnalytics: any[] = [];
+    let totalMessagesSent = 0;
+    let totalDelivered = 0;
+    let totalRead = 0;
+    let totalFailed = 0;
+    let totalSpendINR = 0;
+
+    for (let i = 0; i < steps.length; i++) {
+      const st = steps[i];
+      const stepNum = st.stepNumber || i + 1;
+
+      // Find template
+      const matchedTemplate =
+        (st.template && st.template.name ? st.template : null) ||
+        templatesMap[st.templateId] ||
+        (st.templateName ? templatesMap[st.templateName.toLowerCase()] : null) ||
+        null;
+
+      const category = resolveTemplateCategory(
+        st.templateName || st.templateId,
+        matchedTemplate?.category
+      );
+      const rateObj = META_INDIA_RATES[category] || META_INDIA_RATES.MARKETING;
+      const rateINR = rateObj.rateINR;
+
+      // Real step recipients from step subcampaign
+      const stepRecipients: any[] = [];
+      let stepSent = 0;
+      let stepDelivered = 0;
+      let stepRead = 0;
+      let stepFailed = 0;
+
+      try {
+        const stepRecsSnap = await getDocs(
+          collection(serverDb, `organizations/${orgId}/campaigns/${id}_step_${stepNum}/recipients`)
+        );
+        stepRecsSnap.forEach((rd) => {
+          const r: any = { id: rd.id, ...rd.data() };
+          stepRecipients.push(r);
+          if (r.currentStatus === 'sent' || r.sentAt) stepSent++;
+          if (r.currentStatus === 'delivered' || r.deliveredAt) stepDelivered++;
+          if (r.currentStatus === 'read' || r.readAt) {
+            stepRead++;
+            if (!r.deliveredAt) stepDelivered++;
+          }
+          if (r.currentStatus === 'failed' || r.failedAt) stepFailed++;
+        });
+      } catch (rErr) {
+        // Fallback to step.stats if subcollection query is empty
+      }
+
+      // If subcollection was empty or smaller than recorded subscriber history, reconcile from subscribers' stepHistory
+      if (stepSent === 0 && subscribers.length > 0) {
+        for (const sub of subscribers) {
+          const historyItem = (sub.stepHistory || []).find((h: any) => h.stepNumber === stepNum);
+          if (historyItem) {
+            stepSent++;
+            if (historyItem.status === 'delivered') stepDelivered++;
+            else if (historyItem.status === 'read') {
+              stepRead++;
+              stepDelivered++;
+            } else if (historyItem.status === 'failed') {
+              stepFailed++;
+            }
+          }
+        }
+      }
+
+      // Check step.stats fallback
+      if (st.stats) {
+        if (st.stats.sent && st.stats.sent > stepSent) stepSent = st.stats.sent;
+        if (st.stats.delivered && st.stats.delivered > stepDelivered) stepDelivered = st.stats.delivered;
+        if (st.stats.read && st.stats.read > stepRead) stepRead = st.stats.read;
+        if (st.stats.failed && st.stats.failed > stepFailed) stepFailed = st.stats.failed;
+      }
+
+      // Count waiting subscribers currently poised for this step
+      const waitingCount = subscribers.filter(
+        (s) => s.status === 'active' && s.currentStep === stepNum
+      ).length;
+
+      const deliveryRate = stepSent > 0 ? Number(((stepDelivered / stepSent) * 100).toFixed(1)) : 0;
+      const readRate = stepDelivered > 0 ? Number(((stepRead / stepDelivered) * 100).toFixed(1)) : 0;
+      const failureRate = stepSent > 0 ? Number(((stepFailed / stepSent) * 100).toFixed(1)) : 0;
+
+      // Drop-off rate compared to Step 1 or previous step
+      let dropOffRate = 0;
+      if (i > 0) {
+        const prevSent = stepAnalytics[i - 1]?.stats?.sent || subscribers.length;
+        if (prevSent > 0) {
+          dropOffRate = Number((Math.max(0, (prevSent - stepSent) / prevSent) * 100).toFixed(1));
+        }
+      }
+
+      const stepCostINR = Number((stepSent * rateINR).toFixed(2));
+      totalMessagesSent += stepSent;
+      totalDelivered += stepDelivered;
+      totalRead += stepRead;
+      totalFailed += stepFailed;
+      totalSpendINR += stepCostINR;
+
+      stepAnalytics.push({
+        stepNumber: stepNum,
+        title: st.title || `Step ${stepNum}`,
+        delayValue: st.delayValue ?? 0,
+        delayUnit: st.delayUnit || 'hours',
+        templateId: st.templateId,
+        templateName: st.templateName || 'WhatsApp Template',
+        templateCategory: category,
+        template: matchedTemplate,
+        condition: st.condition || 'always',
+        variableValues: st.variableValues || {},
+        headerMediaUrl: st.headerMediaUrl || '',
+        headerMediaId: st.headerMediaId || '',
+        waitingSubscribers: waitingCount,
+        nextExecutionAt: st.nextExecutionAt || null,
+        stats: {
+          sent: stepSent,
+          delivered: stepDelivered,
+          read: stepRead,
+          failed: stepFailed,
+          deliveryRate,
+          readRate,
+          failureRate,
+          dropOffRate,
+          estimatedCostINR: stepCostINR,
+          ratePerMessageINR: rateINR,
+        },
+        recipientsSample: stepRecipients.slice(0, 50),
+      });
+    }
+
+    const enrolledCount = subscribers.length;
+    const activeCount = subscribers.filter((s) => s.status === 'active').length;
+    const completedCount = subscribers.filter((s) => s.status === 'completed').length;
+    const cancelledCount = subscribers.filter((s) => s.status === 'cancelled' || s.status === 'paused').length;
+
+    const overallStats = {
+      enrolledCount,
+      activeSubscribers: activeCount,
+      completedSubscribers: completedCount,
+      cancelledSubscribers: cancelledCount,
+      completionRate: enrolledCount > 0 ? Number(((completedCount / enrolledCount) * 100).toFixed(1)) : 0,
+      totalMessagesSent,
+      delivered: totalDelivered,
+      read: totalRead,
+      failed: totalFailed,
+      deliveryRate: totalMessagesSent > 0 ? Number(((totalDelivered / totalMessagesSent) * 100).toFixed(1)) : 0,
+      readRate: totalDelivered > 0 ? Number(((totalRead / totalDelivered) * 100).toFixed(1)) : 0,
+      failureRate: totalMessagesSent > 0 ? Number(((totalFailed / totalMessagesSent) * 100).toFixed(1)) : 0,
+      totalSpendINR: Number(totalSpendINR.toFixed(2)),
+    };
+
+    res.json({
+      success: true,
+      campaign: {
+        id,
+        ...campDocData,
+      },
+      overallStats,
+      stepAnalytics,
+      subscribers,
+    });
+  } catch (err: any) {
+    console.error('[handleGetDripCampaignAnalytics] Error:', err);
+    res.status(500).json({ error: err?.message || 'Failed to fetch drip campaign analytics.' });
+  }
+}
+

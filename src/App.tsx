@@ -66,6 +66,7 @@ const AppContent: React.FC = () => {
   });
 
   const [selectedAnalyticsCampaignId, setSelectedAnalyticsCampaignId] = useState<string>('');
+  const [analyticsMode, setAnalyticsMode] = useState<'broadcast' | 'drip'>('broadcast');
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
 
@@ -217,6 +218,7 @@ const AppContent: React.FC = () => {
             <CampaignsPage
               onViewAnalytics={(campId) => {
                 setSelectedAnalyticsCampaignId(campId);
+                setAnalyticsMode('broadcast');
                 setCurrentTab('analytics');
               }}
               onNavigateToDrip={() => setCurrentTab('drip')}
@@ -225,12 +227,19 @@ const AppContent: React.FC = () => {
           {currentTab === 'drip' && (isMasterAdmin || userProfile?.canAccessDripCampaigns !== false) && (
             <DripCampaignsPage
               onNavigateToCampaigns={() => setCurrentTab('campaigns')}
+              onViewAnalytics={(dripId) => {
+                setSelectedAnalyticsCampaignId(dripId);
+                setAnalyticsMode('drip');
+                setCurrentTab('analytics');
+              }}
             />
           )}
           {currentTab === 'analytics' && (
             <CampaignAnalyticsPage
               initialCampaignId={selectedAnalyticsCampaignId}
+              initialMode={analyticsMode}
               onNavigateToCampaigns={() => setCurrentTab('campaigns')}
+              onNavigateToDrip={() => setCurrentTab('drip')}
             />
           )}
           {currentTab === 'automations' &&

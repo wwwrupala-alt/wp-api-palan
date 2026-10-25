@@ -35,6 +35,7 @@ import {
   FileText,
   DollarSign,
   HelpCircle,
+  Workflow,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -53,6 +54,7 @@ import {
   META_INDIA_RATES,
 } from '../utils/metaPricing.ts';
 import { MiniTemplatePhonePreview } from '../components/MiniTemplatePhonePreview.tsx';
+import { DripCampaignAnalytics } from '../components/drip/DripCampaignAnalytics.tsx';
 import type {
   Campaign,
   CampaignRecipient,
@@ -63,16 +65,34 @@ import type {
 
 interface CampaignAnalyticsPageProps {
   initialCampaignId?: string;
+  initialMode?: 'broadcast' | 'drip';
   onNavigateToCampaigns?: () => void;
+  onNavigateToDrip?: () => void;
 }
 
 export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
   initialCampaignId,
+  initialMode,
   onNavigateToCampaigns,
+  onNavigateToDrip,
 }) => {
   const { organization } = useAuth();
   const { metaStatus, activeAccount, accounts } = useWhatsAppAccounts();
   const toast = useToast();
+
+  const [analyticsMode, setAnalyticsMode] = useState<'broadcast' | 'drip'>(() => {
+    if (initialMode) return initialMode;
+    if (initialCampaignId && initialCampaignId.startsWith('drip_')) return 'drip';
+    return 'broadcast';
+  });
+
+  useEffect(() => {
+    if (initialMode) {
+      setAnalyticsMode(initialMode);
+    } else if (initialCampaignId && initialCampaignId.startsWith('drip_')) {
+      setAnalyticsMode('drip');
+    }
+  }, [initialMode, initialCampaignId]);
 
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [selectedCampaignId, setSelectedCampaignId] = useState<string>(initialCampaignId || '');
@@ -782,9 +802,59 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
   };
 
   return (
-    <div className="p-3 sm:p-4 space-y-3 max-w-7xl mx-auto animate-fadeIn">
-      {/* Top Header & Campaign Selector (Compact) */}
-      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-2.5 pb-2 border-b border-neutral-200 dark:border-neutral-800">
+    <div className="p-3 sm:p-4 space-y-4 max-w-7xl mx-auto animate-fadeIn">
+      {/* Top Segmented Mode Switcher: Broadcast Campaigns vs Drip Campaigns */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-neutral-200 dark:border-neutral-800">
+        <div className="inline-flex p-1 rounded-2xl bg-neutral-100 dark:bg-neutral-800/90 border border-neutral-200 dark:border-neutral-700/80 shadow-2xs">
+          <button
+            type="button"
+            onClick={() => setAnalyticsMode('broadcast')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center space-x-2 cursor-pointer ${
+              analyticsMode === 'broadcast'
+                ? 'bg-white dark:bg-neutral-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
+                : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white'
+            }`}
+          >
+            <Send className="w-3.5 h-3.5" />
+            <span>Broadcast Campaigns Analytics</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setAnalyticsMode('drip')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center space-x-2 cursor-pointer ${
+              analyticsMode === 'drip'
+                ? 'bg-white dark:bg-neutral-900 text-amber-600 dark:text-amber-400 shadow-xs'
+                : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white'
+            }`}
+          >
+            <Workflow className="w-3.5 h-3.5" />
+            <span>Drip Sequence Analytics (Step-by-Step)</span>
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+              Pro
+            </span>
+          </button>
+        </div>
+
+        <div className="flex items-center space-x-2 text-xs text-neutral-500">
+          {analyticsMode === 'broadcast' ? (
+            <span>Analyzing Broadcast Campaigns</span>
+          ) : (
+            <span>Analyzing Automated Drip Funnels & Step Retention</span>
+          )}
+        </div>
+      </div>
+
+      {analyticsMode === 'drip' ? (
+        <DripCampaignAnalytics
+          initialDripCampaignId={initialCampaignId && initialCampaignId.startsWith('drip_') ? initialCampaignId : undefined}
+          onNavigateToDrip={onNavigateToDrip}
+          onNavigateToBroadcastAnalytics={() => setAnalyticsMode('broadcast')}
+        />
+      ) : (
+        <>
+          {/* Top Header & Campaign Selector (Compact) */}
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-2.5 pb-2 border-b border-neutral-200 dark:border-neutral-800">
         <div>
           <div className="flex items-center space-x-2">
             <div className="w-7 h-7 rounded-lg bg-purple-600/10 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0">
@@ -2594,6 +2664,8 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
             </div>
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   );

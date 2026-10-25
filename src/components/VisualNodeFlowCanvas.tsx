@@ -26,6 +26,13 @@ import {
   HelpCircle,
   Download,
   Link2,
+  UploadCloud,
+  FileCheck,
+  Loader2,
+  Paperclip,
+  Eye,
+  FileUp,
+  Image as ImageIcon,
 } from 'lucide-react';
 import type { BotFlow, BotStep, BotButton } from '../types/index.ts';
 
@@ -247,6 +254,66 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
   const [hoveredConnId, setHoveredConnId] = useState<string | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isUploadingMedia, setIsUploadingMedia] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  // File Upload Handler for PC Media Selection
+  const handleSelectMediaFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !editingNode) return;
+
+    setIsUploadingMedia(true);
+    setUploadError(null);
+
+    try {
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const base64 = reader.result as string;
+          const res = await fetch('/api/media/upload', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              filename: file.name,
+              base64,
+              contentType: file.type || 'application/pdf',
+            }),
+          });
+
+          const data = await res.json();
+          if (!res.ok || data.error) {
+            throw new Error(data.error || 'Failed to upload media file');
+          }
+
+          const isImg = file.type.startsWith('image/');
+          const isVid = file.type.startsWith('video/');
+          const mediaType: 'image' | 'video' | 'document' = isImg ? 'image' : isVid ? 'video' : 'document';
+
+          updateEditingNode({
+            mediaFileName: file.name,
+            mediaUrl: data.url || data.fullUrl,
+            mediaType,
+          });
+        } catch (uploadErr: any) {
+          setUploadError(uploadErr?.message || 'Upload error');
+        } finally {
+          setIsUploadingMedia(false);
+          if (fileInputRef.current) fileInputRef.current.value = '';
+        }
+      };
+      reader.onerror = () => {
+        setUploadError('Failed to read file from your computer');
+        setIsUploadingMedia(false);
+      };
+      reader.readAsDataURL(file);
+    } catch (err: any) {
+      setUploadError(err?.message || 'Error processing selected file');
+      setIsUploadingMedia(false);
+    }
+  };
 
   // Build connections list dynamically from nodes (supports ONE BUTTON TO MULTIPLE NODES)
   const connections: VisualConnection[] = [];
@@ -693,7 +760,7 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
       id: newId,
       type,
       title: titles[type] || 'New Step',
-      body: type === 'question_button' ? 'Select an option below:' : 'Thank you for your message.',
+      body: type === 'question_button' ? 'Select an option below:' : '',
       x: Math.round((-pan.x + 400) / zoom),
       y: Math.round((-pan.y + 300) / zoom),
       buttons:
@@ -704,7 +771,7 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
             ]
           : undefined,
       mediaType: type === 'media' ? 'document' : undefined,
-      mediaFileName: type === 'media' ? 'Catalog_Document.pdf' : undefined,
+      mediaFileName: type === 'media' ? '' : undefined,
     };
 
     setNodes((prev) => [...prev, newNode]);
@@ -1567,9 +1634,27 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
 
                       {/* Media Card view */}
                       {node.type === 'media' && (
-                        <div className="p-2 rounded-xl bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-100 dark:border-indigo-900/40 text-[10px] space-y-1">
-                          <p className="font-bold text-indigo-700">📄 {node.mediaFileName || 'Catalog.pdf'}</p>
-                          <p className="text-neutral-500 truncate">{node.mediaUrl || 'PDF Document'}</p>
+                        <div className="p-2 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/60 text-[10px] space-y-1.5">
+                          <div className="flex items-center space-x-1.5 font-bold text-indigo-700 dark:text-indigo-300 truncate">
+                            <span className="text-sm">
+                              {node.mediaType === 'image' ? '🖼️' : '📄'}
+                            </span>
+                            <span className="truncate">
+                              {node.mediaFileName || (node.mediaUrl ? 'Attached Document' : 'No File Selected')}
+                            </span>
+                          </div>
+                          {node.mediaUrl ? (
+                            <div className="flex items-center justify-between text-[9px]">
+                              <span className="px-1.5 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 font-bold">
+                                {node.mediaUrl.startsWith('/uploads/') ? 'PC File Ready ✓' : 'Link Attached'}
+                              </span>
+                              <span className="truncate max-w-[90px] text-neutral-400 font-mono">
+                                {node.mediaUrl.split('/').pop()}
+                              </span>
+                            </div>
+                          ) : (
+                            <p className="text-[9px] text-neutral-400 italic">Click node to upload PDF/Image from PC</p>
+                          )}
                         </div>
                       )}
                     </>
@@ -1765,15 +1850,26 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
             )}
 
             <div className="space-y-1.5">
-              <label className="font-semibold text-neutral-700 dark:text-neutral-300">
-                WhatsApp Message Body
-              </label>
+              <div className="flex items-center justify-between">
+                <label className="font-semibold text-neutral-700 dark:text-neutral-300">
+                  WhatsApp Message Body
+                </label>
+                {editingNode.type === 'media' && (
+                  <span className="text-[10px] text-neutral-400 font-normal">
+                    (Optional for PDF/Media)
+                  </span>
+                )}
+              </div>
               <textarea
-                rows={5}
-                value={editingNode.body}
+                rows={4}
+                value={editingNode.body || ''}
                 onChange={(e) => updateEditingNode({ body: e.target.value })}
                 className="w-full px-3 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white font-sans text-xs focus:outline-hidden focus:ring-2 focus:ring-emerald-500 leading-relaxed"
-                placeholder="Type WhatsApp message content..."
+                placeholder={
+                  editingNode.type === 'media'
+                    ? 'Optional caption (leave blank to send only the plain file)...'
+                    : 'Type message content (leave blank for plain message)...'
+                }
               />
             </div>
 
@@ -1956,28 +2052,175 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
               </div>
             )}
 
-            {/* Media URL if media node */}
+            {/* Media Node: PC File Upload + Preview + Custom URL option */}
             {editingNode.type === 'media' && (
-              <div className="space-y-3 pt-3 border-t border-neutral-200 dark:border-neutral-800">
-                <div className="space-y-1.5">
-                  <label className="font-semibold text-neutral-700 dark:text-neutral-300">File Name</label>
-                  <input
-                    type="text"
-                    value={editingNode.mediaFileName || ''}
-                    onChange={(e) => updateEditingNode({ mediaFileName: e.target.value })}
-                    placeholder="e.g. Catalog_2026.pdf"
-                    className="w-full px-3 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white"
-                  />
+              <div className="space-y-3.5 pt-3 border-t border-neutral-200 dark:border-neutral-800">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-neutral-800 dark:text-neutral-200 flex items-center space-x-1.5">
+                    <FileUp className="w-4 h-4 text-emerald-600" />
+                    <span>Media File (PDF / Image / Catalog)</span>
+                  </span>
+                  <span className="text-[10px] bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 rounded-full font-bold">
+                    Official WhatsApp Media
+                  </span>
                 </div>
-                <div className="space-y-1.5">
-                  <label className="font-semibold text-neutral-700 dark:text-neutral-300">File Download URL</label>
-                  <input
-                    type="url"
-                    value={editingNode.mediaUrl || ''}
-                    onChange={(e) => updateEditingNode({ mediaUrl: e.target.value })}
-                    placeholder="https://example.com/catalog.pdf"
-                    className="w-full px-3 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white font-mono text-[11px]"
-                  />
+
+                {/* Hidden File Input for PC upload */}
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleSelectMediaFile}
+                  accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.webp,.mp4"
+                  className="hidden"
+                />
+
+                {/* Upload Error Alert */}
+                {uploadError && (
+                  <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-[11px] font-medium flex items-center justify-between">
+                    <span>{uploadError}</span>
+                    <button
+                      type="button"
+                      onClick={() => setUploadError(null)}
+                      className="text-rose-500 hover:text-rose-700 cursor-pointer ml-2"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+
+                {/* Primary: Select File from PC Box */}
+                {!editingNode.mediaUrl ? (
+                  <div
+                    onClick={() => fileInputRef.current?.click()}
+                    className="p-4 rounded-2xl border-2 border-dashed border-emerald-400/80 dark:border-emerald-600/60 bg-emerald-50/40 dark:bg-emerald-950/20 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition-all cursor-pointer flex flex-col items-center justify-center text-center space-y-2 group"
+                  >
+                    <div className="w-10 h-10 rounded-2xl bg-emerald-100 dark:bg-emerald-900/60 text-emerald-600 dark:text-emerald-300 flex items-center justify-center group-hover:scale-110 transition-transform">
+                      {isUploadingMedia ? (
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                      ) : (
+                        <UploadCloud className="w-5 h-5" />
+                      )}
+                    </div>
+                    <div>
+                      <p className="font-bold text-neutral-800 dark:text-neutral-200 text-xs">
+                        {isUploadingMedia ? 'Uploading from PC...' : 'Select File from PC (PDF, Image, Catalog)'}
+                      </p>
+                      <p className="text-[11px] text-neutral-500 mt-0.5">
+                        Click to browse PDF documents, catalogs, or images from your computer
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={isUploadingMedia}
+                      className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] flex items-center space-x-1.5 shadow-xs cursor-pointer"
+                    >
+                      <Paperclip className="w-3.5 h-3.5" />
+                      <span>{isUploadingMedia ? 'Uploading...' : 'Choose File from PC'}</span>
+                    </button>
+                  </div>
+                ) : (
+                  /* Active Selected File Card */
+                  <div className="p-3.5 rounded-2xl border border-emerald-300 dark:border-emerald-700/80 bg-emerald-50/70 dark:bg-emerald-950/40 space-y-2.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center space-x-2.5 min-w-0">
+                        <div className="w-9 h-9 rounded-xl bg-rose-500/10 text-rose-600 dark:text-rose-400 flex items-center justify-center border border-rose-500/20 shrink-0">
+                          {editingNode.mediaType === 'image' ? (
+                            <ImageIcon className="w-5 h-5 text-emerald-600" />
+                          ) : (
+                            <FileText className="w-5 h-5" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-bold text-neutral-900 dark:text-white text-xs truncate">
+                            {editingNode.mediaFileName || 'Selected Document'}
+                          </p>
+                          <div className="flex items-center space-x-1.5 text-[10px] text-emerald-700 dark:text-emerald-300 font-semibold">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                            <span>File ready to send via WhatsApp</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          updateEditingNode({ mediaUrl: '', mediaFileName: '' });
+                        }}
+                        title="Remove file"
+                        className="p-1 text-neutral-400 hover:text-rose-600 rounded-lg cursor-pointer transition-colors shrink-0"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    {/* Image Thumbnail Preview if image */}
+                    {editingNode.mediaType === 'image' && editingNode.mediaUrl && (
+                      <div className="rounded-xl overflow-hidden border border-neutral-200 dark:border-neutral-700 max-h-36 bg-neutral-100 flex items-center justify-center">
+                        <img
+                          src={editingNode.mediaUrl}
+                          alt="Selected Media"
+                          className="max-h-36 w-full object-contain"
+                          onError={(e) => {
+                            (e.target as HTMLElement).style.display = 'none';
+                          }}
+                        />
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between pt-1 border-t border-emerald-200/60 dark:border-emerald-800/60 text-[11px]">
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="text-emerald-700 dark:text-emerald-300 hover:underline font-bold cursor-pointer flex items-center space-x-1"
+                      >
+                        <UploadCloud className="w-3.5 h-3.5" />
+                        <span>Change File from PC</span>
+                      </button>
+
+                      {editingNode.mediaUrl && (
+                        <a
+                          href={editingNode.mediaUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 cursor-pointer flex items-center space-x-1 text-[10px]"
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                          <span>Preview / Open</span>
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* File Details: File Display Name & Advanced URL */}
+                <div className="space-y-2 pt-1">
+                  <div className="space-y-1">
+                    <label className="font-semibold text-neutral-700 dark:text-neutral-300 text-[11px]">
+                      File Display Name
+                    </label>
+                    <input
+                      type="text"
+                      value={editingNode.mediaFileName || ''}
+                      onChange={(e) => updateEditingNode({ mediaFileName: e.target.value })}
+                      placeholder="e.g. Catalog_2026.pdf"
+                      className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white text-xs"
+                    />
+                  </div>
+
+                  <details className="text-[11px] text-neutral-500 pt-1">
+                    <summary className="cursor-pointer hover:text-emerald-600 font-semibold select-none">
+                      ⚙ Advanced: Edit direct URL manually
+                    </summary>
+                    <div className="pt-1.5 space-y-1">
+                      <input
+                        type="text"
+                        value={editingNode.mediaUrl || ''}
+                        onChange={(e) => updateEditingNode({ mediaUrl: e.target.value })}
+                        placeholder="https://example.com/catalog.pdf or /uploads/..."
+                        className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white font-mono text-[10px]"
+                      />
+                    </div>
+                  </details>
                 </div>
               </div>
             )}

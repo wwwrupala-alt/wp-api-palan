@@ -26,6 +26,7 @@ import {
   Smartphone,
   RefreshCw,
   Copy,
+  BarChart3,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -45,10 +46,12 @@ import { DripStepCountdown } from '../components/drip/DripStepCountdown.tsx';
 
 interface DripCampaignsPageProps {
   onNavigateToCampaigns?: () => void;
+  onViewAnalytics?: (dripCampaignId: string) => void;
 }
 
 export const DripCampaignsPage: React.FC<DripCampaignsPageProps> = ({
   onNavigateToCampaigns,
+  onViewAnalytics,
 }) => {
   const { organization } = useAuth();
   const { activeAccount, accounts } = useWhatsAppAccounts();
@@ -230,6 +233,17 @@ export const DripCampaignsPage: React.FC<DripCampaignsPageProps> = ({
               className="px-3.5 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-700 dark:text-neutral-200 text-xs font-semibold hover:bg-neutral-50 dark:hover:bg-neutral-700 transition-colors cursor-pointer"
             >
               Broadcast Campaigns
+            </button>
+          )}
+
+          {onViewAnalytics && (
+            <button
+              type="button"
+              onClick={() => onViewAnalytics('')}
+              className="px-3.5 py-2 rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 text-xs font-bold flex items-center space-x-1.5 hover:bg-amber-100 transition-colors cursor-pointer shadow-2xs"
+            >
+              <BarChart3 className="w-3.5 h-3.5" />
+              <span>Drip Analytics</span>
             </button>
           )}
 
@@ -591,6 +605,19 @@ export const DripCampaignsPage: React.FC<DripCampaignsPageProps> = ({
                       <Users className="w-3.5 h-3.5" />
                       <span>Subscribers ({camp.enrolledCount || 0})</span>
                     </button>
+
+                    {/* Step Analytics Button */}
+                    {onViewAnalytics && (
+                      <button
+                        type="button"
+                        title="View step-by-step analytics & recipient delivery breakdown"
+                        onClick={() => onViewAnalytics(camp.id)}
+                        className="px-3 py-1.5 rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50/80 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/60 text-xs font-bold flex items-center space-x-1.5 cursor-pointer transition-all shadow-2xs"
+                      >
+                        <BarChart3 className="w-3.5 h-3.5" />
+                        <span>Step Analytics</span>
+                      </button>
+                    )}
 
                     {/* Edit Button */}
                     <button

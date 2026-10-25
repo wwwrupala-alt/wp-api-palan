@@ -753,6 +753,15 @@ export async function rescanDripCampaignApi(orgId: string, dripId: string) {
   return parseJsonResponse(res, 'Failed to scan and refresh audience progress.');
 }
 
+export async function fetchDripCampaignAnalyticsApi(orgId: string, dripId: string) {
+  const res = await fetch(`/api/drip/campaigns/${dripId}/analytics?organizationId=${encodeURIComponent(orgId)}`, {
+    headers: {
+      'x-organization-id': orgId,
+    },
+  });
+  return parseJsonResponse(res, 'Failed to fetch drip campaign analytics.');
+}
+
 export async function deleteCampaign(orgId: string, campaignId: string) {
   const path = `organizations/${orgId}/campaigns/${campaignId}`;
   try {

@@ -3098,14 +3098,46 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
               };
             }
           } else if (targetStep.type === 'media' && targetStep.mediaUrl) {
+            const mType: 'image' | 'video' | 'document' =
+              targetStep.mediaType === 'image'
+                ? 'image'
+                : targetStep.mediaType === 'video'
+                ? 'video'
+                : 'document';
+
+            let resolvedMedia: { id?: string; link?: string; filename?: string } | null = null;
+            try {
+              resolvedMedia = await resolveMetaMediaObject(
+                targetStep.mediaUrl,
+                phoneNumberId,
+                token,
+                mType,
+                getMetaConfig().graphVersion
+              );
+            } catch (resErr) {
+              console.warn('[Webhook Bot] resolveMetaMediaObject error:', resErr);
+            }
+
+            const mediaPayload: any = {};
+            if (resolvedMedia?.id) {
+              mediaPayload.id = resolvedMedia.id;
+            } else if (resolvedMedia?.link) {
+              mediaPayload.link = resolvedMedia.link;
+            } else if (targetStep.mediaUrl.startsWith('http://') || targetStep.mediaUrl.startsWith('https://')) {
+              mediaPayload.link = targetStep.mediaUrl;
+            }
+
+            if (targetStep.body && targetStep.body.trim()) {
+              mediaPayload.caption = targetStep.body.trim();
+            }
+            if (mType === 'document') {
+              mediaPayload.filename = targetStep.mediaFileName || resolvedMedia?.filename || 'Catalog.pdf';
+            }
+
             outPayload = {
               ...outPayload,
-              type: targetStep.mediaType === 'image' ? 'image' : 'document',
-              [targetStep.mediaType === 'image' ? 'image' : 'document']: {
-                link: targetStep.mediaUrl,
-                caption: targetStep.body || undefined,
-                filename: targetStep.mediaFileName || 'Catalog.pdf',
-              },
+              type: mType,
+              [mType]: mediaPayload,
             };
           } else {
             outPayload = {
