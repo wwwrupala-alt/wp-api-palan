@@ -2885,78 +2885,53 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
       });
 
       // CHATBOT ENGINE: Collect active bot flows for this incoming message
-      // Inspect targeted organization and other tenant organizations so user flows are never missed
+      // Strictly isolate to the target organization (never cross-pollinate flows across tenants!)
       const activeFlows: any[] = [];
-      const seenFlowIds = new Set<string>();
+      const matchedPhoneNum = matchedAccount?.displayPhoneNumber?.replace(/[^0-9]/g, '');
 
       const targetFlowsSnap = await getDocs(collection(serverDb, `organizations/${targetOrgId}/botFlows`));
       targetFlowsSnap.forEach((d) => {
         const f = d.data();
-        if (f.enabled) {
-          activeFlows.push({ id: d.id, ...f, orgId: targetOrgId });
-          seenFlowIds.add(d.id);
+        const isFlowEnabled = f.enabled === true || f.enabled === 'true';
+        const isNotPaused = f.status !== 'paused';
+        if (isFlowEnabled && isNotPaused) {
+          const flowPhone = f.phoneNumberId?.trim();
+          const isPhoneMatch =
+            !flowPhone ||
+            flowPhone === 'all' ||
+            flowPhone === phoneNumberId ||
+            flowPhone === matchedPhoneNum ||
+            flowPhone === `+${matchedPhoneNum}`;
+
+          if (isPhoneMatch) {
+            activeFlows.push({ id: d.id, ...f, orgId: targetOrgId });
+          }
         }
       });
-
-      // Also inspect other tenant orgs to combine all active flows
-      for (const orgDoc of orgsSnap.docs) {
-        if (orgDoc.id === targetOrgId) continue;
-        const otherFlowsSnap = await getDocs(collection(serverDb, `organizations/${orgDoc.id}/botFlows`));
-        otherFlowsSnap.forEach((d) => {
-          const f = d.data();
-          if (f.enabled && !seenFlowIds.has(d.id)) {
-            const flowPhone = f.phoneNumberId?.trim();
-            if (!flowPhone || flowPhone === 'all' || flowPhone === phoneNumberId) {
-              activeFlows.push({ id: d.id, ...f, orgId: orgDoc.id });
-              seenFlowIds.add(d.id);
-            }
-          }
-        });
-      }
 
       const upperText = textBody.trim().toUpperCase();
       const cleanSearchText = textBody.trim().toLowerCase();
       let matchedFlow: any = null;
       let targetSteps: any[] = [];
 
-      // 1. Check if incoming message is an interactive button click or matches any button title in the flow pipeline
-      const clickedId = interactiveButtonId || interactiveListId;
-      for (const flow of activeFlows) {
-        for (const step of (flow.steps || [])) {
-          // Check buttons (match by clicked ID or by button title when user types/clicks the label)
-          const btn = (step.buttons || []).find((b: any) => {
-            if (clickedId && b.id === clickedId) return true;
-            if (cleanSearchText && b.title?.trim().toLowerCase() === cleanSearchText) return true;
-            return false;
-          });
-
-          if (btn) {
-            matchedFlow = flow;
-            const stepIds: string[] = (btn.targetStepIds && btn.targetStepIds.length > 0)
-              ? btn.targetStepIds
-              : (btn.targetStepId ? [btn.targetStepId] : []);
-            if (stepIds.length > 0) {
-              targetSteps = stepIds
-                .map((id: string) => (flow.steps || []).find((s: any) => s.id === id))
-                .filter(Boolean);
-            } else {
-              targetSteps = [];
-            }
-            break;
-          }
-
-          // Check list sections
-          for (const sec of (step.listSections || [])) {
-            const row = (sec.rows || []).find((r: any) => {
-              if (clickedId && r.id === clickedId) return true;
-              if (cleanSearchText && r.title?.trim().toLowerCase() === cleanSearchText) return true;
+      // If no active flows are enabled for this organization & phone, completely skip chatbot dispatch
+      if (activeFlows.length > 0) {
+        // 1. Check if incoming message is an interactive button click or matches any button title in the flow pipeline
+        const clickedId = interactiveButtonId || interactiveListId;
+        for (const flow of activeFlows) {
+          for (const step of (flow.steps || [])) {
+            // Check buttons (match by clicked ID or by button title when user types/clicks the label)
+            const btn = (step.buttons || []).find((b: any) => {
+              if (clickedId && b.id === clickedId) return true;
+              if (cleanSearchText && b.title?.trim().toLowerCase() === cleanSearchText) return true;
               return false;
             });
-            if (row) {
+
+            if (btn) {
               matchedFlow = flow;
-              const stepIds: string[] = (row.targetStepIds && row.targetStepIds.length > 0)
-                ? row.targetStepIds
-                : (row.targetStepId ? [row.targetStepId] : []);
+              const stepIds: string[] = (btn.targetStepIds && btn.targetStepIds.length > 0)
+                ? btn.targetStepIds
+                : (btn.targetStepId ? [btn.targetStepId] : []);
               if (stepIds.length > 0) {
                 targetSteps = stepIds
                   .map((id: string) => (flow.steps || []).find((s: any) => s.id === id))
@@ -2966,59 +2941,75 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
               }
               break;
             }
+
+            // Check list sections
+            for (const sec of (step.listSections || [])) {
+              const row = (sec.rows || []).find((r: any) => {
+                if (clickedId && r.id === clickedId) return true;
+                if (cleanSearchText && r.title?.trim().toLowerCase() === cleanSearchText) return true;
+                return false;
+              });
+              if (row) {
+                matchedFlow = flow;
+                const stepIds: string[] = (row.targetStepIds && row.targetStepIds.length > 0)
+                  ? row.targetStepIds
+                  : (row.targetStepId ? [row.targetStepId] : []);
+                if (stepIds.length > 0) {
+                  targetSteps = stepIds
+                    .map((id: string) => (flow.steps || []).find((s: any) => s.id === id))
+                    .filter(Boolean);
+                } else {
+                  targetSteps = [];
+                }
+                break;
+              }
+            }
+            if (targetSteps.length > 0) break;
           }
           if (targetSteps.length > 0) break;
         }
-        if (targetSteps.length > 0) break;
-      }
 
-      // 2. If not a button transition, match by keyword trigger
-      if (targetSteps.length === 0) {
-        for (const flow of activeFlows) {
-          const flowPhoneId = flow.phoneNumberId?.trim();
-          if (flowPhoneId && flowPhoneId !== 'all') {
-            const matchedPhoneNum = matchedAccount?.displayPhoneNumber?.replace(/[^0-9]/g, '');
-            const isPhoneMatch =
-              flowPhoneId === phoneNumberId ||
-              flowPhoneId === matchedPhoneNum ||
-              flowPhoneId === `+${matchedPhoneNum}`;
-            if (!isPhoneMatch) {
+        // 2. If not a button transition, match by keyword trigger
+        if (targetSteps.length === 0) {
+          for (const flow of activeFlows) {
+            const condition = flow.triggerCondition || 'contains';
+            const flowKeywords = (flow.keywords || [])
+              .map((k: string) => k.trim().toUpperCase())
+              .filter((k: string) => k.length > 0);
+
+            if (condition === 'anything_else') {
+              matchedFlow = flow;
+              const initStep = flow.steps?.find((s: any) => s.id === flow.initialStepId) || flow.steps?.[0];
+              if (initStep) targetSteps = [initStep];
+              break;
+            }
+
+            // If no keywords are configured, never auto-reply
+            if (flowKeywords.length === 0) {
               continue;
             }
-          }
 
-          const condition = flow.triggerCondition || 'contains';
-          const flowKeywords = (flow.keywords || []).map((k: string) => k.trim().toUpperCase());
+            // Match keywords (exact, contains, begins_with, ends_with, whole_word)
+            const cleanUpperText = upperText.replace(/[!?.,;:\-_#*]/g, '').trim();
+            const isMatch = flowKeywords.some((kw: string) => {
+              if (!kw) return false;
+              if (condition === 'exact') return upperText === kw || cleanUpperText === kw;
+              if (condition === 'contains') return upperText.includes(kw) || cleanUpperText.includes(kw);
+              if (condition === 'begins_with') return upperText.startsWith(kw) || cleanUpperText.startsWith(kw);
+              if (condition === 'ends_with') return upperText.endsWith(kw) || cleanUpperText.endsWith(kw);
+              if (condition === 'whole_word') {
+                const regex = new RegExp(`\\b${kw}\\b`, 'i');
+                return regex.test(textBody) || regex.test(cleanUpperText);
+              }
+              return upperText.includes(kw) || cleanUpperText.includes(kw);
+            });
 
-          if (condition === 'anything_else') {
-            matchedFlow = flow;
-            const initStep = flow.steps?.find((s: any) => s.id === flow.initialStepId) || flow.steps?.[0];
-            if (initStep) targetSteps = [initStep];
-            break;
-          }
-
-          // Match keywords (exact, contains, begins_with, ends_with, or common greetings if empty)
-          const cleanUpperText = upperText.replace(/[!?.,;:\-_#*]/g, '').trim();
-          const isMatch = flowKeywords.length === 0
-            ? ['HI', 'HELLO', 'START', 'MENU', 'HELP'].some(kw => upperText.includes(kw) || cleanUpperText.includes(kw))
-            : flowKeywords.some((kw: string) => {
-                if (!kw) return false;
-                if (condition === 'exact') return upperText === kw || cleanUpperText === kw;
-                if (condition === 'contains') return upperText.includes(kw) || cleanUpperText.includes(kw);
-                if (condition === 'begins_with') return upperText.startsWith(kw) || cleanUpperText.startsWith(kw);
-                if (condition === 'ends_with') return upperText.endsWith(kw) || cleanUpperText.endsWith(kw);
-                if (condition === 'whole_word') {
-                  const regex = new RegExp(`\\b${kw}\\b`, 'i');
-                  return regex.test(textBody) || regex.test(cleanUpperText);
-                }
-                return upperText.includes(kw) || cleanUpperText.includes(kw);
-              });
-
-          if (isMatch) {
-            matchedFlow = flow;
-            const initStep = flow.steps?.find((s: any) => s.id === flow.initialStepId) || flow.steps?.[0];
-            if (initStep) targetSteps = [initStep];
-            break;
+            if (isMatch) {
+              matchedFlow = flow;
+              const initStep = flow.steps?.find((s: any) => s.id === flow.initialStepId) || flow.steps?.[0];
+              if (initStep) targetSteps = [initStep];
+              break;
+            }
           }
         }
       }

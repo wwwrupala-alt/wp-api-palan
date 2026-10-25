@@ -142,14 +142,19 @@ export const AutomationsPage: React.FC = () => {
   // Toggle Flow Active/Paused
   const handleToggleFlow = async (flow: BotFlow) => {
     if (!organization?.id) return;
+    const nextEnabled = !flow.enabled;
     // Optimistic toggle
     setBotFlows((prev) =>
-      prev.map((f) => (f.id === flow.id ? { ...f, enabled: !f.enabled } : f))
+      prev.map((f) =>
+        f.id === flow.id
+          ? { ...f, enabled: nextEnabled, status: nextEnabled ? 'active' : 'paused' }
+          : f
+      )
     );
-    await toggleBotFlow(organization.id, flow.id, !flow.enabled);
+    await toggleBotFlow(organization.id, flow.id, nextEnabled);
     toast.showSuccess(
       flow.enabled ? 'Flow Paused' : 'Flow Activated',
-      `Flow "${flow.name}" is now ${!flow.enabled ? 'active & listening' : 'temporarily paused'}.`
+      `Flow "${flow.name}" is now ${nextEnabled ? 'active & listening' : 'temporarily paused'}.`
     );
   };
 

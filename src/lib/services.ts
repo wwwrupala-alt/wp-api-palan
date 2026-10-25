@@ -1280,6 +1280,7 @@ export async function toggleBotFlow(orgId: string, flowId: string, enabled: bool
   try {
     await updateDoc(doc(db, 'organizations', orgId, 'botFlows', flowId), {
       enabled,
+      status: enabled ? 'active' : 'paused',
       updatedAt: new Date().toISOString(),
     });
   } catch (err) {
@@ -1294,6 +1295,7 @@ export async function setFlowAsFinalVersion(orgId: string, flowId: string, isFin
       isFinal,
       version: isFinal ? 'v1.0 (Final)' : undefined,
       enabled: isFinal ? true : undefined,
+      status: isFinal ? 'active' : undefined,
       updatedAt: new Date().toISOString(),
     });
   } catch (err) {
@@ -1387,7 +1389,9 @@ export async function simulateIncomingCustomerMessageAndRunBot(
   const activeFlows: BotFlow[] = [];
   flowsSnap.forEach((d) => {
     const f = { id: d.id, ...d.data() } as BotFlow;
-    if (f.enabled) {
+    const isFlowEnabled = f.enabled === true || (f.enabled as any) === 'true';
+    const isNotPaused = f.status !== 'paused';
+    if (isFlowEnabled && isNotPaused) {
       activeFlows.push(f);
     }
   });
@@ -1402,11 +1406,17 @@ export async function simulateIncomingCustomerMessageAndRunBot(
     }
 
     const condition = flow.triggerCondition || 'exact';
-    const flowKeywords = (flow.keywords || []).map((k) => k.trim().toUpperCase());
+    const flowKeywords = (flow.keywords || [])
+      .map((k) => k.trim().toUpperCase())
+      .filter((k) => k.length > 0);
 
     if (condition === 'anything_else') {
       matchedFlow = flow;
       break;
+    }
+
+    if (flowKeywords.length === 0) {
+      continue;
     }
 
     const isMatch = flowKeywords.some((kw) => {

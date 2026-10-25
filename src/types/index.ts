@@ -516,6 +516,7 @@ export interface BotFlow {
   id: string;
   name: string;
   description?: string;
+  status?: 'active' | 'paused';
   version?: string; // e.g. "v1.0 (Final)"
   isFinal?: boolean; // indicates this is the designated Final Version
   versionNotes?: string;
