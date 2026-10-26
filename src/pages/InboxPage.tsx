@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useMemo } from 'react';
+import React, { useEffect, useLayoutEffect, useState, useRef, useMemo } from 'react';
 import {
   MessageSquare,
   Search,
@@ -63,7 +63,7 @@ export const InboxPage: React.FC = () => {
 
   // Simulator / Test Customer Message Modal
   const [isSimulateModalOpen, setIsSimulateModalOpen] = useState(false);
-  const [simPhone, setSimPhone] = useState('+919974428034');
+  const [simPhone, setSimPhone] = useState('');
   const [simName, setSimName] = useState('Customer');
   const [simMessageText, setSimMessageText] = useState('CATALOGUE');
   const [simulating, setSimulating] = useState(false);
@@ -99,6 +99,8 @@ export const InboxPage: React.FC = () => {
   };
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const prevConvIdRef = useRef<string | null>(null);
 
   // Subscribe to conversations
   useEffect(() => {
@@ -141,15 +143,30 @@ export const InboxPage: React.FC = () => {
       selectedConv.id,
       (data) => {
         setMessages(data);
-        setTimeout(() => {
-          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-        }, 100);
       },
       () => {}
     );
 
     return () => unsub();
   }, [organization?.id, selectedConv?.id]);
+
+  // Immediately display the last message directly (no top-to-bottom auto scrolling animation)
+  useLayoutEffect(() => {
+    if (!messagesContainerRef.current) return;
+    prevConvIdRef.current = selectedConv?.id || null;
+
+    // Instant position jump before screen paint
+    messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+
+    // Ensure position after DOM microtask / layout calculations
+    const rafId = requestAnimationFrame(() => {
+      if (messagesContainerRef.current) {
+        messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+      }
+    });
+
+    return () => cancelAnimationFrame(rafId);
+  }, [messages, selectedConv?.id]);
 
   // Outbound Manual Message Send
   const handleSendMessage = async (e: React.FormEvent) => {
@@ -191,11 +208,19 @@ export const InboxPage: React.FC = () => {
     const textToSend = customText || simMessageText;
     if (!textToSend.trim()) return;
 
+    const phoneToUse = simPhone.trim();
+    if (!phoneToUse) {
+      setSimMessageText(textToSend.trim());
+      setIsSimulateModalOpen(true);
+      toast.showInfo('Customer Phone Required', 'Please enter a test customer phone number.');
+      return;
+    }
+
     setSimulating(true);
     try {
       const result = await simulateIncomingCustomerMessageAndRunBot(organization.id, {
-        senderPhone: simPhone,
-        senderName: simName,
+        senderPhone: phoneToUse,
+        senderName: simName.trim() || 'Customer',
         messageText: textToSend.trim(),
         phoneNumberId: activeAccount?.phoneNumberId,
         accountId: activeAccount?.id,
@@ -323,7 +348,7 @@ export const InboxPage: React.FC = () => {
               <Smartphone className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
               <select
                 aria-label="Filter inbox by WhatsApp number"
-                value={accountFilter}
+                value={accountFilter || 'all'}
                 onChange={(e) => setAccountFilter(e.target.value)}
                 className="w-full px-2.5 py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-[11px] font-semibold text-neutral-800 dark:text-neutral-200 focus:outline-hidden cursor-pointer"
                 title="Filter inbox by WhatsApp Number"
@@ -359,7 +384,7 @@ export const InboxPage: React.FC = () => {
             <input
               type="text"
               placeholder="Search chat or phone..."
-              value={search}
+              value={search || ''}
               onChange={(e) => setSearch(e.target.value)}
               className="w-full pl-9 pr-3 py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs text-neutral-900 dark:text-white placeholder-neutral-400 focus:outline-hidden"
             />
@@ -461,7 +486,7 @@ export const InboxPage: React.FC = () => {
                       <input
                         type="text"
                         autoFocus
-                        value={editedName}
+                        value={editedName || ''}
                         onChange={(e) => setEditedName(e.target.value)}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') handleSaveContactName();
@@ -525,7 +550,10 @@ export const InboxPage: React.FC = () => {
           </div>
 
           {/* Messages Area */}
-          <div className="flex-1 p-4 overflow-y-auto space-y-3">
+          <div
+            ref={messagesContainerRef}
+            className="flex-1 p-4 overflow-y-auto space-y-3 scroll-auto"
+          >
             {messages.length === 0 ? (
               <div className="text-center py-12 text-neutral-400 dark:text-neutral-500 text-xs">
                 No message history yet for this conversation thread.
@@ -582,6 +610,11 @@ export const InboxPage: React.FC = () => {
                             src={m.mediaUrl}
                             alt="Media attachment"
                             className="max-h-48 w-full object-cover"
+                            onLoad={() => {
+                              if (messagesContainerRef.current) {
+                                messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+                              }
+                            }}
                           />
                         </div>
                       )}
@@ -680,7 +713,7 @@ export const InboxPage: React.FC = () => {
             <input
               type="text"
               placeholder="Type a message as agent..."
-              value={inputText}
+              value={inputText || ''}
               onChange={(e) => setInputText(e.target.value)}
               className="flex-1 px-4 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800 text-xs text-neutral-900 dark:text-white placeholder-neutral-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-500"
             />
@@ -747,9 +780,10 @@ export const InboxPage: React.FC = () => {
                 </label>
                 <input
                   type="text"
-                  value={simPhone}
+                  value={simPhone || ''}
                   onChange={(e) => setSimPhone(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 font-mono"
+                  placeholder="e.g. +91 98765 43210"
+                  className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 font-mono text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
                 />
               </div>
 
@@ -759,9 +793,10 @@ export const InboxPage: React.FC = () => {
                 </label>
                 <input
                   type="text"
-                  value={simName}
+                  value={simName || ''}
                   onChange={(e) => setSimName(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800"
+                  placeholder="e.g. Customer Name"
+                  className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
                 />
               </div>
 
@@ -794,10 +829,10 @@ export const InboxPage: React.FC = () => {
                 </label>
                 <textarea
                   rows={2}
-                  value={simMessageText}
+                  value={simMessageText || ''}
                   onChange={(e) => setSimMessageText(e.target.value)}
                   placeholder="e.g. CATALOGUE"
-                  className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 font-mono text-xs"
+                  className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 font-mono text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
                 />
               </div>
             </div>
@@ -813,9 +848,9 @@ export const InboxPage: React.FC = () => {
 
               <button
                 type="button"
-                disabled={simulating || !simMessageText.trim()}
+                disabled={simulating || !simPhone.trim() || !simMessageText.trim()}
                 onClick={() => handleTriggerSimulatedMessage()}
-                className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold flex items-center space-x-1.5 transition-colors cursor-pointer shadow-xs"
+                className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold flex items-center space-x-1.5 transition-colors cursor-pointer shadow-xs"
               >
                 <Send className="w-3.5 h-3.5" />
                 <span>{simulating ? 'Sending...' : 'Send as Customer & Run Bot'}</span>

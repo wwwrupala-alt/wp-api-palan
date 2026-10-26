@@ -410,7 +410,7 @@ export const DripCampaignsPage: React.FC<DripCampaignsPageProps> = ({
               <Smartphone className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
               <select
                 aria-label="Filter drip by WhatsApp number"
-                value={accountFilter}
+                value={accountFilter ?? 'all'}
                 onChange={(e) => setAccountFilter(e.target.value)}
                 className="w-full sm:w-auto px-3 py-1.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs text-neutral-800 dark:text-neutral-200 font-semibold focus:ring-2 focus:ring-emerald-500 cursor-pointer"
                 title="Filter drip sequences by WhatsApp number"

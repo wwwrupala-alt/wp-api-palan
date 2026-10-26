@@ -3533,6 +3533,80 @@ export async function processIncomingWhatsAppStatusUpdate(statusObj: any, metada
                 updatedAt: nowIso,
               });
               console.log(`[Webhook] Synced Parent Drip Campaign ${parentDripId} Step ${stepNum} stats: read=${readCount}, delivered=${deliveredCount}`);
+
+              // Also sync individual subscriber stepHistory in Firestore so table displays DELIVERED/READ
+              try {
+                const subsSnap = await getDocs(
+                  collection(serverDb, `organizations/${targetOrgId}/drip_campaigns/${parentDripId}/subscribers`)
+                );
+                for (const subDoc of subsSnap.docs) {
+                  const subData = subDoc.data();
+                  const subCleanPhone = String(subData.phone || '').replace(/[^0-9]/g, '');
+                  const isMatch =
+                    (subData.stepHistory || []).some((h: any) => h.stepNumber === stepNum && h.metaMessageId && h.metaMessageId === wamid) ||
+                    (recipientPhone.length >= 7 && (
+                      subCleanPhone === recipientPhone ||
+                      subCleanPhone.endsWith(recipientPhone) ||
+                      recipientPhone.endsWith(subCleanPhone)
+                    ));
+
+                  if (isMatch) {
+                    let historyChanged = false;
+                    const hist = (subData.stepHistory || []).map((h: any) => {
+                      if (h.stepNumber === stepNum) {
+                        historyChanged = true;
+                        const rank: Record<string, number> = { queued: 0, sent: 1, delivered: 2, read: 3, failed: -1 };
+                        const prevRank = rank[h.status || 'sent'] ?? 1;
+                        const curRank = rank[status] ?? 1;
+                        const newStatus = curRank >= prevRank ? status : h.status;
+                        const effectiveDeliveredAt =
+                          status === 'delivered' || status === 'read'
+                            ? h.deliveredAt || eventTimeIso
+                            : h.deliveredAt;
+                        const effectiveReadAt =
+                          status === 'read'
+                            ? h.readAt || eventTimeIso
+                            : h.readAt;
+
+                        const existingTimeline = Array.isArray(h.timeline) ? h.timeline : [];
+                        return {
+                          ...h,
+                          status: newStatus,
+                          metaMessageId: wamid || h.metaMessageId,
+                          sentAt: h.sentAt || eventTimeIso,
+                          deliveredAt: effectiveDeliveredAt,
+                          readAt: effectiveReadAt,
+                          timeline: [
+                            ...existingTimeline,
+                            {
+                              status,
+                              timestamp: eventTimeIso,
+                              description:
+                                status === 'read'
+                                  ? 'Read by recipient (blue ticks)'
+                                  : status === 'delivered'
+                                  ? 'Delivered to recipient handset (double ticks)'
+                                  : `Meta Webhook: ${status}`,
+                              details: errorObj ? JSON.stringify(errorObj) : undefined,
+                            },
+                          ],
+                        };
+                      }
+                      return h;
+                    });
+
+                    if (historyChanged) {
+                      await updateDoc(subDoc.ref, {
+                        stepHistory: hist,
+                        updatedAt: nowIso,
+                      }).catch(() => {});
+                      console.log(`[Webhook] Updated Drip Subscriber ${subDoc.id} (${subData.phone}) Step ${stepNum} to ${status}`);
+                    }
+                  }
+                }
+              } catch (subErr) {
+                console.warn('[Webhook] Error updating drip subscriber stepHistory:', subErr);
+              }
             }
           } catch (dripSyncErr) {
             console.warn('[processIncomingWhatsAppStatusUpdate] Error syncing parent drip stats:', dripSyncErr);

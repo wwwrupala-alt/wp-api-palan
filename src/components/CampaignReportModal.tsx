@@ -915,7 +915,7 @@ export const CampaignReportModal: React.FC<CampaignReportModalProps> = ({
                       <input
                         type="text"
                         placeholder="Search phone or error..."
-                        value={searchTerm}
+                        value={searchTerm || ''}
                         onChange={(e) => setSearchTerm(e.target.value)}
                         className="pl-8 pr-3 py-1 text-xs rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 focus:outline-hidden"
                       />

@@ -1096,7 +1096,7 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
                               type="text"
                               required
                               placeholder={btn.type === 'PHONE_NUMBER' ? 'e.g. Call Us' : btn.type === 'URL' ? 'e.g. Track Order' : 'e.g. Quick Reply'}
-                              value={btn.text}
+                              value={btn.text || ''}
                               onChange={(e) => handleUpdateButton(index, { text: e.target.value })}
                               className="w-full px-2.5 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800 text-neutral-900 dark:text-white text-xs"
                             />

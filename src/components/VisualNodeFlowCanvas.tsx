@@ -1828,7 +1828,7 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
               </label>
               <input
                 type="text"
-                value={editingNode.title}
+                value={editingNode.title || ''}
                 onChange={(e) => updateEditingNode({ title: e.target.value })}
                 className="w-full px-3 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white font-semibold focus:outline-hidden focus:ring-2 focus:ring-emerald-500"
               />
@@ -1915,7 +1915,7 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
                           <span className="text-neutral-400 font-mono text-[10px] w-4">{idx + 1}.</span>
                           <input
                             type="text"
-                            value={b.title}
+                            value={b.title || ''}
                             maxLength={20}
                             onChange={(e) => {
                               const updated = [...(editingNode.buttons || [])];

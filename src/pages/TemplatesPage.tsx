@@ -237,6 +237,28 @@ export const TemplatesPage: React.FC = () => {
     setSortBy('newest');
   };
 
+  // Extract reliable chronological timestamp from template metadata
+  const getTemplateTimestamp = (t: any): number => {
+    if (!t) return 0;
+    if (t.createdAt) {
+      const ms = new Date(t.createdAt).getTime();
+      if (!isNaN(ms) && ms > 0) return ms;
+    }
+    if (t.updatedAt) {
+      const ms = new Date(t.updatedAt).getTime();
+      if (!isNaN(ms) && ms > 0) return ms;
+    }
+    if (t.created_time) {
+      const ms = new Date(t.created_time).getTime();
+      if (!isNaN(ms) && ms > 0) return ms;
+    }
+    if (t.last_updated_time) {
+      const ms = new Date(t.last_updated_time).getTime();
+      if (!isNaN(ms) && ms > 0) return ms;
+    }
+    return 0;
+  };
+
   // Comprehensive multi-factor filtering & sorting
   const filteredTemplates = templates
     .filter((t) => {
@@ -285,11 +307,40 @@ export const TemplatesPage: React.FC = () => {
     })
     .sort((a, b) => {
       if (sortBy === 'newest') {
-        return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+        const timeB = getTemplateTimestamp(b);
+        const timeA = getTemplateTimestamp(a);
+        if (Math.abs(timeB - timeA) > 1000) {
+          return timeB - timeA;
+        }
+        // Tie breaker using numeric Meta Template ID (higher number = created later in Meta)
+        const idB = Number(b.metaTemplateId || (typeof b.id === 'string' ? b.id.replace(/\D/g, '') : 0)) || 0;
+        const idA = Number(a.metaTemplateId || (typeof a.id === 'string' ? a.id.replace(/\D/g, '') : 0)) || 0;
+        if (idB > 0 && idA > 0 && idB !== idA) {
+          return idB - idA;
+        }
+        if (timeB !== timeA) {
+          return timeB - timeA;
+        }
+        return (b.name || '').localeCompare(a.name || '');
       }
+
       if (sortBy === 'oldest') {
-        return new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime();
+        const timeB = getTemplateTimestamp(b);
+        const timeA = getTemplateTimestamp(a);
+        if (Math.abs(timeB - timeA) > 1000) {
+          return timeA - timeB;
+        }
+        const idB = Number(b.metaTemplateId || (typeof b.id === 'string' ? b.id.replace(/\D/g, '') : 0)) || 0;
+        const idA = Number(a.metaTemplateId || (typeof a.id === 'string' ? a.id.replace(/\D/g, '') : 0)) || 0;
+        if (idB > 0 && idA > 0 && idB !== idA) {
+          return idA - idB;
+        }
+        if (timeB !== timeA) {
+          return timeA - timeB;
+        }
+        return (a.name || '').localeCompare(b.name || '');
       }
+
       if (sortBy === 'name-asc') {
         return a.name.localeCompare(b.name);
       }
@@ -474,7 +525,7 @@ export const TemplatesPage: React.FC = () => {
             <input
               type="text"
               placeholder="Search templates by name, message content, or category..."
-              value={searchQuery}
+              value={searchQuery || ''}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-9 pr-8 py-2 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 text-xs text-neutral-900 dark:text-white placeholder:text-neutral-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-500/20"
             />
@@ -565,7 +616,7 @@ export const TemplatesPage: React.FC = () => {
                   WhatsApp Account
                 </label>
                 <select
-                  value={selectedAccountFilter}
+                  value={selectedAccountFilter || 'ALL'}
                   onChange={(e) => setSelectedAccountFilter(e.target.value)}
                   className="w-full px-2.5 py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white text-xs cursor-pointer focus:ring-1 focus:ring-emerald-500 font-medium"
                 >
@@ -592,7 +643,7 @@ export const TemplatesPage: React.FC = () => {
                 Category
               </label>
               <select
-                value={selectedCategory}
+                value={selectedCategory || 'ALL'}
                 onChange={(e) => setSelectedCategory(e.target.value)}
                 className="w-full px-2.5 py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white text-xs cursor-pointer focus:ring-1 focus:ring-emerald-500"
               >
@@ -609,7 +660,7 @@ export const TemplatesPage: React.FC = () => {
                 Header Media
               </label>
               <select
-                value={selectedHeaderFormat}
+                value={selectedHeaderFormat || 'ALL'}
                 onChange={(e) => setSelectedHeaderFormat(e.target.value)}
                 className="w-full px-2.5 py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white text-xs cursor-pointer focus:ring-1 focus:ring-emerald-500"
               >
@@ -628,7 +679,7 @@ export const TemplatesPage: React.FC = () => {
                 Language
               </label>
               <select
-                value={selectedLanguage}
+                value={selectedLanguage || 'ALL'}
                 onChange={(e) => setSelectedLanguage(e.target.value)}
                 className="w-full px-2.5 py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white text-xs cursor-pointer focus:ring-1 focus:ring-emerald-500"
               >
@@ -647,7 +698,7 @@ export const TemplatesPage: React.FC = () => {
                 Sort By
               </label>
               <select
-                value={sortBy}
+                value={sortBy || 'newest'}
                 onChange={(e) => setSortBy(e.target.value as any)}
                 className="w-full px-2.5 py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white text-xs cursor-pointer focus:ring-1 focus:ring-emerald-500"
               >

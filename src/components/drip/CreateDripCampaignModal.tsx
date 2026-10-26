@@ -184,6 +184,14 @@ export const CreateDripCampaignModal: React.FC<CreateDripCampaignModalProps> = (
         headerMediaUrl: s.headerMediaUrl || '',
         headerMediaId: (s as any).headerMediaId || '',
         variableValues: s.variableValues ? { ...s.variableValues } : { body_1: 'Customer' },
+        stats: {
+          sent: 0,
+          delivered: 0,
+          read: 0,
+          failed: 0,
+        },
+        nextExecutionAt: null,
+        waitingSubscribers: 0,
       }));
       setSteps(clonedSteps.length > 0 ? clonedSteps : [
         {
@@ -222,6 +230,84 @@ export const CreateDripCampaignModal: React.FC<CreateDripCampaignModalProps> = (
       ]);
     }
   }, [isOpen, campaignToEdit?.id, cloneFromCampaign?.id, activeAccount?.phoneNumberId]);
+
+  // Helper to extract reliable chronological timestamp from template metadata
+  const getTemplateTimestamp = (t: any): number => {
+    if (!t) return 0;
+    if (t.createdAt) {
+      const ms = new Date(t.createdAt).getTime();
+      if (!isNaN(ms) && ms > 0) return ms;
+    }
+    if (t.updatedAt) {
+      const ms = new Date(t.updatedAt).getTime();
+      if (!isNaN(ms) && ms > 0) return ms;
+    }
+    if (t.created_time) {
+      const ms = new Date(t.created_time).getTime();
+      if (!isNaN(ms) && ms > 0) return ms;
+    }
+    if (t.last_updated_time) {
+      const ms = new Date(t.last_updated_time).getTime();
+      if (!isNaN(ms) && ms > 0) return ms;
+    }
+    return 0;
+  };
+
+  // Resolve currently chosen WhatsApp Account in Section 1
+  const selectedAccount = useMemo(() => {
+    if (!whatsAppAccountId) return activeAccount || accounts[0] || null;
+    return (
+      accounts.find(
+        (a) =>
+          a.phoneNumberId === whatsAppAccountId ||
+          a.id === whatsAppAccountId ||
+          a.wabaId === whatsAppAccountId
+      ) ||
+      activeAccount ||
+      accounts[0] ||
+      null
+    );
+  }, [whatsAppAccountId, accounts, activeAccount]);
+
+  // Filter templates strictly to the selected WhatsApp Number and sort newest first
+  const filteredTemplatesForSelectedNumber = useMemo(() => {
+    if (!selectedAccount) return templates;
+
+    const targetId = selectedAccount.id;
+    const targetPhoneId = selectedAccount.phoneNumberId;
+    const targetWabaId = selectedAccount.wabaId;
+
+    return templates
+      .filter((tpl) => {
+        if (tpl.whatsAppAccountId) {
+          return (
+            tpl.whatsAppAccountId === targetId ||
+            tpl.whatsAppAccountId === targetPhoneId ||
+            tpl.whatsAppAccountId === targetWabaId
+          );
+        }
+        if ((tpl as any).wabaId) {
+          return (tpl as any).wabaId === targetWabaId;
+        }
+        return accounts.length <= 1;
+      })
+      .sort((a, b) => {
+        const timeB = getTemplateTimestamp(b);
+        const timeA = getTemplateTimestamp(a);
+        if (Math.abs(timeB - timeA) > 1000) {
+          return timeB - timeA;
+        }
+        const idB = Number(b.metaTemplateId || (typeof b.id === 'string' ? b.id.replace(/\D/g, '') : 0)) || 0;
+        const idA = Number(a.metaTemplateId || (typeof a.id === 'string' ? a.id.replace(/\D/g, '') : 0)) || 0;
+        if (idB > 0 && idA > 0 && idB !== idA) {
+          return idB - idA;
+        }
+        if (timeB !== timeA) {
+          return timeB - timeA;
+        }
+        return (b.name || '').localeCompare(a.name || '');
+      });
+  }, [templates, selectedAccount, accounts]);
 
   // Add Step
   const handleAddStep = () => {
@@ -378,7 +464,9 @@ export const CreateDripCampaignModal: React.FC<CreateDripCampaignModalProps> = (
 
   // Template change handler for a step
   const handleSelectTemplateForStep = (index: number, templateId: string) => {
-    const tpl = templates.find((t) => t.id === templateId || t.name === templateId);
+    const tpl =
+      filteredTemplatesForSelectedNumber.find((t) => t.id === templateId || t.name === templateId) ||
+      templates.find((t) => t.id === templateId || t.name === templateId);
     if (!tpl) {
       handleUpdateStep(index, {
         templateId: '',
@@ -415,13 +503,20 @@ export const CreateDripCampaignModal: React.FC<CreateDripCampaignModalProps> = (
     setName(bp.name);
     setDescription(bp.description);
     const newSteps: DripStep[] = bp.steps.map((st, i) => {
-      // attempt to match an existing template
-      const matchedTpl = templates.find(
-        (t) =>
-          t.name.toLowerCase().includes(st.suggestedTemplateName.toLowerCase()) ||
-          t.name.toLowerCase().includes('welcome') ||
-          t.name.toLowerCase().includes('offer')
-      );
+      // attempt to match an existing template from the selected WhatsApp number's templates
+      const matchedTpl =
+        filteredTemplatesForSelectedNumber.find(
+          (t) =>
+            t.name.toLowerCase().includes(st.suggestedTemplateName.toLowerCase()) ||
+            t.name.toLowerCase().includes('welcome') ||
+            t.name.toLowerCase().includes('offer')
+        ) ||
+        templates.find(
+          (t) =>
+            t.name.toLowerCase().includes(st.suggestedTemplateName.toLowerCase()) ||
+            t.name.toLowerCase().includes('welcome') ||
+            t.name.toLowerCase().includes('offer')
+        );
 
       return {
         id: `step_${Date.now()}_${i + 1}`,
@@ -529,6 +624,27 @@ export const CreateDripCampaignModal: React.FC<CreateDripCampaignModalProps> = (
         }
       }
 
+      const cleanedSteps = steps.map((s, idx) => {
+        const base = {
+          ...s,
+          stepNumber: idx + 1,
+        };
+        if (!campaignToEdit?.id) {
+          return {
+            ...base,
+            stats: {
+              sent: 0,
+              delivered: 0,
+              read: 0,
+              failed: 0,
+            },
+            nextExecutionAt: null,
+            waitingSubscribers: 0,
+          };
+        }
+        return base;
+      });
+
       const campaignPayload = {
         organizationId: organization.id,
         name: name.trim(),
@@ -537,7 +653,7 @@ export const CreateDripCampaignModal: React.FC<CreateDripCampaignModalProps> = (
         status: targetStatus,
         triggerType,
         targetGroupId: triggerType === 'group_enrollment' ? targetGroupId : undefined,
-        steps,
+        steps: cleanedSteps,
         enrolledCount: recipientsToEnroll.length,
         activeSubscribers: targetStatus === 'active' ? recipientsToEnroll.length : 0,
         completedSubscribers: 0,
@@ -946,15 +1062,20 @@ export const CreateDripCampaignModal: React.FC<CreateDripCampaignModalProps> = (
 
                     {/* Template Picker & Preview */}
                     <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <label className="text-xs font-semibold text-neutral-700 dark:text-neutral-300 flex items-center space-x-1.5">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
+                        <label className="text-xs font-semibold text-neutral-700 dark:text-neutral-300 flex items-center space-x-1.5 flex-wrap gap-1">
                           <FileText className="w-3.5 h-3.5 text-emerald-600" />
                           <span>Select Approved WhatsApp Template:</span>
+                          {selectedAccount && (
+                            <span className="text-[10px] px-2 py-0.5 rounded-md font-mono font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800">
+                              Filtered for {selectedAccount.displayPhoneNumber}
+                            </span>
+                          )}
                         </label>
                         <button
                           type="button"
                           onClick={() => setTestingStepNum(testingStepNum === st.stepNumber ? null : st.stepNumber)}
-                          className="text-[11px] font-bold text-amber-700 dark:text-amber-400 hover:underline flex items-center space-x-1 cursor-pointer"
+                          className="text-[11px] font-bold text-amber-700 dark:text-amber-400 hover:underline flex items-center space-x-1 cursor-pointer self-start sm:self-auto"
                         >
                           <Send className="w-3 h-3" />
                           <span>{testingStepNum === st.stepNumber ? 'Close Test Send' : 'Test Send Step'}</span>
@@ -966,8 +1087,12 @@ export const CreateDripCampaignModal: React.FC<CreateDripCampaignModalProps> = (
                         onChange={(e) => handleSelectTemplateForStep(index, e.target.value)}
                         className="w-full px-3.5 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-xs font-medium focus:ring-2 focus:ring-emerald-500"
                       >
-                        <option value="">-- Choose WhatsApp Template --</option>
-                        {templates.map((tpl) => (
+                        <option value="">
+                          {filteredTemplatesForSelectedNumber.length === 0
+                            ? `-- No approved templates found for ${selectedAccount?.displayPhoneNumber || 'selected number'} (Sync in Templates tab) --`
+                            : `-- Choose Template for ${selectedAccount?.displayPhoneNumber || 'Selected Number'} (${filteredTemplatesForSelectedNumber.length} available) --`}
+                        </option>
+                        {filteredTemplatesForSelectedNumber.map((tpl) => (
                           <option key={tpl.id} value={tpl.id || tpl.name}>
                             {tpl.name} ({tpl.language}) - [{tpl.category || 'MARKETING'}]
                           </option>
@@ -1144,7 +1269,7 @@ export const CreateDripCampaignModal: React.FC<CreateDripCampaignModalProps> = (
 
                                         <input
                                           type="text"
-                                          value={curVal}
+                                          value={curVal ?? ''}
                                           onChange={(e) =>
                                             handleUpdateStep(index, {
                                               variableValues: { ...(st.variableValues || {}), [v.key]: e.target.value },

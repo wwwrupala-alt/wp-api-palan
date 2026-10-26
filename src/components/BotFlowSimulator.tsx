@@ -49,7 +49,7 @@ interface ChatMessage {
 export const BotFlowSimulator: React.FC<BotFlowSimulatorProps> = ({
   flow,
   businessName = 'CloudWABA Business',
-  displayPhoneNumber = '+91 9974428034',
+  displayPhoneNumber = '',
 }) => {
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     const firstStep = flow.steps.find((s) => s.id === flow.initialStepId) || flow.steps[0];
@@ -636,7 +636,7 @@ export const BotFlowSimulator: React.FC<BotFlowSimulatorProps> = ({
               <input
                 type="text"
                 placeholder="Type a message or tap button..."
-                value={inputText}
+                value={inputText || ''}
                 onChange={(e) => setInputText(e.target.value)}
                 className="flex-1 px-3 py-1.5 rounded-full border border-neutral-200 dark:border-neutral-700 bg-neutral-100 dark:bg-neutral-800 text-xs focus:outline-hidden"
               />

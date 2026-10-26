@@ -193,7 +193,7 @@ export const BotFlowEditorModal: React.FC<BotFlowEditorModalProps> = ({
             <input
               type="text"
               required
-              value={name}
+              value={name || ''}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. CATALOGUE or Sales Inquiry"
               className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white font-medium focus:ring-1 focus:ring-emerald-500"
@@ -207,7 +207,7 @@ export const BotFlowEditorModal: React.FC<BotFlowEditorModalProps> = ({
               <span>Connected WhatsApp Number</span>
             </label>
             <select
-              value={phoneNumberId}
+              value={phoneNumberId || 'all'}
               onChange={(e) => setPhoneNumberId(e.target.value)}
               className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white font-medium cursor-pointer"
             >
@@ -226,7 +226,7 @@ export const BotFlowEditorModal: React.FC<BotFlowEditorModalProps> = ({
               Trigger Scope
             </label>
             <select
-              value={triggerScope}
+              value={triggerScope || 'all'}
               onChange={(e) => setTriggerScope(e.target.value as TriggerScope)}
               className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white font-medium cursor-pointer"
             >
@@ -243,7 +243,7 @@ export const BotFlowEditorModal: React.FC<BotFlowEditorModalProps> = ({
                 <span className="font-bold">Condition</span>
               </label>
               <select
-                value={triggerCondition}
+                value={triggerCondition || 'exact'}
                 onChange={(e) => setTriggerCondition(e.target.value as TriggerCondition)}
                 className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white font-medium cursor-pointer"
               >
@@ -262,7 +262,7 @@ export const BotFlowEditorModal: React.FC<BotFlowEditorModalProps> = ({
                 <div className="flex items-center space-x-2">
                   <input
                     type="text"
-                    value={keywordInput}
+                    value={keywordInput || ''}
                     onChange={(e) => setKeywordInput(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {

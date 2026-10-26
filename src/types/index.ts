@@ -351,6 +351,14 @@ export interface DripSubscriberLog {
   sentAt: string;
   status: 'sent' | 'delivered' | 'read' | 'failed' | 'skipped';
   metaMessageId?: string;
+  deliveredAt?: string;
+  readAt?: string;
+  timeline?: Array<{
+    status: string;
+    timestamp: string;
+    description: string;
+    details?: string;
+  }>;
   error?: string;
   note?: string;
 }

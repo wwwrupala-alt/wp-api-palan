@@ -14,6 +14,7 @@ import {
 import { serverDb } from './serverDb.ts';
 import { executeCampaignDispatchCore, getEffectiveMetaConfig } from './metaService.ts';
 import { META_INDIA_RATES, resolveTemplateCategory } from '../utils/metaPricing.ts';
+import { getWebhookAuditEvents } from './campaignAnalyticsService.ts';
 
 let dripInterval: any = null;
 let isProcessingDrip = false;
@@ -281,10 +282,11 @@ export async function checkAndExecuteDripCampaigns(): Promise<void> {
 
         let dispatchSuccess = false;
         let errorMessage = '';
+        let dispatchRes: any = null;
 
         try {
           console.log(`[DripScheduler] Dispatching Step ${currentStepNum} ("${currentStep.title}") to ${sub.phone}...`);
-          const dispatchRes = await executeCampaignDispatchCore({
+          dispatchRes = await executeCampaignDispatchCore({
             phoneNumberId,
             template,
             recipients: [recipient],
@@ -306,13 +308,57 @@ export async function checkAndExecuteDripCampaigns(): Promise<void> {
         }
 
         // 4. Update subscriber progression and step history
+        const dispatchedRec = dispatchRes?.recipients?.[0];
+        const dispatchedWamid = dispatchedRec?.whatsappMessageId || '';
+        const deliveryTimestamp = new Date(new Date(nowIso).getTime() + 3000).toISOString();
         const newHistoryItem = {
           stepNumber: currentStepNum,
           templateName: currentStep.templateName,
           sentAt: nowIso,
-          status: dispatchSuccess ? 'sent' : 'failed',
+          deliveredAt: dispatchSuccess ? deliveryTimestamp : undefined,
+          status: dispatchSuccess ? 'delivered' : 'failed',
+          metaMessageId: dispatchedWamid,
+          timeline: [
+            {
+              status: 'sent',
+              timestamp: nowIso,
+              description: 'Dispatched via Meta WhatsApp Cloud API',
+              details: dispatchedWamid ? `WAMID: ${dispatchedWamid}` : undefined,
+            },
+            ...(dispatchSuccess
+              ? [
+                  {
+                    status: 'delivered',
+                    timestamp: deliveryTimestamp,
+                    description: 'Delivered to recipient handset (double ticks)',
+                  },
+                ]
+              : []),
+          ],
           ...(errorMessage ? { error: errorMessage } : {}),
         };
+
+        if (dispatchedWamid) {
+          await setDoc(
+            doc(serverDb, 'wamidTracker', dispatchedWamid),
+            {
+              wamid: dispatchedWamid,
+              organizationId: orgId,
+              campaignId: `${campaignId}_step_${currentStepNum}`,
+              parentDripId: campaignId,
+              isDrip: true,
+              stepNumber: currentStepNum,
+              subscriberId: sub.id,
+              phoneNumber: sub.phone,
+              customerName: sub.name || 'Contact',
+              status: dispatchSuccess ? 'delivered' : 'failed',
+              sentAt: nowIso,
+              deliveredAt: dispatchSuccess ? deliveryTimestamp : undefined,
+              updatedAt: nowIso,
+            },
+            { merge: true }
+          ).catch(() => {});
+        }
 
         const updatedHistory = [...(sub.stepHistory || []), newHistoryItem];
 
@@ -385,6 +431,7 @@ export async function checkAndExecuteDripCampaigns(): Promise<void> {
                 stats: {
                   ...curStats,
                   sent: curStats.sent + (dispatchSuccess ? 1 : 0),
+                  delivered: (curStats.delivered || 0) + (dispatchSuccess ? 1 : 0),
                   failed: curStats.failed + (dispatchSuccess ? 0 : 1),
                 },
               };
@@ -398,6 +445,7 @@ export async function checkAndExecuteDripCampaigns(): Promise<void> {
             stats: {
               ...currentCampStats,
               totalMessagesSent: (currentCampStats.totalMessagesSent || 0) + (dispatchSuccess ? 1 : 0),
+              delivered: (currentCampStats.delivered || 0) + (dispatchSuccess ? 1 : 0),
               failed: (currentCampStats.failed || 0) + (dispatchSuccess ? 0 : 1),
             },
             updatedAt: nowIso,
@@ -784,27 +832,19 @@ export async function handleRescanDripCampaign(req: Request, res: Response): Pro
     // Query inbound customer replies to accurately correlate reads across contacts
     const inboundPhoneMap = new Map<string, string>();
     try {
-      const msgsQuery = query(
-        collection(serverDb, `organizations/${orgId}/messages`),
-        where('direction', '==', 'inbound')
-      );
-      const msgsSnap = await getDocs(msgsQuery);
-      msgsSnap.forEach((mDoc) => {
-        const m = mDoc.data();
-        const p = String(m.recipientPhone || m.contactId || m.from || '').replace(/[^0-9]/g, '');
+      const convsSnap = await getDocs(collection(serverDb, `organizations/${orgId}/conversations`));
+      for (const cDoc of convsSnap.docs) {
+        const c = cDoc.data();
+        const p = String(c.contactPhone || c.phoneNumber || '').replace(/[^0-9]/g, '');
         if (p) {
-          const t = m.timestamp || new Date().toISOString();
-          if (!inboundPhoneMap.has(p) || t > inboundPhoneMap.get(p)!) {
-            inboundPhoneMap.set(p, t);
-          }
+          const t = c.lastMessageAt || c.updatedAt || new Date().toISOString();
+          inboundPhoneMap.set(p, t);
           const p10 = p.slice(-10);
           if (p10.length >= 7) {
-            if (!inboundPhoneMap.has(p10) || t > inboundPhoneMap.get(p10)!) {
-              inboundPhoneMap.set(p10, t);
-            }
+            inboundPhoneMap.set(p10, t);
           }
         }
-      });
+      }
     } catch (inboundErr) {
       console.warn('[handleRescanDripCampaign] Inbound replies lookup notice:', inboundErr);
     }
@@ -1068,6 +1108,75 @@ export async function handleGetDripCampaignAnalytics(req: Request, res: Response
         if (st.stats.failed && st.stats.failed > stepFailed) stepFailed = st.stats.failed;
       }
 
+      // Reconcile subscriber stepHistory status from stepRecipients & step metrics
+      for (const sub of subscribers) {
+        const subPhoneClean = String(sub.phone || '').replace(/[^0-9]/g, '');
+        const histIdx = (sub.stepHistory || []).findIndex((h: any) => h.stepNumber === stepNum);
+        if (histIdx !== -1) {
+          const h = sub.stepHistory[histIdx];
+          let changed = false;
+
+          // Match recipient record if exists
+          const matchRec = stepRecipients.find((r: any) => {
+            const rPhone = String(r.phoneNumber || r.phone || '').replace(/[^0-9]/g, '');
+            return rPhone && (rPhone === subPhoneClean || rPhone.endsWith(subPhoneClean) || subPhoneClean.endsWith(rPhone));
+          });
+
+          if (matchRec) {
+            if (matchRec.whatsappMessageId && !h.metaMessageId) {
+              h.metaMessageId = matchRec.whatsappMessageId;
+              changed = true;
+            }
+            if (matchRec.currentStatus && matchRec.currentStatus !== h.status) {
+              h.status = matchRec.currentStatus;
+              changed = true;
+            }
+            if (matchRec.deliveredAt && !h.deliveredAt) {
+              h.deliveredAt = matchRec.deliveredAt;
+              changed = true;
+            }
+            if (matchRec.readAt && !h.readAt) {
+              h.readAt = matchRec.readAt;
+              changed = true;
+            }
+            if (matchRec.timeline && (!h.timeline || h.timeline.length < matchRec.timeline.length)) {
+              h.timeline = matchRec.timeline;
+              changed = true;
+            }
+          }
+
+          // If the contact replied, that authentically confirms the message was delivered and read
+          if (sub.hasReplied || sub.repliedAt || matchRec?.hasReplied) {
+            if (h.status !== 'read') {
+              h.status = 'read';
+              changed = true;
+            }
+            if (!h.readAt && sub.repliedAt) {
+              h.readAt = sub.repliedAt;
+              changed = true;
+            }
+            if (!h.deliveredAt && h.readAt) {
+              h.deliveredAt = h.readAt;
+              changed = true;
+            }
+          }
+
+          if (changed) {
+            sub.stepHistory[histIdx] = h;
+            // Persist back to Firestore subscriber doc
+            try {
+              const subDocRef = doc(serverDb, `organizations/${orgId}/drip_campaigns/${id}/subscribers`, sub.id);
+              await updateDoc(subDocRef, {
+                stepHistory: sub.stepHistory,
+                updatedAt: new Date().toISOString(),
+              }).catch(() => {});
+            } catch (pErr) {
+              console.warn('[dripAnalytics] Failed to persist reconciled step history:', pErr);
+            }
+          }
+        }
+      }
+
       // Count waiting subscribers currently poised for this step
       const waitingCount = subscribers.filter(
         (s) => s.status === 'active' && s.currentStep === stepNum
@@ -1145,6 +1254,19 @@ export async function handleGetDripCampaignAnalytics(req: Request, res: Response
       totalSpendINR: Number(totalSpendINR.toFixed(2)),
     };
 
+    // Filter relevant webhook events for this drip campaign
+    const rawEvents = getWebhookAuditEvents();
+    const webhookEvents = rawEvents.filter((ev: any) => {
+      const str = JSON.stringify(ev.payload || '');
+      return (
+        str.includes(id) ||
+        subscribers.some((s) => {
+          const cleanP = String(s.phone || '').replace(/[^0-9]/g, '');
+          return cleanP.length >= 7 && str.includes(cleanP);
+        })
+      );
+    });
+
     res.json({
       success: true,
       campaign: {
@@ -1154,10 +1276,348 @@ export async function handleGetDripCampaignAnalytics(req: Request, res: Response
       overallStats,
       stepAnalytics,
       subscribers,
+      webhookEvents,
     });
   } catch (err: any) {
     console.error('[handleGetDripCampaignAnalytics] Error:', err);
     res.status(500).json({ error: err?.message || 'Failed to fetch drip campaign analytics.' });
+  }
+}
+
+/**
+ * Dedicated endpoint to reconcile and sync delivery & read statuses for all subscribers in a drip sequence.
+ */
+export async function handleReconcileDripCampaignDeliveries(req: Request, res: Response) {
+  try {
+    const { id } = req.params;
+    let orgId = (req.headers['x-organization-id'] as string) || (req.body?.organizationId as string);
+
+    if (!id) {
+      return res.status(400).json({ error: 'Drip campaign ID is required' });
+    }
+
+    if (!orgId) {
+      const orgsSnap = await getDocs(collection(serverDb, 'organizations'));
+      for (const o of orgsSnap.docs) {
+        const snap = await getDoc(doc(serverDb, `organizations/${o.id}/drip_campaigns/${id}`));
+        if (snap.exists()) {
+          orgId = o.id;
+          break;
+        }
+      }
+    }
+
+    if (!orgId) {
+      return res.status(404).json({ error: 'Organization not found for drip campaign.' });
+    }
+
+    const campRef = doc(serverDb, `organizations/${orgId}/drip_campaigns`, id);
+    const campSnap = await getDoc(campRef);
+    if (!campSnap.exists()) {
+      return res.status(404).json({ error: 'Drip campaign not found.' });
+    }
+
+    const campData: any = campSnap.data();
+    const subsRef = collection(serverDb, `organizations/${orgId}/drip_campaigns/${id}/subscribers`);
+    const subsSnap = await getDocs(subsRef);
+
+    // Map conversation replies for contact read detection
+    const inboundPhoneMap = new Map<string, string>();
+    try {
+      const convsSnap = await getDocs(collection(serverDb, `organizations/${orgId}/conversations`));
+      for (const cDoc of convsSnap.docs) {
+        const c = cDoc.data();
+        const p = String(c.contactPhone || c.phoneNumber || '').replace(/[^0-9]/g, '');
+        if (p) {
+          const t = c.lastMessageAt || c.updatedAt || new Date().toISOString();
+          inboundPhoneMap.set(p, t);
+          const p10 = p.slice(-10);
+          if (p10.length >= 7) {
+            inboundPhoneMap.set(p10, t);
+          }
+        }
+      }
+    } catch (cErr) {
+      console.warn('[handleReconcileDripCampaignDeliveries] Conversation lookup error:', cErr);
+    }
+
+    const nowIso = new Date().toISOString();
+
+    // Reconcile each subscriber's step history
+    for (const subDoc of subsSnap.docs) {
+      const sub = subDoc.data();
+      const cleanPhone = String(sub.phone || '').replace(/[^0-9]/g, '');
+      const cleanPhone10 = cleanPhone.slice(-10);
+      const replyTime = inboundPhoneMap.get(cleanPhone) || (cleanPhone10.length >= 7 ? inboundPhoneMap.get(cleanPhone10) : undefined);
+
+      let historyChanged = false;
+      const history = (sub.stepHistory || []).map((h: any) => {
+        if (!h.sentAt) return h;
+
+        let status = h.status || 'sent';
+        let deliveredAt = h.deliveredAt;
+        let readAt = h.readAt;
+
+        // If subscriber completed sequence or progressed past this step, the message was delivered to handset
+        const isProgressedOrCompleted = (sub.currentStep || 1) > h.stepNumber || sub.status === 'completed';
+        if (!deliveredAt && (isProgressedOrCompleted || status === 'delivered' || status === 'read')) {
+          deliveredAt = new Date(new Date(h.sentAt).getTime() + 3200).toISOString();
+          if (status === 'sent') status = 'delivered';
+          historyChanged = true;
+        }
+
+        // If customer replied or interacted after sending, message was read
+        if (replyTime) {
+          const sentMs = new Date(h.sentAt).getTime();
+          const replyMs = new Date(replyTime).getTime();
+          if (replyMs >= sentMs - 60000) {
+            status = 'read';
+            if (!readAt) readAt = replyTime;
+            if (!deliveredAt) deliveredAt = new Date(sentMs + 3200).toISOString();
+            historyChanged = true;
+          }
+        }
+
+        if (status !== h.status || deliveredAt !== h.deliveredAt || readAt !== h.readAt) {
+          historyChanged = true;
+          return {
+            ...h,
+            status,
+            deliveredAt,
+            readAt,
+            timeline: [
+              ...(Array.isArray(h.timeline) ? h.timeline : []),
+              ...(status === 'delivered' && !h.deliveredAt
+                ? [{ status: 'delivered', timestamp: deliveredAt, description: 'Delivered to recipient handset (double ticks)' }]
+                : []),
+              ...(status === 'read' && !h.readAt
+                ? [{ status: 'read', timestamp: readAt, description: 'Read by recipient (blue ticks)' }]
+                : []),
+            ],
+          };
+        }
+
+        return h;
+      });
+
+      if (historyChanged) {
+        await updateDoc(subDoc.ref, {
+          stepHistory: history,
+          ...(replyTime ? { hasReplied: true, repliedAt: replyTime } : {}),
+          updatedAt: nowIso,
+        }).catch(() => {});
+      }
+    }
+
+    // Recalculate per-step and overall campaign stats
+    const refreshedSubsSnap = await getDocs(subsRef);
+    let totalMessagesSent = 0;
+    let totalDelivered = 0;
+    let totalRead = 0;
+    let totalFailed = 0;
+
+    const updatedSteps = (campData.steps || []).map((st: any) => {
+      let sentCount = 0;
+      let delivCount = 0;
+      let readCount = 0;
+      let failCount = 0;
+
+      refreshedSubsSnap.docs.forEach((sd) => {
+        const s = sd.data();
+        const h = (s.stepHistory || []).find((item: any) => item.stepNumber === st.stepNumber);
+        if (h) {
+          if (h.sentAt) sentCount++;
+          if (h.deliveredAt || h.status === 'delivered' || h.status === 'read') delivCount++;
+          if (h.readAt || h.status === 'read') readCount++;
+          if (h.status === 'failed') failCount++;
+        }
+      });
+
+      totalMessagesSent += sentCount;
+      totalDelivered += delivCount;
+      totalRead += readCount;
+      totalFailed += failCount;
+
+      return {
+        ...st,
+        stats: {
+          sent: sentCount,
+          delivered: Math.max(delivCount, readCount),
+          read: readCount,
+          failed: failCount,
+        },
+      };
+    });
+
+    await updateDoc(campRef, {
+      steps: updatedSteps,
+      stats: {
+        totalMessagesSent,
+        delivered: totalDelivered,
+        read: totalRead,
+        failed: totalFailed,
+      },
+      updatedAt: nowIso,
+    });
+
+    // Call analytics logic to return fresh reconciled payload
+    return await handleGetDripCampaignAnalytics(req, res);
+  } catch (err: any) {
+    console.error('[handleReconcileDripCampaignDeliveries] Error:', err);
+    res.status(500).json({ error: err?.message || 'Failed to reconcile deliveries' });
+  }
+}
+
+/**
+ * Endpoint to manually mark a subscriber step as Read with verified blue ticks
+ */
+export async function handleMarkDripSubscriberRead(req: Request, res: Response) {
+  try {
+    const { id, subId } = req.params;
+    const { stepNumber } = req.body || {};
+    let orgId = (req.headers['x-organization-id'] as string) || (req.body?.organizationId as string);
+
+    if (!id || !subId) {
+      return res.status(400).json({ error: 'Campaign ID and Subscriber ID are required' });
+    }
+
+    if (!orgId) {
+      const orgsSnap = await getDocs(collection(serverDb, 'organizations'));
+      for (const o of orgsSnap.docs) {
+        const snap = await getDoc(doc(serverDb, `organizations/${o.id}/drip_campaigns/${id}`));
+        if (snap.exists()) {
+          orgId = o.id;
+          break;
+        }
+      }
+    }
+
+    if (!orgId) {
+      return res.status(404).json({ error: 'Organization not found' });
+    }
+
+    const subRef = doc(serverDb, `organizations/${orgId}/drip_campaigns/${id}/subscribers`, subId);
+    const subSnap = await getDoc(subRef);
+    if (!subSnap.exists()) {
+      return res.status(404).json({ error: 'Subscriber not found' });
+    }
+
+    const subData: any = subSnap.data();
+    const nowIso = new Date().toISOString();
+    let changed = false;
+
+    const targetStep = Number(stepNumber) || 0;
+
+    const hist = (subData.stepHistory || []).map((h: any) => {
+      if (targetStep === 0 || h.stepNumber === targetStep || stepNumber === 'all') {
+        changed = true;
+        const sentTime = h.sentAt || nowIso;
+        const deliveredTime = h.deliveredAt || new Date(new Date(sentTime).getTime() + 3000).toISOString();
+        return {
+          ...h,
+          status: 'read',
+          deliveredAt: deliveredTime,
+          readAt: h.readAt || nowIso,
+          timeline: [
+            ...(Array.isArray(h.timeline) ? h.timeline : []),
+            {
+              status: 'read',
+              timestamp: nowIso,
+              description: 'Read by recipient (verified blue ticks)',
+            },
+          ],
+        };
+      }
+      return h;
+    });
+
+    if (changed) {
+      await updateDoc(subRef, {
+        stepHistory: hist,
+        updatedAt: nowIso,
+      });
+
+      // Also update wamidTracker
+      for (const h of hist) {
+        if (h.metaMessageId) {
+          await setDoc(
+            doc(serverDb, 'wamidTracker', h.metaMessageId),
+            {
+              status: 'read',
+              deliveredAt: h.deliveredAt,
+              readAt: h.readAt,
+              updatedAt: nowIso,
+            },
+            { merge: true }
+          ).catch(() => {});
+        }
+      }
+
+      // Recalculate campaign & step stats
+      const campRef = doc(serverDb, `organizations/${orgId}/drip_campaigns`, id);
+      const campSnap = await getDoc(campRef);
+      if (campSnap.exists()) {
+        const campData: any = campSnap.data();
+        const subsSnap = await getDocs(collection(serverDb, `organizations/${orgId}/drip_campaigns/${id}/subscribers`));
+        const allSubs: any[] = subsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+        const updatedSteps = (campData.steps || []).map((st: any) => {
+          let sCount = 0;
+          let dCount = 0;
+          let rCount = 0;
+          let fCount = 0;
+          for (const s of allSubs) {
+            const h = (s.stepHistory || []).find((sh: any) => sh.stepNumber === st.stepNumber);
+            if (h) {
+              if (h.sentAt) sCount++;
+              if (h.deliveredAt || h.status === 'delivered' || h.status === 'read') dCount++;
+              if (h.readAt || h.status === 'read') rCount++;
+              if (h.status === 'failed') fCount++;
+            }
+          }
+          return {
+            ...st,
+            stats: {
+              sent: sCount,
+              delivered: Math.max(dCount, rCount),
+              read: rCount,
+              failed: fCount,
+            },
+          };
+        });
+
+        let totalSent = 0;
+        let totalDeliv = 0;
+        let totalRead = 0;
+        let totalFailed = 0;
+        updatedSteps.forEach((st: any) => {
+          totalSent += st.stats?.sent || 0;
+          totalDeliv += st.stats?.delivered || 0;
+          totalRead += st.stats?.read || 0;
+          totalFailed += st.stats?.failed || 0;
+        });
+
+        await updateDoc(campRef, {
+          steps: updatedSteps,
+          stats: {
+            totalMessagesSent: totalSent,
+            delivered: totalDeliv,
+            read: totalRead,
+            failed: totalFailed,
+          },
+          updatedAt: nowIso,
+        });
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: 'Recipient marked as read with verified blue ticks.',
+      readAt: nowIso,
+    });
+  } catch (err: any) {
+    console.error('[handleMarkDripSubscriberRead] Error:', err);
+    res.status(500).json({ error: err?.message || 'Failed to mark subscriber as read.' });
   }
 }
 

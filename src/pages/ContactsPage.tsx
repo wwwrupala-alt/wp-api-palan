@@ -1460,7 +1460,7 @@ export const ContactsPage: React.FC = () => {
                         <input
                           type="text"
                           placeholder="Key (e.g. var1, amount)"
-                          value={vItem.key}
+                          value={vItem.key || ''}
                           onChange={(e) => {
                             const updated = [...formVariables];
                             updated[idx].key = e.target.value;
@@ -1471,7 +1471,7 @@ export const ContactsPage: React.FC = () => {
                         <input
                           type="text"
                           placeholder="Value (e.g. Rs. 5,000, 25-Oct)"
-                          value={vItem.value}
+                          value={vItem.value || ''}
                           onChange={(e) => {
                             const updated = [...formVariables];
                             updated[idx].value = e.target.value;

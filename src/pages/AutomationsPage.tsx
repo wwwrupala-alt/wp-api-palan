@@ -284,7 +284,7 @@ export const AutomationsPage: React.FC = () => {
                 Filter by WhatsApp Number:
               </span>
               <select
-                value={accountFilter}
+                value={accountFilter || 'all'}
                 onChange={(e) => setAccountFilter(e.target.value)}
                 className="px-2.5 py-1.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white text-xs font-medium cursor-pointer"
               >
@@ -640,7 +640,7 @@ export const AutomationsPage: React.FC = () => {
               key={testingPhoneFlow.id}
               flow={testingPhoneFlow}
               businessName={activeAccount?.verifiedName || 'CloudWABA Business'}
-              displayPhoneNumber={activeAccount?.displayPhoneNumber || '+91 9974428034'}
+              displayPhoneNumber={activeAccount?.displayPhoneNumber || ''}
             />
           </div>
         </div>
@@ -715,7 +715,7 @@ export const AutomationsPage: React.FC = () => {
                   type="text"
                   required
                   placeholder="e.g. PRICE or ADDRESS"
-                  value={ruleKeyword}
+                  value={ruleKeyword || ''}
                   onChange={(e) => setRuleKeyword(e.target.value)}
                   className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 uppercase font-mono"
                 />
@@ -727,7 +727,7 @@ export const AutomationsPage: React.FC = () => {
                   required
                   rows={3}
                   placeholder="Type auto-reply text..."
-                  value={ruleResponseContent}
+                  value={ruleResponseContent || ''}
                   onChange={(e) => setRuleResponseContent(e.target.value)}
                   className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700"
                 />

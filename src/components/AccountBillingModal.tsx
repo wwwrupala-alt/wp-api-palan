@@ -488,7 +488,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
                       step="any"
                       min="1"
                       required
-                      value={rechargeAmount}
+                      value={rechargeAmount || ''}
                       onChange={(e) => setRechargeAmount(e.target.value)}
                       placeholder="e.g. 1000"
                       className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-xs text-neutral-900 dark:text-white font-mono"
@@ -501,7 +501,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
                     </label>
                     <input
                       type="text"
-                      value={rechargeNote}
+                      value={rechargeNote || ''}
                       onChange={(e) => setRechargeNote(e.target.value)}
                       placeholder="e.g. Card Payment via Meta Hub"
                       className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-xs text-neutral-900 dark:text-white"

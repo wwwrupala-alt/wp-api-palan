@@ -49,12 +49,15 @@ import {
   handleCancelDripSubscriber,
   handleRescanDripCampaign,
   handleGetDripCampaignAnalytics,
+  handleReconcileDripCampaignDeliveries,
+  handleMarkDripSubscriberRead,
 } from './dripSchedulerService.ts';
 import {
   handleTenantAuthLogin,
   handleLookupIdentifier,
   handleSelfChangePassword,
   handleGetMasterOverview,
+  handleGetMasterCloudUsage,
   handleGetMasterAdmins,
   handleCreateMasterAdmin,
   handleUpdateMasterAdmin,
@@ -113,6 +116,7 @@ apiApp.post('/api/auth/lookup-identifier', handleLookupIdentifier);
 apiApp.post('/api/auth/login', handleTenantAuthLogin);
 apiApp.post('/api/auth/change-password', handleSelfChangePassword);
 apiApp.get('/api/master/overview', handleGetMasterOverview);
+apiApp.get('/api/master/cloud-usage', handleGetMasterCloudUsage);
 apiApp.get('/api/master/admins', handleGetMasterAdmins);
 apiApp.post('/api/master/admins', handleCreateMasterAdmin);
 apiApp.put('/api/master/admins/:adminId', handleUpdateMasterAdmin);
@@ -170,6 +174,8 @@ apiApp.post('/api/drip/campaigns/:id/test-step', handleTestDripStep);
 apiApp.post('/api/drip/campaigns/:id/subscribers/:subId/advance', handleAdvanceDripSubscriber);
 apiApp.post('/api/drip/campaigns/:id/subscribers/:subId/cancel', handleCancelDripSubscriber);
 apiApp.post('/api/drip/campaigns/:id/rescan', handleRescanDripCampaign);
+apiApp.post('/api/drip/campaigns/:id/reconcile', handleReconcileDripCampaignDeliveries);
+apiApp.post('/api/drip/campaigns/:id/subscribers/:subId/mark-read', handleMarkDripSubscriberRead);
 apiApp.get('/api/drip/campaigns/:id/analytics', handleGetDripCampaignAnalytics);
 
 // WhatsApp Campaign Real-Time Tracking & Analytics Endpoints (Item 12)

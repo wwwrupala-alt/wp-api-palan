@@ -762,7 +762,7 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
               <div className="flex items-center space-x-1.5 w-full sm:w-auto">
                 <Smartphone className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
                 <select
-                  value={accountFilter}
+                  value={accountFilter || 'all'}
                   onChange={(e) => setAccountFilter(e.target.value)}
                   className="w-full sm:w-auto px-2.5 py-1.5 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs text-neutral-800 dark:text-neutral-200 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 font-medium cursor-pointer"
                   title="Filter campaigns by sending WhatsApp number"

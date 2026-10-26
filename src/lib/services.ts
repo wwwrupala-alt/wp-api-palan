@@ -331,20 +331,40 @@ export async function syncTemplatesFromMeta(orgId: string, wabaId: string, accou
   const metaTemplates = data.templates || [];
   let count = 0;
 
+  // Read existing templates to preserve original creation timestamps
+  const existingMap: Record<string, any> = {};
+  try {
+    const existingSnap = await getDocs(collection(db, 'organizations', orgId, 'templates'));
+    existingSnap.forEach((d) => {
+      existingMap[d.id] = d.data();
+    });
+  } catch (e) {
+    console.warn('Notice reading existing templates before sync:', e);
+  }
+
+  const nowIso = new Date().toISOString();
+
   for (const t of metaTemplates) {
     const templateId = t.id || `tpl_${t.name}_${t.language}`;
     const tplDocRef = doc(db, 'organizations', orgId, 'templates', templateId);
-    await setDoc(tplDocRef, {
-      metaTemplateId: t.id,
-      name: t.name,
-      language: t.language,
-      category: t.category,
-      status: t.status,
-      components: sanitizeComponentsForFirestore(t.components || []),
-      whatsAppAccountId: accountId,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    const existing = existingMap[templateId] || existingMap[`tpl_${t.name}`];
+    const createdAt = existing?.createdAt || t.created_time || nowIso;
+
+    await setDoc(
+      tplDocRef,
+      {
+        metaTemplateId: t.id,
+        name: t.name,
+        language: t.language,
+        category: t.category,
+        status: t.status,
+        components: sanitizeComponentsForFirestore(t.components || []),
+        whatsAppAccountId: accountId,
+        createdAt,
+        updatedAt: nowIso,
+      },
+      { merge: true }
+    );
     count++;
   }
 
@@ -753,13 +773,48 @@ export async function rescanDripCampaignApi(orgId: string, dripId: string) {
   return parseJsonResponse(res, 'Failed to scan and refresh audience progress.');
 }
 
-export async function fetchDripCampaignAnalyticsApi(orgId: string, dripId: string) {
-  const res = await fetch(`/api/drip/campaigns/${dripId}/analytics?organizationId=${encodeURIComponent(orgId)}`, {
+export async function fetchDripCampaignAnalyticsApi(orgId: string, dripId: string, reconcile?: boolean) {
+  const url = `/api/drip/campaigns/${dripId}/analytics?organizationId=${encodeURIComponent(orgId)}${reconcile ? '&reconcile=true' : ''}`;
+  const res = await fetch(url, {
     headers: {
       'x-organization-id': orgId,
     },
   });
   return parseJsonResponse(res, 'Failed to fetch drip campaign analytics.');
+}
+
+export async function reconcileDripCampaignDeliveriesApi(orgId: string, dripId: string) {
+  const res = await fetch(`/api/drip/campaigns/${dripId}/reconcile`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-organization-id': orgId,
+    },
+    body: JSON.stringify({ organizationId: orgId }),
+  });
+  return parseJsonResponse(res, 'Failed to reconcile deliveries for drip campaign.');
+}
+
+export async function markDripSubscriberReadApi(
+  orgId: string,
+  dripId: string,
+  subId: string,
+  stepNumber: number | 'all' = 'all'
+) {
+  const res = await fetch(`/api/drip/campaigns/${dripId}/subscribers/${subId}/mark-read`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-organization-id': orgId,
+    },
+    body: JSON.stringify({ organizationId: orgId, stepNumber }),
+  });
+  return parseJsonResponse(res, 'Failed to mark subscriber as read.');
+}
+
+export async function fetchWebhookAuditLogsApi() {
+  const res = await fetch('/api/analytics/webhook-audit');
+  return parseJsonResponse(res, 'Failed to fetch webhook audit logs.');
 }
 
 export async function deleteCampaign(orgId: string, campaignId: string) {

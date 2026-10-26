@@ -846,7 +846,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
                 {availableAccounts.length > 1 ? (
                   <div className="space-y-1">
                     <select
-                      value={selectedAccountId}
+                      value={selectedAccountId || ''}
                       onChange={(e) => handleAccountChange(e.target.value)}
                       className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs font-semibold text-neutral-900 dark:text-white focus:ring-2 focus:ring-emerald-500 focus:outline-hidden cursor-pointer"
                     >
