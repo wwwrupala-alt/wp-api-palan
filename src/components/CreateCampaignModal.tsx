@@ -1886,46 +1886,58 @@ Rahul: 919974428034
               Cancel
             </button>
 
+            {/* Left Button: Launch & Trigger Now */}
+            <button
+              type="button"
+              onClick={handleLaunchCampaign}
+              disabled={submitting || !selectedTemplate || totalTargetRecipients.length === 0}
+              className={`min-h-[40px] sm:min-h-[38px] px-4 py-2 rounded-xl active:scale-[0.98] border font-bold text-xs flex items-center justify-center space-x-2 disabled:opacity-50 transition-all cursor-pointer shadow-xs ${
+                scheduleMode === 'schedule'
+                  ? 'bg-amber-600 hover:bg-amber-700 text-white shadow-amber-600/20 border-transparent'
+                  : 'border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-800 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700/80'
+              }`}
+              title={scheduleMode === 'schedule' ? 'Schedule broadcast to dispatch at chosen date/time' : 'Directly trigger and dispatch to all recipients immediately'}
+            >
+              {submitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin text-neutral-600 dark:text-neutral-300" />
+                  <span>{scheduleMode === 'schedule' ? 'Scheduling...' : 'Launching...'}</span>
+                </>
+              ) : scheduleMode === 'schedule' ? (
+                <>
+                  <Clock className="w-4 h-4 text-white" />
+                  <span>Schedule Broadcast ({totalTargetRecipients.length})</span>
+                </>
+              ) : (
+                <>
+                  <Zap className="w-4 h-4 text-amber-500 fill-amber-500" />
+                  <span>⚡ Launch &amp; Trigger Now ({totalTargetRecipients.length})</span>
+                </>
+              )}
+            </button>
+
+            {/* Right Button: Save to List (Trigger Later) with Green Highlight */}
             {scheduleMode !== 'schedule' && (
               <button
                 type="button"
                 onClick={handleSaveAsReady}
                 disabled={submitting || !selectedTemplate || totalTargetRecipients.length === 0}
-                className="min-h-[40px] sm:min-h-[38px] px-3.5 py-2 rounded-xl border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 font-bold text-xs flex items-center justify-center space-x-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                className="min-h-[40px] sm:min-h-[38px] px-5 py-2 rounded-xl active:scale-[0.98] bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center space-x-2 disabled:opacity-50 transition-all shadow-md shadow-emerald-600/20 cursor-pointer"
                 title="Save campaign to list as Ready; trigger broadcast anytime from campaign list"
               >
-                <Zap className="w-3.5 h-3.5 text-emerald-600" />
-                <span>Save to List (Trigger Later)</span>
+                {submitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-white" />
+                    <span>Saving to List...</span>
+                  </>
+                ) : (
+                  <>
+                    <Zap className="w-4 h-4 fill-white text-white" />
+                    <span>Save to List (Trigger Later)</span>
+                  </>
+                )}
               </button>
             )}
-
-            <button
-              type="button"
-              onClick={handleLaunchCampaign}
-              disabled={submitting || !selectedTemplate || totalTargetRecipients.length === 0}
-              className={`min-h-[40px] sm:min-h-[38px] px-5 py-2 rounded-xl active:scale-[0.98] text-white font-bold text-xs flex items-center justify-center space-x-2 disabled:opacity-50 transition-all shadow-md cursor-pointer ${
-                scheduleMode === 'schedule'
-                  ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-600/20'
-                  : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'
-              }`}
-            >
-              {submitting ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>{scheduleMode === 'schedule' ? 'Scheduling Broadcast...' : 'Launching Broadcast...'}</span>
-                </>
-              ) : scheduleMode === 'schedule' ? (
-                <>
-                  <Clock className="w-4 h-4" />
-                  <span>Schedule Broadcast ({totalTargetRecipients.length})</span>
-                </>
-              ) : (
-                <>
-                  <Zap className="w-4 h-4 fill-current text-amber-300" />
-                  <span>⚡ Launch &amp; Trigger Now ({totalTargetRecipients.length})</span>
-                </>
-              )}
-            </button>
           </div>
         </div>
       </div>

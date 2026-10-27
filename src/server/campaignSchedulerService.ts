@@ -18,7 +18,10 @@ let isProcessingScheduled = false;
  * Scan for any scheduled campaigns whose scheduledAt time has passed,
  * and dispatch them automatically via Meta WhatsApp Cloud API.
  */
+let quotaExceededBackoffUntil = 0;
+
 export async function checkAndExecuteScheduledCampaigns(): Promise<void> {
+  if (Date.now() < quotaExceededBackoffUntil) return;
   if (isProcessingScheduled) return;
   isProcessingScheduled = true;
 
@@ -47,8 +50,6 @@ export async function checkAndExecuteScheduledCampaigns(): Promise<void> {
         continue;
       }
 
-      // Check organization path from document reference
-      // docSnap.ref.path is typically: organizations/{orgId}/campaigns/{campaignId}
       const pathSegments = docSnap.ref.path.split('/');
       const orgId = pathSegments[1] || camp.organizationId || camp.scheduleData?.organizationId;
       const campaignId = docSnap.id;
@@ -131,7 +132,13 @@ export async function checkAndExecuteScheduledCampaigns(): Promise<void> {
       }
     }
   } catch (err: any) {
-    console.error('[CampaignScheduler] Error in checkAndExecuteScheduledCampaigns:', err);
+    if (err?.message?.includes('Quota') || err?.message?.includes('quota')) {
+      // Pause background scheduler queries for 15 minutes to allow daily quota cooldown
+      console.warn('[CampaignScheduler] Firebase Quota reached. Backing off for 15 minutes.');
+      quotaExceededBackoffUntil = Date.now() + 15 * 60 * 1000;
+    } else {
+      console.error('[CampaignScheduler] Error in checkAndExecuteScheduledCampaigns:', err);
+    }
   } finally {
     isProcessingScheduled = false;
   }
@@ -143,16 +150,13 @@ export async function checkAndExecuteScheduledCampaigns(): Promise<void> {
 export function startCampaignScheduler(): void {
   if (schedulerInterval) return;
 
-  console.log('[CampaignScheduler] Starting background campaign scheduler (checking every 15s)...');
-  // Run once immediately
-  checkAndExecuteScheduledCampaigns().catch(() => {});
-
-  // Polling interval: every 15 seconds
+  console.log('[CampaignScheduler] Starting background campaign scheduler (checking every 60s)...');
+  // Polling interval: every 60 seconds (optimized for Firestore quota preservation)
   schedulerInterval = setInterval(() => {
     checkAndExecuteScheduledCampaigns().catch((err) => {
       console.warn('[CampaignScheduler] Interval tick error:', err);
     });
-  }, 15000);
+  }, 60000);
 }
 
 /**
