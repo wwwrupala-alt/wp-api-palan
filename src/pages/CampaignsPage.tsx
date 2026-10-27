@@ -1453,11 +1453,26 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
                             <span className="text-[10px] text-neutral-500">{item.label}</span>
                           </div>
 
-                          <div className="text-right max-w-[160px] truncate">
-                            {item.type === 'media' && item.value.startsWith('/') ? (
-                              <span className="font-mono text-[11px] text-emerald-700 dark:text-emerald-300 truncate block">
-                                {item.value}
-                              </span>
+                          <div className="text-right max-w-[190px]">
+                            {item.type === 'media' ? (
+                              <div className="flex items-center justify-end space-x-1.5">
+                                {(item.value.startsWith('http') || item.value.startsWith('/uploads/') || item.value.startsWith('/assets/')) && (
+                                  <img
+                                    src={item.value}
+                                    alt="Media preview"
+                                    className="w-7 h-7 rounded-md object-cover border border-emerald-300 dark:border-emerald-700 shadow-2xs shrink-0"
+                                    onError={(e) => {
+                                      (e.target as HTMLElement).style.display = 'none';
+                                    }}
+                                  />
+                                )}
+                                <span
+                                  className="font-mono text-[10px] text-emerald-700 dark:text-emerald-300 truncate block max-w-[120px]"
+                                  title={item.value}
+                                >
+                                  {item.value.split('/').pop()?.split('?')[0] || item.value}
+                                </span>
+                              </div>
                             ) : (
                               <span className="font-semibold text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-800/50">
                                 {item.value}
