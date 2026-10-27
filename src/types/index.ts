@@ -311,7 +311,7 @@ export interface Campaign {
   recipients?: CampaignRecipient[];
   recipientCount: number;
   groupId?: string;
-  status: 'draft' | 'scheduled' | 'sending' | 'completed' | 'paused' | 'cancelled' | 'failed';
+  status: 'draft' | 'scheduled' | 'sending' | 'completed' | 'paused' | 'cancelled' | 'failed' | 'ready';
   scheduledAt?: string;
   startedAt?: string;
   createdAt: string;

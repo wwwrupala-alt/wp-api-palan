@@ -28,6 +28,7 @@ import {
   Workflow,
   ChevronLeft,
   ChevronRight,
+  RotateCcw,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -240,6 +241,32 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
       toast.showError('Cancel Failed', err?.message || 'Could not cancel scheduled campaign.');
     } finally {
       setIsCancellingSchedule(false);
+    }
+  };
+
+  // Dedicated Trigger Broadcast Action (Dispatches in background without locking UI)
+  const [triggeringCampId, setTriggeringCampId] = useState<string | null>(null);
+
+  const handleDirectTriggerCampaign = async (c: Campaign) => {
+    if (!organization?.id) return;
+    setTriggeringCampId(c.id);
+    try {
+      // Optimistically update status to 'sending'
+      setCampaigns((prev) =>
+        prev.map((item) =>
+          item.id === c.id ? { ...item, status: 'sending', startedAt: new Date().toISOString() } : item
+        )
+      );
+
+      const res = await sendScheduledCampaignNowApi(organization.id, c.id);
+      toast.showSuccess(
+        '⚡ Broadcast Triggered!',
+        res?.message || `Dispatched "${c.name}" to ${c.recipientCount || 0} recipients in the background.`
+      );
+    } catch (err: any) {
+      toast.showError('Trigger Failed', err?.message || 'Could not trigger campaign broadcast.');
+    } finally {
+      setTriggeringCampId(null);
     }
   };
 
@@ -940,6 +967,11 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
                             <Clock className="w-3 h-3 text-amber-600 animate-spin" style={{ animationDuration: '6s' }} />
                             <span>SCHEDULED</span>
                           </span>
+                        ) : c.status === 'ready' ? (
+                          <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-300 dark:border-amber-700 shadow-2xs">
+                            <Zap className="w-3 h-3 text-amber-600 fill-current" />
+                            <span>READY TO TRIGGER</span>
+                          </span>
                         ) : c.status === 'cancelled' ? (
                           <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400">
                             <Ban className="w-3 h-3 text-neutral-400" />
@@ -965,7 +997,12 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
                         {c.recipientCount} recipients
                       </td>
                       <td className="py-3.5 px-4">
-                        {c.status === 'scheduled' ? (
+                        {c.status === 'ready' ? (
+                          <div className="flex items-center space-x-1.5 text-xs text-amber-700 dark:text-amber-300 font-semibold">
+                            <Zap className="w-3.5 h-3.5 text-amber-500 fill-current" />
+                            <span>Ready • Click ⚡ Trigger</span>
+                          </div>
+                        ) : c.status === 'scheduled' ? (
                           <div className="space-y-0.5">
                             <div className="flex items-center space-x-1 text-xs text-amber-900 dark:text-amber-200 font-semibold">
                               <Calendar className="w-3 h-3 text-amber-600 shrink-0" />
@@ -1007,22 +1044,60 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
                       </td>
                       <td className="py-3.5 px-4 text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end space-x-1.5">
-                          {/* If scheduled: Provide Send Now, Reschedule, Cancel Schedule */}
+                          {/* ⚡ Dedicated TRIGGER BROADCAST Button for Ready, Scheduled, Draft, or Queued campaigns */}
+                          {(c.status === 'ready' || c.status === 'scheduled' || c.status === 'draft' || (c as any).status === 'queued') && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDirectTriggerCampaign(c);
+                              }}
+                              disabled={triggeringCampId === c.id}
+                              title="Trigger Broadcast: Dispatch WhatsApp campaign to audience immediately in the background"
+                              className="inline-flex items-center space-x-1 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs hover:shadow transition-all cursor-pointer disabled:opacity-50"
+                            >
+                              {triggeringCampId === c.id ? (
+                                <>
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                  <span>Triggering...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Zap className="w-3.5 h-3.5 fill-current text-amber-300" />
+                                  <span>⚡ Trigger</span>
+                                </>
+                              )}
+                            </button>
+                          )}
+
+                          {/* When Actively Broadcasting in Background */}
+                          {c.status === 'sending' && (
+                            <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-xl bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 text-[11px] font-bold animate-pulse">
+                              <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                              <span>Sending...</span>
+                            </span>
+                          )}
+
+                          {/* Re-Trigger Option for Completed or Failed campaigns */}
+                          {(c.status === 'completed' || c.status === 'failed') && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDirectTriggerCampaign(c);
+                              }}
+                              disabled={triggeringCampId === c.id}
+                              title="Re-Trigger Broadcast to audience"
+                              className="inline-flex items-center space-x-1 px-2 py-1 rounded-lg border border-neutral-200 dark:border-neutral-700 hover:border-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-neutral-600 dark:text-neutral-300 hover:text-emerald-700 font-semibold text-[11px] transition-colors cursor-pointer"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>Re-Trigger</span>
+                            </button>
+                          )}
+
+                          {/* Scheduled-specific Reschedule & Cancel buttons */}
                           {c.status === 'scheduled' && (
                             <>
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setSendNowTargetCampaign(c);
-                                }}
-                                title="Send Now: Immediately dispatch via Meta API"
-                                className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-bold text-[11px] shadow-2xs transition-colors cursor-pointer"
-                              >
-                                <Zap className="w-3.5 h-3.5" />
-                                <span>Send Now</span>
-                              </button>
-
                               <button
                                 type="button"
                                 onClick={(e) => {

@@ -274,18 +274,15 @@ export async function handleSendScheduledCampaignNow(req: Request, res: Response
     }
 
     const camp = campSnap.data();
-    if (camp.status !== 'scheduled' && camp.status !== 'draft') {
-      res.status(400).json({ error: `Campaign has status "${camp.status}". Only scheduled or draft campaigns can be sent now.` });
+    const allowedStatuses = ['ready', 'scheduled', 'draft', 'queued', 'completed', 'failed', 'cancelled'];
+    if (!allowedStatuses.includes(camp.status)) {
+      if (camp.status === 'sending') {
+        res.status(400).json({ error: 'Campaign broadcast is already actively sending in the background.' });
+        return;
+      }
+      res.status(400).json({ error: `Campaign has status "${camp.status}". Triggering is allowed for ready, scheduled, draft, or re-run campaigns.` });
       return;
     }
-
-    // Mark as sending
-    const nowIso = new Date().toISOString();
-    await updateDoc(campRef, {
-      status: 'sending',
-      startedAt: nowIso,
-      updatedAt: nowIso,
-    });
 
     const scheduleData = camp.scheduleData || {};
     const phoneNumberId = scheduleData.phoneNumberId || camp.phoneNumberId || camp.whatsAppAccountId;
@@ -293,15 +290,32 @@ export async function handleSendScheduledCampaignNow(req: Request, res: Response
     const recipients = scheduleData.recipients || camp.recipients || [];
     const variableValues = scheduleData.variableValues || camp.variableValues || {};
     const customToken = scheduleData.customToken || camp.customToken;
-    const campaignName = camp.name || scheduleData.campaignName;
+    const campaignName = camp.name || scheduleData.campaignName || 'Broadcast Campaign';
 
     if (!phoneNumberId || !template || !Array.isArray(recipients) || recipients.length === 0) {
-      await updateDoc(campRef, { status: 'failed', errorReason: 'Missing dispatch data' });
+      await updateDoc(campRef, { status: 'failed', errorReason: 'Missing dispatch data (phone number, template, or recipients)' });
       res.status(400).json({ error: 'Missing phone number ID, template, or target recipients in campaign data.' });
       return;
     }
 
-    const result = await executeCampaignDispatchCore({
+    // Mark as sending immediately in Firestore
+    const nowIso = new Date().toISOString();
+    await updateDoc(campRef, {
+      status: 'sending',
+      startedAt: nowIso,
+      updatedAt: nowIso,
+    });
+
+    // Send immediate response so the user interface never freezes or blocks!
+    res.json({
+      success: true,
+      message: `Broadcast for "${campaignName}" triggered successfully! Sending to ${recipients.length} recipients in the background.`,
+      status: 'sending',
+      recipientCount: recipients.length,
+    });
+
+    // Run dispatch asynchronously in background
+    executeCampaignDispatchCore({
       phoneNumberId,
       template,
       recipients,
@@ -310,12 +324,15 @@ export async function handleSendScheduledCampaignNow(req: Request, res: Response
       campaignId,
       campaignName,
       organizationId: orgId,
-    });
-
-    res.json({
-      success: true,
-      message: `Campaign "${campaignName}" dispatched successfully.`,
-      ...result,
+    }).catch(async (dispatchErr: any) => {
+      console.error(`[handleSendScheduledCampaignNow] Background broadcast error for ${campaignId}:`, dispatchErr);
+      try {
+        await updateDoc(campRef, {
+          status: 'failed',
+          errorReason: dispatchErr?.message || 'Background broadcast error',
+          updatedAt: new Date().toISOString(),
+        });
+      } catch {}
     });
   } catch (err: any) {
     console.error('[handleSendScheduledCampaignNow] Error:', err);

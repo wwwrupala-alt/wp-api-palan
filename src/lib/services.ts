@@ -508,7 +508,7 @@ export async function createCampaign(
     recipientCount: number;
     scheduledAt?: string;
     scheduleData?: any;
-    status?: 'draft' | 'scheduled' | 'sending' | 'completed' | 'paused' | 'cancelled' | 'failed';
+    status?: 'draft' | 'scheduled' | 'sending' | 'completed' | 'paused' | 'cancelled' | 'failed' | 'ready';
     recipients?: any[];
   }
 ) {
