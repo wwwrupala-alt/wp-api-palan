@@ -143,13 +143,40 @@ apiApp.get('/uploads/:filename', (req, res, next) => {
     }
   }
 
-  // 6. Fallback to standard static serving
-  next();
+  // 6. If not found in uploads directories, return 404 instead of falling through to Vite index.html
+  return res.status(404).type('text/plain').send('File not found in uploads');
 });
 apiApp.use('/uploads', express.static(path.join(process.cwd(), 'public', 'uploads')));
 
 // Media Upload from PC / Device
 apiApp.post('/api/media/upload', handleUploadMedia);
+
+// Media Proxy: Safely fetch Meta scontent, lookaside or external image buffers for live preview
+apiApp.get('/api/meta/media-proxy', async (req, res) => {
+  const targetUrl = req.query.url as string;
+  if (!targetUrl || (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://'))) {
+    return res.status(400).json({ error: 'Valid url query param required' });
+  }
+  try {
+    const config = getMetaConfig();
+    const token = (req.query.token as string) || (req.headers['x-meta-token'] as string) || config.systemToken;
+    const fetchHeaders: Record<string, string> = {};
+    if (token && (targetUrl.includes('facebook.com') || targetUrl.includes('fbsbx.com') || targetUrl.includes('whatsapp.net'))) {
+      fetchHeaders['Authorization'] = `Bearer ${token}`;
+    }
+    const response = await fetch(targetUrl, { headers: fetchHeaders });
+    if (!response.ok) {
+      return res.status(response.status).send(`Failed to fetch remote media: ${response.statusText}`);
+    }
+    const contentType = response.headers.get('content-type') || 'application/octet-stream';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    const arrayBuffer = await response.arrayBuffer();
+    return res.send(Buffer.from(arrayBuffer));
+  } catch (err: any) {
+    return res.status(500).send(err?.message || 'Media proxy error');
+  }
+});
 
 // Multi-Tenant Authentication & Master/Admin Routes
 apiApp.get('/api/server-time', (req, res) => {

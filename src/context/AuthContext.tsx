@@ -533,7 +533,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     if (!response.ok || !data || !data.success) {
-      const serverMsg = data?.error || (typeof data === 'string' ? data : null);
+      const serverMsg = data?.error || (typeof data === 'string' && data.length < 200 ? data : null);
       if (serverMsg) {
         throw new Error(serverMsg);
       }
@@ -544,7 +544,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             : 'Your subscription plan has expired (0 days remaining) or has been suspended. Please contact platform administration.'
         );
       }
-      throw new Error(`Authentication failed (${response.status}). Please verify credentials.`);
+      if (response.status === 401) {
+        throw new Error('Incorrect mobile number, email, or password. Please verify credentials.');
+      }
+      throw new Error(`Authentication check (${response.status}). Please verify mobile number and password.`);
     }
 
     const user: UserProfile = data.user;
