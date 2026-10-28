@@ -295,11 +295,6 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
         snapshot.forEach((docSnap) => {
           list.push({ id: docSnap.id, ...(docSnap.data() as Omit<WhatsAppAccount, 'id'>) });
         });
-        if (list.length > 0) {
-          try {
-            localStorage.setItem(`cached_wa_accounts_${effectiveOrgId}`, JSON.stringify(list));
-          } catch (e) {}
-        }
         setAccounts(list);
 
         // Keep active account selected or pick first connected
@@ -330,40 +325,6 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
       },
       (error) => {
         handleFirestoreError(error, OperationType.GET, accountsPath);
-
-        // Resilient fallback from localStorage or default business account
-        let fallbackAccounts: WhatsAppAccount[] = [];
-        try {
-          const cached = localStorage.getItem(`cached_wa_accounts_${effectiveOrgId}`);
-          if (cached) {
-            const parsed = JSON.parse(cached);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              fallbackAccounts = parsed;
-            }
-          }
-        } catch (e) {}
-
-        if (fallbackAccounts.length === 0) {
-          fallbackAccounts = [
-            {
-              id: `wa_acc_${effectiveOrgId}`,
-              displayPhoneNumber: '+91 99744 28034',
-              verifiedName: 'Laxtone Cera',
-              connectionStatus: 'connected',
-              qualityRating: 'GREEN',
-              messagingLimitTier: 'TIER_10K',
-              businessVerificationStatus: 'verified',
-              webhookStatus: 'active',
-              phoneNumberId: '108422478832123',
-              wabaId: '109384729182345',
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            },
-          ];
-        }
-
-        setAccounts(fallbackAccounts);
-        setActiveAccount((prev) => prev || fallbackAccounts.find((a) => a.connectionStatus === 'connected') || fallbackAccounts[0]);
         setLoading(false);
       }
     );

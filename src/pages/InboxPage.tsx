@@ -63,15 +63,10 @@ export const InboxPage: React.FC = () => {
 
   // Simulator / Test Customer Message Modal
   const [isSimulateModalOpen, setIsSimulateModalOpen] = useState(false);
-  const [simPhone, setSimPhone] = useState('');
+  const [simPhone, setSimPhone] = useState('+919974428034');
   const [simName, setSimName] = useState('Customer');
   const [simMessageText, setSimMessageText] = useState('CATALOGUE');
   const [simulating, setSimulating] = useState(false);
-
-  const handleOpenSimulateModal = (phone?: string) => {
-    setSimPhone(phone || '');
-    setIsSimulateModalOpen(true);
-  };
 
   // Inline Contact Name Editing State
   const [isEditingContactName, setIsEditingContactName] = useState(false);
@@ -213,19 +208,11 @@ export const InboxPage: React.FC = () => {
     const textToSend = customText || simMessageText;
     if (!textToSend.trim()) return;
 
-    const phoneToUse = simPhone.trim();
-    if (!phoneToUse) {
-      setSimMessageText(textToSend.trim());
-      setIsSimulateModalOpen(true);
-      toast.showInfo('Customer Phone Required', 'Please enter a test customer phone number.');
-      return;
-    }
-
     setSimulating(true);
     try {
       const result = await simulateIncomingCustomerMessageAndRunBot(organization.id, {
-        senderPhone: phoneToUse,
-        senderName: simName.trim() || 'Customer',
+        senderPhone: simPhone,
+        senderName: simName,
         messageText: textToSend.trim(),
         phoneNumberId: activeAccount?.phoneNumberId,
         accountId: activeAccount?.id,
@@ -377,7 +364,7 @@ export const InboxPage: React.FC = () => {
 
           {/* Quick Simulation / Test Chatbot Button */}
           <button
-            onClick={() => handleOpenSimulateModal()}
+            onClick={() => setIsSimulateModalOpen(true)}
             className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-semibold text-xs flex items-center justify-center space-x-1.5 shadow-xs transition-all cursor-pointer"
           >
             <Sparkles className="w-4 h-4 text-emerald-200" />
@@ -745,7 +732,7 @@ export const InboxPage: React.FC = () => {
               Pick a customer chat from the left or click below to simulate an incoming customer message to test your chatbot.
             </p>
             <button
-              onClick={() => handleOpenSimulateModal()}
+              onClick={() => setIsSimulateModalOpen(true)}
               className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold cursor-pointer shadow-xs"
             >
               ⚡ Test Chatbot with Test Customer
@@ -787,8 +774,7 @@ export const InboxPage: React.FC = () => {
                   type="text"
                   value={simPhone || ''}
                   onChange={(e) => setSimPhone(e.target.value)}
-                  placeholder="e.g. +91 98765 43210"
-                  className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 font-mono text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                  className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 font-mono"
                 />
               </div>
 
@@ -800,8 +786,7 @@ export const InboxPage: React.FC = () => {
                   type="text"
                   value={simName || ''}
                   onChange={(e) => setSimName(e.target.value)}
-                  placeholder="e.g. Customer Name"
-                  className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                  className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800"
                 />
               </div>
 
@@ -837,7 +822,7 @@ export const InboxPage: React.FC = () => {
                   value={simMessageText || ''}
                   onChange={(e) => setSimMessageText(e.target.value)}
                   placeholder="e.g. CATALOGUE"
-                  className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 font-mono text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                  className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 font-mono text-xs"
                 />
               </div>
             </div>
@@ -853,9 +838,9 @@ export const InboxPage: React.FC = () => {
 
               <button
                 type="button"
-                disabled={simulating || !simPhone.trim() || !simMessageText.trim()}
+                disabled={simulating || !simMessageText.trim()}
                 onClick={() => handleTriggerSimulatedMessage()}
-                className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold flex items-center space-x-1.5 transition-colors cursor-pointer shadow-xs"
+                className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold flex items-center space-x-1.5 transition-colors cursor-pointer shadow-xs"
               >
                 <Send className="w-3.5 h-3.5" />
                 <span>{simulating ? 'Sending...' : 'Send as Customer & Run Bot'}</span>

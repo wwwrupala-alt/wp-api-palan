@@ -86,7 +86,6 @@ export interface UserProfile {
   adminLogoUrl?: string;
   adminContactPhone?: string;
   adminBrandName?: string;
-  businessName?: string;
   loginPassword?: string;
   displayPassword?: string;
   managedByAdminId?: string;
@@ -312,7 +311,7 @@ export interface Campaign {
   recipients?: CampaignRecipient[];
   recipientCount: number;
   groupId?: string;
-  status: 'draft' | 'scheduled' | 'sending' | 'completed' | 'paused' | 'cancelled' | 'failed' | 'ready';
+  status: 'draft' | 'scheduled' | 'sending' | 'completed' | 'paused' | 'cancelled' | 'failed';
   scheduledAt?: string;
   startedAt?: string;
   createdAt: string;

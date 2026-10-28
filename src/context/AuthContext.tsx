@@ -174,11 +174,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               setOrganization(fallbackOrg);
             }
           },
-          (err: any) => {
-            if (err?.code === 'resource-exhausted' || err?.message?.includes('Quota limit exceeded')) {
-              return;
-            }
-            console.warn('[AuthContext] Org snapshot listener notice:', err?.message || err);
+          (err) => {
+            console.warn('[AuthContext] Org snapshot listener error:', err);
           }
         );
 
@@ -533,7 +530,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     if (!response.ok || !data || !data.success) {
-      const serverMsg = data?.error || (typeof data === 'string' && data.length < 200 ? data : null);
+      const serverMsg = data?.error || (typeof data === 'string' ? data : null);
       if (serverMsg) {
         throw new Error(serverMsg);
       }
@@ -544,10 +541,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             : 'Your subscription plan has expired (0 days remaining) or has been suspended. Please contact platform administration.'
         );
       }
-      if (response.status === 401) {
-        throw new Error('Incorrect mobile number, email, or password. Please verify credentials.');
-      }
-      throw new Error(`Authentication check (${response.status}). Please verify mobile number and password.`);
+      throw new Error(`Authentication failed (${response.status}). Please verify credentials.`);
     }
 
     const user: UserProfile = data.user;

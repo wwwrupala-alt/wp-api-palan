@@ -58,15 +58,6 @@ export const MiniTemplatePhonePreview: React.FC<MiniTemplatePhonePreviewProps> =
 
   // Format header media preview URL
   const format = (headerComp?.format || 'TEXT').toUpperCase();
-
-  const [imageLoadError, setImageLoadError] = React.useState(false);
-  const [useTemplateFallback, setUseTemplateFallback] = React.useState(false);
-
-  React.useEffect(() => {
-    setImageLoadError(false);
-    setUseTemplateFallback(false);
-  }, [customMediaUrl, template?.id, template?.name]);
-
   const rawHeaderHandle =
     customMediaUrl ||
     customVariables?.header_media_url ||
@@ -76,25 +67,14 @@ export const MiniTemplatePhonePreview: React.FC<MiniTemplatePhonePreviewProps> =
     (headerComp as any)?.exampleUrl ||
     '';
 
-  const templateSampleUrl =
-    headerComp?.example?.header_handle?.[0] ||
-    (headerComp as any)?.mediaSampleUrl ||
-    (headerComp as any)?.exampleUrl ||
-    '';
-
-  const activeImageUrl = useTemplateFallback
-    ? templateSampleUrl
-    : (rawHeaderHandle || templateSampleUrl);
-
-  const isValidImageUrl =
-    typeof activeImageUrl === 'string' &&
-    activeImageUrl.trim() !== '' &&
-    !activeImageUrl.startsWith('4:') &&
-    (activeImageUrl.startsWith('http') ||
-      activeImageUrl.startsWith('/uploads/') ||
-      activeImageUrl.startsWith('/assets/') ||
-      activeImageUrl.startsWith('blob:') ||
-      activeImageUrl.startsWith('data:'));
+  const isRemoteOrLocalUrl =
+    typeof rawHeaderHandle === 'string' &&
+    rawHeaderHandle.trim() !== '' &&
+    !rawHeaderHandle.startsWith('4:') &&
+    (rawHeaderHandle.startsWith('http') ||
+      rawHeaderHandle.startsWith('/uploads/') ||
+      rawHeaderHandle.startsWith('blob:') ||
+      rawHeaderHandle.startsWith('data:'));
 
   // Substitute {{1}}, {{2}} in header text
   const getSubstitutedHeaderText = () => {
@@ -331,37 +311,29 @@ export const MiniTemplatePhonePreview: React.FC<MiniTemplatePhonePreviewProps> =
                       isLarge ? 'h-44 sm:h-48' : 'aspect-16/10'
                     }`}
                   >
-                    {isValidImageUrl && !imageLoadError ? (
+                    {isRemoteOrLocalUrl ? (
                       <img
-                        src={activeImageUrl}
+                        src={rawHeaderHandle}
                         alt="Header attachment"
                         className="w-full h-full object-cover"
-                        onError={() => {
-                          if (!useTemplateFallback && templateSampleUrl && templateSampleUrl !== activeImageUrl) {
-                            setUseTemplateFallback(true);
-                          } else {
-                            setImageLoadError(true);
-                          }
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).src =
+                            'https://images.unsplash.com/photo-1579203438237-49dcf6133f6a?w=400&auto=format&fit=crop&q=80';
                         }}
                       />
                     ) : (
-                      <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-emerald-50 via-teal-50 to-neutral-100 dark:from-neutral-800 dark:to-neutral-900 p-3 text-center">
+                      <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-emerald-100 to-teal-50 dark:from-neutral-800 dark:to-neutral-900 p-2 text-center">
                         <ImageIcon
-                          className={`text-emerald-600 dark:text-emerald-400 mb-1.5 ${
+                          className={`text-emerald-600 dark:text-emerald-400 mb-1 ${
                             isLarge ? 'w-8 h-8' : isCompact ? 'w-3.5 h-3.5' : 'w-5 h-5'
                           }`}
                         />
                         <span
-                          className={`font-bold text-neutral-800 dark:text-neutral-200 truncate max-w-[90%] ${
-                            isLarge ? 'text-xs' : isCompact ? 'text-[7.5px]' : 'text-[9px]'
+                          className={`font-semibold text-emerald-800 dark:text-emerald-300 ${
+                            isLarge ? 'text-xs' : isCompact ? 'text-[7px]' : 'text-[8.5px]'
                           }`}
                         >
-                          {rawHeaderHandle
-                            ? rawHeaderHandle.split('/').pop()?.split('?')[0] || 'Image Attachment'
-                            : 'Template Image Attachment'}
-                        </span>
-                        <span className="text-[9px] text-neutral-500 dark:text-neutral-400 mt-0.5">
-                          WhatsApp Header Photo
+                          Template Image Attachment
                         </span>
                       </div>
                     )}

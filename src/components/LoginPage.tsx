@@ -110,7 +110,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onOpenLegal }) => {
       } finally {
         setIsLookingUp(false);
       }
-    }, 500);
+    }, 250);
 
     return () => clearTimeout(timer);
   }, [identifier]);
@@ -270,44 +270,9 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onOpenLegal }) => {
           )}
 
           {error && (
-            <div className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-xs text-rose-700 dark:text-rose-300 space-y-2 animate-fadeIn">
-              <div className="flex items-start space-x-2">
-                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-600 dark:text-rose-400" />
-                <div className="flex-1">
-                  {error.toLowerCase().includes('quota') || error.includes('Free daily read') || error.includes('50,000') ? (
-                    <div className="space-y-1.5 text-[11px] leading-relaxed">
-                      <p className="font-bold text-rose-800 dark:text-rose-200">
-                        ⚠️ Firebase Free Tier Quota Limit Reached (50,000 Reads/Day)
-                      </p>
-                      <p className="text-neutral-600 dark:text-neutral-300">
-                        Google Firebase Free Tier ki daily 50,000 database reads ki limit poori ho gayi hai. Quota har roz automatically reset ho jata hai (approx 12:30 PM IST).
-                      </p>
-                      <div className="p-2 rounded-xl bg-white/70 dark:bg-neutral-900/70 border border-rose-200 dark:border-rose-800/60 mt-1">
-                        <p className="font-semibold text-emerald-700 dark:text-emerald-400">
-                          🛡️ Emergency Access: Master Admin Login Active
-                        </p>
-                        <p className="text-[10px] text-neutral-500 mt-0.5">
-                          Master Admin account bina database read ke direct offline emergency mode se sign in ho sakta hai.
-                        </p>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setIdentifier('master@cloudwaba.com');
-                            setPassword('Master@12345');
-                            setLoginRole('master_admin');
-                            setError(null);
-                          }}
-                          className="mt-1.5 px-3 py-1 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-bold text-[10px] cursor-pointer shadow-2xs"
-                        >
-                          Fill Master Admin (master@cloudwaba.com)
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="font-semibold">{error}</p>
-                  )}
-                </div>
-              </div>
+            <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-xs text-rose-700 dark:text-rose-300 flex items-start space-x-2 animate-fadeIn">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <p className="flex-1 font-semibold">{error}</p>
             </div>
           )}
 

@@ -57,7 +57,6 @@ import {
   handleLookupIdentifier,
   handleSelfChangePassword,
   handleGetMasterOverview,
-  handleGetMasterCloudUsage,
   handleGetMasterAdmins,
   handleCreateMasterAdmin,
   handleUpdateMasterAdmin,
@@ -75,13 +74,7 @@ import {
   handleResetAdminUserPassword,
   handleDeleteAdminUser,
   handleAdminImpersonate,
-  ensureDefaultAccounts,
 } from './multiTenantService.ts';
-
-// Initialize default accounts and persistent disk backups
-ensureDefaultAccounts().catch((err) => {
-  console.warn('[MultiTenant] Startup seed notice:', err?.message);
-});
 
 export const apiApp = express();
 
@@ -89,94 +82,29 @@ export const apiApp = express();
 apiApp.use(express.json({ limit: '60mb' }));
 apiApp.use(express.urlencoded({ extended: true, limit: '60mb' }));
 
-// Serve uploaded media files publicly from /uploads (supports memory cache, tmpdir, static disk, and fuzzy base prefix matching)
+// Serve uploaded media files publicly from /uploads (supports memory cache, tmpdir, and static disk)
 apiApp.get('/uploads/:filename', (req, res, next) => {
   const filename = req.params.filename;
-
-  // 1. Check in-memory media buffer cache (exact filename)
+  // 1. Check in-memory media buffer cache
   const memCached = inMemoryMediaBufferCache.get(filename);
   if (memCached) {
     res.setHeader('Content-Type', memCached.mimeType || 'application/octet-stream');
     return res.send(memCached.buffer);
   }
 
-  // 2. Check exact path in public/uploads
-  const publicDir = path.join(process.cwd(), 'public', 'uploads');
-  const exactPublicPath = path.join(publicDir, filename);
-  if (fs.existsSync(exactPublicPath)) {
-    return res.sendFile(exactPublicPath);
-  }
-
-  // 3. Check exact path in dist/uploads (if production build exists)
-  const distDir = path.join(process.cwd(), 'dist', 'uploads');
-  const exactDistPath = path.join(distDir, filename);
-  if (fs.existsSync(exactDistPath)) {
-    return res.sendFile(exactDistPath);
-  }
-
-  // 4. Check os.tmpdir()/cloudwaba_uploads
-  const tmpDir = path.join(os.tmpdir(), 'cloudwaba_uploads');
-  const tmpPath = path.join(tmpDir, filename);
+  // 2. Check os.tmpdir()/cloudwaba_uploads
+  const tmpPath = path.join(os.tmpdir(), 'cloudwaba_uploads', filename);
   if (fs.existsSync(tmpPath)) {
     return res.sendFile(tmpPath);
   }
 
-  // 5. Smart Fuzzy Fallback: if exact timestamped filename was requested (e.g. 24X4_1793012982079.jpg),
-  // search directories for any file sharing the same base prefix (e.g. 24X4_*.jpg)
-  const basePrefix = filename.split('_')[0];
-  const ext = path.extname(filename).toLowerCase();
-  const searchDirs = [publicDir, distDir, tmpDir];
-
-  for (const dir of searchDirs) {
-    if (fs.existsSync(dir)) {
-      try {
-        const files = fs.readdirSync(dir);
-        if (basePrefix && basePrefix.length >= 2) {
-          const match = files.find(
-            (f) => f.toLowerCase().startsWith(basePrefix.toLowerCase()) && path.extname(f).toLowerCase() === ext
-          );
-          if (match) {
-            return res.sendFile(path.join(dir, match));
-          }
-        }
-      } catch {}
-    }
-  }
-
-  // 6. If not found in uploads directories, return 404 instead of falling through to Vite index.html
-  return res.status(404).type('text/plain').send('File not found in uploads');
+  // 3. Fallback to standard static serving
+  next();
 });
 apiApp.use('/uploads', express.static(path.join(process.cwd(), 'public', 'uploads')));
 
 // Media Upload from PC / Device
 apiApp.post('/api/media/upload', handleUploadMedia);
-
-// Media Proxy: Safely fetch Meta scontent, lookaside or external image buffers for live preview
-apiApp.get('/api/meta/media-proxy', async (req, res) => {
-  const targetUrl = req.query.url as string;
-  if (!targetUrl || (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://'))) {
-    return res.status(400).json({ error: 'Valid url query param required' });
-  }
-  try {
-    const config = getMetaConfig();
-    const token = (req.query.token as string) || (req.headers['x-meta-token'] as string) || config.systemToken;
-    const fetchHeaders: Record<string, string> = {};
-    if (token && (targetUrl.includes('facebook.com') || targetUrl.includes('fbsbx.com') || targetUrl.includes('whatsapp.net'))) {
-      fetchHeaders['Authorization'] = `Bearer ${token}`;
-    }
-    const response = await fetch(targetUrl, { headers: fetchHeaders });
-    if (!response.ok) {
-      return res.status(response.status).send(`Failed to fetch remote media: ${response.statusText}`);
-    }
-    const contentType = response.headers.get('content-type') || 'application/octet-stream';
-    res.setHeader('Content-Type', contentType);
-    res.setHeader('Cache-Control', 'public, max-age=86400');
-    const arrayBuffer = await response.arrayBuffer();
-    return res.send(Buffer.from(arrayBuffer));
-  } catch (err: any) {
-    return res.status(500).send(err?.message || 'Media proxy error');
-  }
-});
 
 // Multi-Tenant Authentication & Master/Admin Routes
 apiApp.get('/api/server-time', (req, res) => {
@@ -187,7 +115,6 @@ apiApp.post('/api/auth/lookup-identifier', handleLookupIdentifier);
 apiApp.post('/api/auth/login', handleTenantAuthLogin);
 apiApp.post('/api/auth/change-password', handleSelfChangePassword);
 apiApp.get('/api/master/overview', handleGetMasterOverview);
-apiApp.get('/api/master/cloud-usage', handleGetMasterCloudUsage);
 apiApp.get('/api/master/admins', handleGetMasterAdmins);
 apiApp.post('/api/master/admins', handleCreateMasterAdmin);
 apiApp.put('/api/master/admins/:adminId', handleUpdateMasterAdmin);

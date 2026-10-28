@@ -83,8 +83,8 @@ async function startServer() {
         middlewareMode: true,
         host: '0.0.0.0',
         port: PORT,
-        hmr: false,
-        watch: null,
+        hmr: process.env.DISABLE_HMR !== 'true',
+        watch: process.env.DISABLE_HMR === 'true' ? null : {},
       },
       appType: 'spa',
     });
@@ -92,27 +92,9 @@ async function startServer() {
     app.use(vite.middlewares);
   }
 
-  const server = app.listen(PORT, '0.0.0.0', () => {
+  app.listen(PORT, '0.0.0.0', () => {
     console.log(`CloudWABA SaaS server listening on port ${PORT} (${isProduction ? 'production' : 'development'})`);
   });
-
-  server.on('error', (err: any) => {
-    if (err.code === 'EADDRINUSE') {
-      console.warn(`[Server] Port ${PORT} already in use. Retrying or shutting down cleanly.`);
-    } else {
-      console.error('[Server] Uncaught server error:', err);
-    }
-  });
-
-  const cleanup = () => {
-    console.log('[Server] Shutting down cleanly...');
-    server.close(() => {
-      process.exit(0);
-    });
-  };
-
-  process.on('SIGTERM', cleanup);
-  process.on('SIGINT', cleanup);
 }
 
 startServer().catch((err) => {

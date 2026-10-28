@@ -91,27 +91,7 @@ export interface FirestoreErrorInfo {
   };
 }
 
-export function isQuotaExceededError(error: unknown): boolean {
-  if (!error) return false;
-  const msg = error instanceof Error ? error.message : typeof error === 'string' ? error : JSON.stringify(error);
-  return (
-    msg.includes('Quota limit exceeded') ||
-    msg.includes('quota metric') ||
-    msg.includes('resource-exhausted') ||
-    msg.includes('RESOURCE_EXHAUSTED') ||
-    (typeof error === 'object' && error !== null && 'code' in (error as any) && (error as any).code === 'resource-exhausted')
-  );
-}
-
-export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): void {
-  // If Firestore quota is exhausted (50k daily free tier read limit reached) or offline,
-  // do not throw an unhandled fatal error so client snapshot listeners and views can safely
-  // fall back to their local resilient cached state.
-  if (isQuotaExceededError(error)) {
-    console.info(`[Firestore Cache Notice] Daily quota reached or offline for ${operationType} on '${path}'. Using cached/offline state.`);
-    return;
-  }
-
+export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): never {
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {

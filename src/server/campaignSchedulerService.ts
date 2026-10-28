@@ -18,10 +18,7 @@ let isProcessingScheduled = false;
  * Scan for any scheduled campaigns whose scheduledAt time has passed,
  * and dispatch them automatically via Meta WhatsApp Cloud API.
  */
-let quotaExceededBackoffUntil = 0;
-
 export async function checkAndExecuteScheduledCampaigns(): Promise<void> {
-  if (Date.now() < quotaExceededBackoffUntil) return;
   if (isProcessingScheduled) return;
   isProcessingScheduled = true;
 
@@ -50,6 +47,8 @@ export async function checkAndExecuteScheduledCampaigns(): Promise<void> {
         continue;
       }
 
+      // Check organization path from document reference
+      // docSnap.ref.path is typically: organizations/{orgId}/campaigns/{campaignId}
       const pathSegments = docSnap.ref.path.split('/');
       const orgId = pathSegments[1] || camp.organizationId || camp.scheduleData?.organizationId;
       const campaignId = docSnap.id;
@@ -132,13 +131,7 @@ export async function checkAndExecuteScheduledCampaigns(): Promise<void> {
       }
     }
   } catch (err: any) {
-    if (err?.message?.includes('Quota') || err?.message?.includes('quota')) {
-      // Pause background scheduler queries for 15 minutes to allow daily quota cooldown
-      console.warn('[CampaignScheduler] Firebase Quota reached. Backing off for 15 minutes.');
-      quotaExceededBackoffUntil = Date.now() + 15 * 60 * 1000;
-    } else {
-      console.error('[CampaignScheduler] Error in checkAndExecuteScheduledCampaigns:', err);
-    }
+    console.error('[CampaignScheduler] Error in checkAndExecuteScheduledCampaigns:', err);
   } finally {
     isProcessingScheduled = false;
   }
@@ -150,13 +143,16 @@ export async function checkAndExecuteScheduledCampaigns(): Promise<void> {
 export function startCampaignScheduler(): void {
   if (schedulerInterval) return;
 
-  console.log('[CampaignScheduler] Starting background campaign scheduler (checking every 60s)...');
-  // Polling interval: every 60 seconds (optimized for Firestore quota preservation)
+  console.log('[CampaignScheduler] Starting background campaign scheduler (checking every 15s)...');
+  // Run once immediately
+  checkAndExecuteScheduledCampaigns().catch(() => {});
+
+  // Polling interval: every 15 seconds
   schedulerInterval = setInterval(() => {
     checkAndExecuteScheduledCampaigns().catch((err) => {
       console.warn('[CampaignScheduler] Interval tick error:', err);
     });
-  }, 60000);
+  }, 15000);
 }
 
 /**
@@ -278,31 +274,12 @@ export async function handleSendScheduledCampaignNow(req: Request, res: Response
     }
 
     const camp = campSnap.data();
-    const allowedStatuses = ['ready', 'scheduled', 'draft', 'queued', 'completed', 'failed', 'cancelled'];
-    if (!allowedStatuses.includes(camp.status)) {
-      if (camp.status === 'sending') {
-        res.status(400).json({ error: 'Campaign broadcast is already actively sending in the background.' });
-        return;
-      }
-      res.status(400).json({ error: `Campaign has status "${camp.status}". Triggering is allowed for ready, scheduled, draft, or re-run campaigns.` });
+    if (camp.status !== 'scheduled' && camp.status !== 'draft') {
+      res.status(400).json({ error: `Campaign has status "${camp.status}". Only scheduled or draft campaigns can be sent now.` });
       return;
     }
 
-    const scheduleData = camp.scheduleData || {};
-    const phoneNumberId = scheduleData.phoneNumberId || camp.phoneNumberId || camp.whatsAppAccountId;
-    const template = scheduleData.template || camp.template;
-    const recipients = scheduleData.recipients || camp.recipients || [];
-    const variableValues = scheduleData.variableValues || camp.variableValues || {};
-    const customToken = scheduleData.customToken || camp.customToken;
-    const campaignName = camp.name || scheduleData.campaignName || 'Broadcast Campaign';
-
-    if (!phoneNumberId || !template || !Array.isArray(recipients) || recipients.length === 0) {
-      await updateDoc(campRef, { status: 'failed', errorReason: 'Missing dispatch data (phone number, template, or recipients)' });
-      res.status(400).json({ error: 'Missing phone number ID, template, or target recipients in campaign data.' });
-      return;
-    }
-
-    // Mark as sending immediately in Firestore
+    // Mark as sending
     const nowIso = new Date().toISOString();
     await updateDoc(campRef, {
       status: 'sending',
@@ -310,16 +287,21 @@ export async function handleSendScheduledCampaignNow(req: Request, res: Response
       updatedAt: nowIso,
     });
 
-    // Send immediate response so the user interface never freezes or blocks!
-    res.json({
-      success: true,
-      message: `Broadcast for "${campaignName}" triggered successfully! Sending to ${recipients.length} recipients in the background.`,
-      status: 'sending',
-      recipientCount: recipients.length,
-    });
+    const scheduleData = camp.scheduleData || {};
+    const phoneNumberId = scheduleData.phoneNumberId || camp.phoneNumberId || camp.whatsAppAccountId;
+    const template = scheduleData.template || camp.template;
+    const recipients = scheduleData.recipients || camp.recipients || [];
+    const variableValues = scheduleData.variableValues || camp.variableValues || {};
+    const customToken = scheduleData.customToken || camp.customToken;
+    const campaignName = camp.name || scheduleData.campaignName;
 
-    // Run dispatch asynchronously in background
-    executeCampaignDispatchCore({
+    if (!phoneNumberId || !template || !Array.isArray(recipients) || recipients.length === 0) {
+      await updateDoc(campRef, { status: 'failed', errorReason: 'Missing dispatch data' });
+      res.status(400).json({ error: 'Missing phone number ID, template, or target recipients in campaign data.' });
+      return;
+    }
+
+    const result = await executeCampaignDispatchCore({
       phoneNumberId,
       template,
       recipients,
@@ -328,15 +310,12 @@ export async function handleSendScheduledCampaignNow(req: Request, res: Response
       campaignId,
       campaignName,
       organizationId: orgId,
-    }).catch(async (dispatchErr: any) => {
-      console.error(`[handleSendScheduledCampaignNow] Background broadcast error for ${campaignId}:`, dispatchErr);
-      try {
-        await updateDoc(campRef, {
-          status: 'failed',
-          errorReason: dispatchErr?.message || 'Background broadcast error',
-          updatedAt: new Date().toISOString(),
-        });
-      } catch {}
+    });
+
+    res.json({
+      success: true,
+      message: `Campaign "${campaignName}" dispatched successfully.`,
+      ...result,
     });
   } catch (err: any) {
     console.error('[handleSendScheduledCampaignNow] Error:', err);
