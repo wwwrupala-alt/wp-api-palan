@@ -121,7 +121,11 @@ export const CampaignReportModal: React.FC<CampaignReportModalProps> = ({
           }
         }
       },
-      (err) => console.warn('[Firestore] Campaign report snapshot listener error:', err)
+      (err: any) => {
+        if (err?.code !== 'resource-exhausted' && !err?.message?.includes('Quota limit exceeded')) {
+          console.warn('[Firestore] Campaign report snapshot notice:', err?.message || err);
+        }
+      }
     );
 
     return () => unsub();

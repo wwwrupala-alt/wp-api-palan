@@ -75,7 +75,13 @@ import {
   handleResetAdminUserPassword,
   handleDeleteAdminUser,
   handleAdminImpersonate,
+  ensureDefaultAccounts,
 } from './multiTenantService.ts';
+
+// Initialize default accounts and persistent disk backups
+ensureDefaultAccounts().catch((err) => {
+  console.warn('[MultiTenant] Startup seed notice:', err?.message);
+});
 
 export const apiApp = express();
 

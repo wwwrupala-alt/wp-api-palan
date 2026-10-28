@@ -86,6 +86,7 @@ export interface UserProfile {
   adminLogoUrl?: string;
   adminContactPhone?: string;
   adminBrandName?: string;
+  businessName?: string;
   loginPassword?: string;
   displayPassword?: string;
   managedByAdminId?: string;

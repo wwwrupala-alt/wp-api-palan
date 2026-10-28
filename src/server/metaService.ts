@@ -277,6 +277,9 @@ export async function handleSaveAdminMetaConfig(req: Request, res: Response) {
   }
 }
 
+const tenantMetaConfigCache = new Map<string, { config: any; timestamp: number }>();
+const TENANT_CONFIG_TTL = 10 * 60 * 1000; // 10 minutes cache to prevent Firestore quota drain
+
 // Multi-tenant resolution: Returns custom organization Meta credentials if saved,
 // dynamically resolving parent Admin's dedicated Meta App if requested by a team user,
 // otherwise falls back to Master platform default
@@ -284,6 +287,12 @@ export async function getEffectiveMetaConfig(organizationId?: string, parentOrgI
   const globalConfig = getMetaConfig();
   if (!organizationId && !parentOrgIdHint) {
     return { ...globalConfig, isCustomTenantApp: false };
+  }
+
+  const cacheKey = `${organizationId || ''}__${parentOrgIdHint || ''}`;
+  const cached = tenantMetaConfigCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < TENANT_CONFIG_TTL) {
+    return cached.config;
   }
 
   try {
@@ -300,7 +309,7 @@ export async function getEffectiveMetaConfig(organizationId?: string, parentOrgI
 
     // 1. Direct check on custom organization credentials
     if (custom && custom.appId && (custom.configId || custom.appSecret || custom.systemUserToken || custom.systemToken)) {
-      return {
+      const resolved = {
         appId: String(custom.appId || globalConfig.appId).trim(),
         appSecret: String(custom.appSecret || globalConfig.appSecret).trim(),
         configId: String(custom.configId || globalConfig.configId).trim(),
@@ -315,6 +324,8 @@ export async function getEffectiveMetaConfig(organizationId?: string, parentOrgI
         isCustomTenantApp: true,
         organizationName: orgData?.name || organizationId,
       };
+      tenantMetaConfigCache.set(cacheKey, { config: resolved, timestamp: Date.now() });
+      return resolved;
     }
 
     // 2. Multi-tier resolution: If this is a team user workspace, resolve parent Admin's dedicated Meta App!
@@ -354,7 +365,7 @@ export async function getEffectiveMetaConfig(organizationId?: string, parentOrgI
           parentCustom.appId &&
           (parentCustom.configId || parentCustom.appSecret || parentCustom.systemUserToken || parentCustom.systemToken)
         ) {
-          return {
+          const resolved = {
             appId: String(parentCustom.appId || globalConfig.appId).trim(),
             appSecret: String(parentCustom.appSecret || globalConfig.appSecret).trim(),
             configId: String(parentCustom.configId || globalConfig.configId).trim(),
@@ -369,14 +380,20 @@ export async function getEffectiveMetaConfig(organizationId?: string, parentOrgI
             isCustomTenantApp: true,
             organizationName: parentOrgData.name || orgData?.name || organizationId,
           };
+          tenantMetaConfigCache.set(cacheKey, { config: resolved, timestamp: Date.now() });
+          return resolved;
         }
       }
     }
-  } catch (err) {
-    console.warn('[MetaConfig] Error fetching tenant metaAppConfig:', err);
+  } catch (err: any) {
+    if (err?.code !== 'resource-exhausted' && !err?.message?.includes('Quota limit exceeded')) {
+      console.warn('[MetaConfig] Error fetching tenant metaAppConfig:', err?.message || err);
+    }
   }
 
-  return { ...globalConfig, isCustomTenantApp: false };
+  const fallback = { ...globalConfig, isCustomTenantApp: false };
+  tenantMetaConfigCache.set(cacheKey, { config: fallback, timestamp: Date.now() });
+  return fallback;
 }
 
 // Handler: Check Meta Configuration status (supports per-tenant custom Meta App, parent Admin dedicated Meta App, or Master default)

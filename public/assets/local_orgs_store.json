@@ -1,0 +1,73 @@
+{
+  "org_master_platform": {
+    "id": "org_master_platform",
+    "name": "Master Platform Workspace",
+    "ownerId": "master_admin_root",
+    "status": "active",
+    "subscription": {
+      "planName": "Platform Super Admin",
+      "maxWhatsAppNumbers": 100,
+      "maxUsers": 1000,
+      "maxMonthlyBroadcasts": 10000000,
+      "maxContacts": 1000000,
+      "expiresAt": "2027-06-15T12:00:00.000Z",
+      "status": "active"
+    },
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "updatedAt": "2026-10-28T07:15:30.961Z"
+  },
+  "org_lax_1": {
+    "id": "org_lax_1",
+    "name": "WABACLOUD",
+    "ownerId": "admin_laxtone_default",
+    "status": "active",
+    "subscription": {
+      "planName": "Enterprise Unlimited",
+      "maxWhatsAppNumbers": 10,
+      "maxUsers": 25,
+      "maxMonthlyBroadcasts": 500000,
+      "maxContacts": 50000,
+      "expiresAt": "2027-06-15T12:00:00.000Z",
+      "status": "active"
+    },
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "updatedAt": "2026-10-28T07:15:30.961Z"
+  },
+  "org_usr_9974292240": {
+    "id": "org_usr_9974292240",
+    "name": "Laxtone Cera Workspace",
+    "ownerId": "user_9974292240",
+    "status": "active",
+    "subscription": {
+      "planName": "Enterprise Unlimited",
+      "maxWhatsAppNumbers": 10,
+      "maxUsers": 25,
+      "maxMonthlyBroadcasts": 500000,
+      "maxContacts": 50000,
+      "expiresAt": "2027-06-15T12:00:00.000Z",
+      "status": "active"
+    },
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "updatedAt": "2026-10-28T07:15:30.961Z"
+  },
+  "org_usr_9974428034": {
+    "id": "org_usr_9974428034",
+    "parentOrganizationId": "org_9099268070",
+    "status": "active",
+    "adminId": "admin_9099268070",
+    "name": "ranger's Workspace",
+    "ownerId": "usr_9974428034",
+    "updatedAt": "2026-10-20T08:38:11.981Z"
+  },
+  "org_9099268070": {
+    "id": "org_9099268070",
+    "name": "deltox ceramic",
+    "status": "active",
+    "subscription": {
+      "planName": "Enterprise Unlimited",
+      "status": "active",
+      "expiresAt": "2027-06-15T12:00:00.000Z",
+      "validityDays": 228
+    }
+  }
+}

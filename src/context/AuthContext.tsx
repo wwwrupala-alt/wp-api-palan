@@ -174,8 +174,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               setOrganization(fallbackOrg);
             }
           },
-          (err) => {
-            console.warn('[AuthContext] Org snapshot listener error:', err);
+          (err: any) => {
+            if (err?.code === 'resource-exhausted' || err?.message?.includes('Quota limit exceeded')) {
+              return;
+            }
+            console.warn('[AuthContext] Org snapshot listener notice:', err?.message || err);
           }
         );
 
