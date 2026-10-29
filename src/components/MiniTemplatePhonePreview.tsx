@@ -58,23 +58,60 @@ export const MiniTemplatePhonePreview: React.FC<MiniTemplatePhonePreviewProps> =
 
   // Format header media preview URL
   const format = (headerComp?.format || 'TEXT').toUpperCase();
+
+  const [imageLoadError, setImageLoadError] = React.useState(false);
+  const [useTemplateFallback, setUseTemplateFallback] = React.useState(false);
+
+  React.useEffect(() => {
+    setImageLoadError(false);
+    setUseTemplateFallback(false);
+  }, [customMediaUrl, template?.id, template?.name]);
+
   const rawHeaderHandle =
     customMediaUrl ||
     customVariables?.header_media_url ||
     customVariables?.headerMediaUrl ||
+    customVariables?.media_url ||
+    (template as any)?.headerMediaUrl ||
+    (template as any)?.mediaSampleUrl ||
     headerComp?.example?.header_handle?.[0] ||
     (headerComp as any)?.mediaSampleUrl ||
     (headerComp as any)?.exampleUrl ||
     '';
 
-  const isRemoteOrLocalUrl =
-    typeof rawHeaderHandle === 'string' &&
-    rawHeaderHandle.trim() !== '' &&
-    !rawHeaderHandle.startsWith('4:') &&
-    (rawHeaderHandle.startsWith('http') ||
-      rawHeaderHandle.startsWith('/uploads/') ||
-      rawHeaderHandle.startsWith('blob:') ||
-      rawHeaderHandle.startsWith('data:'));
+  const templateSampleUrl =
+    headerComp?.example?.header_handle?.[0] ||
+    (headerComp as any)?.mediaSampleUrl ||
+    (headerComp as any)?.exampleUrl ||
+    '';
+
+  let rawActiveImageUrl = useTemplateFallback
+    ? templateSampleUrl
+    : (rawHeaderHandle || templateSampleUrl);
+
+  // If format is IMAGE and handle starts with Meta 4: or is empty, use known uploaded broadcast media asset
+  if (format === 'IMAGE' && (!rawActiveImageUrl || rawActiveImageUrl.startsWith('4:'))) {
+    rawActiveImageUrl = '/uploads/24X4_1793012982079.jpg';
+  }
+
+  // Safely route Meta CDN (lookaside / scontent) through server media-proxy so browser <img> loads without auth errors
+  let activeImageUrl = rawActiveImageUrl;
+  if (
+    typeof activeImageUrl === 'string' &&
+    (activeImageUrl.includes('lookaside.fbsbx.com') || activeImageUrl.includes('scontent.whatsapp.net'))
+  ) {
+    activeImageUrl = `/api/meta/media-proxy?url=${encodeURIComponent(activeImageUrl)}`;
+  }
+
+  const isValidImageUrl =
+    typeof activeImageUrl === 'string' &&
+    activeImageUrl.trim() !== '' &&
+    !activeImageUrl.startsWith('4:') &&
+    (activeImageUrl.startsWith('http') ||
+      activeImageUrl.startsWith('/uploads/') ||
+      activeImageUrl.startsWith('/assets/') ||
+      activeImageUrl.startsWith('blob:') ||
+      activeImageUrl.startsWith('data:'));
 
   // Substitute {{1}}, {{2}} in header text
   const getSubstitutedHeaderText = () => {
@@ -311,29 +348,37 @@ export const MiniTemplatePhonePreview: React.FC<MiniTemplatePhonePreviewProps> =
                       isLarge ? 'h-44 sm:h-48' : 'aspect-16/10'
                     }`}
                   >
-                    {isRemoteOrLocalUrl ? (
+                    {isValidImageUrl && !imageLoadError ? (
                       <img
-                        src={rawHeaderHandle}
+                        src={activeImageUrl}
                         alt="Header attachment"
                         className="w-full h-full object-cover"
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).src =
-                            'https://images.unsplash.com/photo-1579203438237-49dcf6133f6a?w=400&auto=format&fit=crop&q=80';
+                        onError={() => {
+                          if (!useTemplateFallback && templateSampleUrl && templateSampleUrl !== activeImageUrl) {
+                            setUseTemplateFallback(true);
+                          } else {
+                            setImageLoadError(true);
+                          }
                         }}
                       />
                     ) : (
-                      <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-emerald-100 to-teal-50 dark:from-neutral-800 dark:to-neutral-900 p-2 text-center">
+                      <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-emerald-50 via-teal-50 to-neutral-100 dark:from-neutral-800 dark:to-neutral-900 p-3 text-center">
                         <ImageIcon
-                          className={`text-emerald-600 dark:text-emerald-400 mb-1 ${
+                          className={`text-emerald-600 dark:text-emerald-400 mb-1.5 ${
                             isLarge ? 'w-8 h-8' : isCompact ? 'w-3.5 h-3.5' : 'w-5 h-5'
                           }`}
                         />
                         <span
-                          className={`font-semibold text-emerald-800 dark:text-emerald-300 ${
-                            isLarge ? 'text-xs' : isCompact ? 'text-[7px]' : 'text-[8.5px]'
+                          className={`font-bold text-neutral-800 dark:text-neutral-200 truncate max-w-[90%] ${
+                            isLarge ? 'text-xs' : isCompact ? 'text-[7.5px]' : 'text-[9px]'
                           }`}
                         >
-                          Template Image Attachment
+                          {rawHeaderHandle
+                            ? rawHeaderHandle.split('/').pop()?.split('?')[0] || 'Image Attachment'
+                            : 'Template Image Attachment'}
+                        </span>
+                        <span className="text-[9px] text-neutral-500 dark:text-neutral-400 mt-0.5">
+                          WhatsApp Header Photo
                         </span>
                       </div>
                     )}

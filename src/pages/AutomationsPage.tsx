@@ -640,7 +640,7 @@ export const AutomationsPage: React.FC = () => {
               key={testingPhoneFlow.id}
               flow={testingPhoneFlow}
               businessName={activeAccount?.verifiedName || 'CloudWABA Business'}
-              displayPhoneNumber={activeAccount?.displayPhoneNumber || '+91 9974428034'}
+              displayPhoneNumber={activeAccount?.displayPhoneNumber || ''}
             />
           </div>
         </div>

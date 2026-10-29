@@ -31,7 +31,7 @@ import {
 } from 'lucide-react';
 import type { Campaign, Template, Contact, ContactGroup, WhatsAppAccount } from '../types/index.ts';
 import { useToast } from '../context/ToastContext.tsx';
-import { createCampaign, launchCampaign, uploadMediaFile, syncTemplatesFromMeta } from '../lib/services.ts';
+import { createCampaign, launchCampaign, uploadMediaFile, syncTemplatesFromMeta, sendScheduledCampaignNowApi } from '../lib/services.ts';
 
 interface CreateCampaignModalProps {
   isOpen: boolean;
@@ -132,8 +132,8 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
   const [campName, setCampName] = useState('');
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
 
-  // Audience Mode: 'group' | 'manual' | 'both'
-  const [audienceMode, setAudienceMode] = useState<'group' | 'manual' | 'both'>('group');
+  // Audience Mode: 'group' | 'manual' | 'both' (default to 'manual' paste per user preference)
+  const [audienceMode, setAudienceMode] = useState<'group' | 'manual' | 'both'>('manual');
   const [selectedGroupId, setSelectedGroupId] = useState('all');
 
   // Manual Numbers Paste input
@@ -266,6 +266,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
       setCampaignMediaUrl('');
       setCampaignMediaPreviewUrl('');
       setUploadedCampaignMedia(null);
+      setAudienceMode('manual');
       setManualNumbersText('');
       setScheduleMode('immediate');
       setScheduledDateTime(getQuickPresetTime(60));
@@ -667,7 +668,25 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
         onSuccess?.();
         onClose();
       } else {
-        // Immediate Launch
+        // Immediate Launch / Ready Campaign
+        const scheduleDataPayload = {
+          organizationId,
+          phoneNumberId: currentAccount.phoneNumberId,
+          template: {
+            name: selectedTemplate.name,
+            language: selectedTemplate.language || 'en_US',
+            components: selectedTemplate.components,
+          },
+          recipients: totalTargetRecipients.map((c) => ({
+            phone: c.phone,
+            name: c.name,
+            variableValues: buildRecipientVariables(c),
+          })),
+          customToken: currentAccount.customToken,
+          variableValues: campaignVariables,
+          campaignName,
+        };
+
         const campaignPayload = {
           name: campaignName,
           whatsAppAccountId: currentAccount.id,
@@ -680,43 +699,142 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
           variableValues: campaignVariables,
           ...(audienceMode !== 'manual' && selectedGroupId !== 'all' ? { groupId: selectedGroupId } : {}),
           recipientCount: totalTargetRecipients.length,
+          status: 'ready' as const,
+          scheduleData: scheduleDataPayload,
         };
 
         const campaignId = await createCampaign(organizationId, campaignPayload);
         if (!campaignId) throw new Error('Failed to create campaign record in database.');
 
-        // 3. Dispatch via backend Meta API
-        await launchCampaign(
-          organizationId,
-          campaignId,
-          currentAccount.phoneNumberId,
-          {
-            name: selectedTemplate.name,
-            language: selectedTemplate.language || 'en_US',
-            components: selectedTemplate.components,
-          },
-          totalTargetRecipients.map((c) => ({
-            phone: c.phone,
-            name: c.name,
-            variableValues: buildRecipientVariables(c),
-          })),
-          currentAccount.customToken,
-          campaignVariables,
-          campaignPayload.name
-        );
-
-        toast.showSuccess(
-          'Broadcast Campaign Launched!',
-          `Dispatched "${campaignPayload.name}" to ${totalTargetRecipients.length} recipients successfully.`
-        );
-
+        // Close modal immediately so UI is 100% responsive and never blocks
         onSuccess?.();
         onClose();
+
+        // Trigger background dispatch without blocking user
+        sendScheduledCampaignNowApi(organizationId, campaignId)
+          .then(() => {
+            toast.showSuccess(
+              'Broadcast Triggered!',
+              `Dispatched "${campaignPayload.name}" to ${totalTargetRecipients.length} recipients in background.`
+            );
+          })
+          .catch((err: any) => {
+            console.warn('[handleLaunchCampaign] Background trigger notice:', err);
+            toast.showInfo(
+              'Campaign Added to List',
+              `"${campaignPayload.name}" is ready. You can click ⚡ Trigger in the campaigns list anytime.`
+            );
+          });
       }
     } catch (err: any) {
-      const msg = err?.message || 'Campaign dispatch failed.';
+      const msg = err?.message || 'Campaign creation failed.';
       setErrorMsg(msg);
-      toast.showError('Campaign Launch Failed', msg);
+      toast.showError('Campaign Creation Failed', msg);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // Save campaign to list as Ready (Trigger anytime from campaign list)
+  const handleSaveAsReady = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!organizationId || !currentAccount || !selectedTemplate) {
+      const msg = 'Active WhatsApp account and approved template are required.';
+      setErrorMsg(msg);
+      toast.showWarning('Prerequisites Missing', msg);
+      return;
+    }
+
+    if (totalTargetRecipients.length === 0) {
+      const msg = 'No recipients selected. Please choose a group or paste phone numbers.';
+      setErrorMsg(msg);
+      toast.showWarning('No Recipients', msg);
+      return;
+    }
+
+    setSubmitting(true);
+    setErrorMsg(null);
+
+    try {
+      const campaignVariables: Record<string, string> = {};
+      requiredVariables.forEach((k) => {
+        campaignVariables[`body_${k}`] = templateVariables[k] || `Customer`;
+      });
+      if (campaignMediaUrl.trim()) {
+        campaignVariables.header_media_url = campaignMediaUrl.trim();
+      }
+      const campaignName = campName.trim() || `${selectedTemplate.name} Broadcast`;
+
+      const buildRecipientVariables = (c: any) => {
+        const merged: Record<string, string> = { ...campaignVariables };
+        if (c.name && !merged.body_1) {
+          merged.body_1 = c.name;
+          merged.name = c.name;
+        }
+        if (c.customFields && typeof c.customFields === 'object') {
+          Object.entries(c.customFields).forEach(([k, v]) => {
+            if (v !== undefined && v !== null && String(v).trim()) {
+              const valStr = String(v).trim();
+              merged[k] = valStr;
+              const matchNum = k.match(/(?:var|param|body)?_?(\d+)/i);
+              if (matchNum && matchNum[1]) {
+                merged[`body_${matchNum[1]}`] = valStr;
+                merged[matchNum[1]] = valStr;
+              }
+            }
+          });
+        }
+        return merged;
+      };
+
+      const scheduleDataPayload = {
+        organizationId,
+        phoneNumberId: currentAccount.phoneNumberId,
+        template: {
+          name: selectedTemplate.name,
+          language: selectedTemplate.language || 'en_US',
+          components: selectedTemplate.components,
+        },
+        recipients: totalTargetRecipients.map((c) => ({
+          phone: c.phone,
+          name: c.name,
+          variableValues: buildRecipientVariables(c),
+        })),
+        customToken: currentAccount.customToken,
+        variableValues: campaignVariables,
+        campaignName,
+      };
+
+      const campaignPayload = {
+        name: campaignName,
+        whatsAppAccountId: currentAccount.id,
+        phoneNumberId: currentAccount.phoneNumberId,
+        templateId: selectedTemplate.id,
+        templateName: selectedTemplate.name,
+        templateCategory: selectedTemplate.category,
+        template: selectedTemplate,
+        headerMediaUrl: campaignMediaUrl.trim() || undefined,
+        variableValues: campaignVariables,
+        ...(audienceMode !== 'manual' && selectedGroupId !== 'all' ? { groupId: selectedGroupId } : {}),
+        recipientCount: totalTargetRecipients.length,
+        status: 'ready' as const,
+        scheduleData: scheduleDataPayload,
+      };
+
+      const campaignId = await createCampaign(organizationId, campaignPayload);
+      if (!campaignId) throw new Error('Failed to create campaign record in database.');
+
+      toast.showSuccess(
+        'Campaign Created & Ready to Trigger!',
+        `"${campaignName}" is added to your campaigns list (${totalTargetRecipients.length} recipients). Click ⚡ Trigger anytime to broadcast.`
+      );
+
+      onSuccess?.();
+      onClose();
+    } catch (err: any) {
+      const msg = err?.message || 'Failed to save campaign.';
+      setErrorMsg(msg);
+      toast.showError('Save Failed', msg);
     } finally {
       setSubmitting(false);
     }
@@ -1760,42 +1878,67 @@ Rahul: 919974428034
             )}
           </div>
 
-          <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 sm:space-x-3">
+          <div className="flex flex-wrap items-center justify-end gap-2 sm:space-x-2">
             <button
               type="button"
               onClick={onClose}
-              className="min-h-[44px] sm:min-h-[38px] px-4 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 font-bold text-xs hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer text-center"
+              className="min-h-[40px] sm:min-h-[38px] px-3.5 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 font-bold text-xs hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer text-center"
             >
               Cancel
             </button>
 
+            {/* Left Button: Launch & Trigger Now */}
             <button
               type="button"
               onClick={handleLaunchCampaign}
               disabled={submitting || !selectedTemplate || totalTargetRecipients.length === 0}
-              className={`min-h-[44px] sm:min-h-[38px] px-5 py-2.5 rounded-xl active:scale-[0.98] text-white font-bold text-xs flex items-center justify-center space-x-2 disabled:opacity-50 transition-all shadow-md cursor-pointer ${
+              className={`min-h-[40px] sm:min-h-[38px] px-4 py-2 rounded-xl active:scale-[0.98] border font-bold text-xs flex items-center justify-center space-x-2 disabled:opacity-50 transition-all cursor-pointer shadow-xs ${
                 scheduleMode === 'schedule'
-                  ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-600/20'
-                  : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'
+                  ? 'bg-amber-600 hover:bg-amber-700 text-white shadow-amber-600/20 border-transparent'
+                  : 'border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-800 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700/80'
               }`}
+              title={scheduleMode === 'schedule' ? 'Schedule broadcast to dispatch at chosen date/time' : 'Directly trigger and dispatch to all recipients immediately'}
             >
               {submitting ? (
                 <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>{scheduleMode === 'schedule' ? 'Scheduling Broadcast...' : 'Launching Broadcast...'}</span>
+                  <Loader2 className="w-4 h-4 animate-spin text-neutral-600 dark:text-neutral-300" />
+                  <span>{scheduleMode === 'schedule' ? 'Scheduling...' : 'Launching...'}</span>
                 </>
               ) : scheduleMode === 'schedule' ? (
                 <>
-                  <Clock className="w-4 h-4" />
+                  <Clock className="w-4 h-4 text-white" />
                   <span>Schedule Broadcast ({totalTargetRecipients.length})</span>
                 </>
               ) : (
                 <>
-                  <Send className="w-4 h-4" />
-                  <span>Launch ({totalTargetRecipients.length})</span>
+                  <Zap className="w-4 h-4 text-amber-500 fill-amber-500" />
+                  <span>⚡ Launch &amp; Trigger Now ({totalTargetRecipients.length})</span>
                 </>
               )}
             </button>
+
+            {/* Right Button: Save to List (Trigger Later) with Green Highlight */}
+            {scheduleMode !== 'schedule' && (
+              <button
+                type="button"
+                onClick={handleSaveAsReady}
+                disabled={submitting || !selectedTemplate || totalTargetRecipients.length === 0}
+                className="min-h-[40px] sm:min-h-[38px] px-5 py-2 rounded-xl active:scale-[0.98] bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center space-x-2 disabled:opacity-50 transition-all shadow-md shadow-emerald-600/20 cursor-pointer"
+                title="Save campaign to list as Ready; trigger broadcast anytime from campaign list"
+              >
+                {submitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-white" />
+                    <span>Saving to List...</span>
+                  </>
+                ) : (
+                  <>
+                    <Zap className="w-4 h-4 fill-white text-white" />
+                    <span>Save to List (Trigger Later)</span>
+                  </>
+                )}
+              </button>
+            )}
           </div>
         </div>
       </div>

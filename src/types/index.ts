@@ -82,6 +82,7 @@ export interface UserProfile {
   role: UserRole;
   phone?: string;
   contactPhone?: string;
+  businessName?: string;
   logoUrl?: string;
   adminLogoUrl?: string;
   adminContactPhone?: string;
@@ -311,7 +312,7 @@ export interface Campaign {
   recipients?: CampaignRecipient[];
   recipientCount: number;
   groupId?: string;
-  status: 'draft' | 'scheduled' | 'sending' | 'completed' | 'paused' | 'cancelled' | 'failed';
+  status: 'draft' | 'ready' | 'scheduled' | 'sending' | 'completed' | 'paused' | 'cancelled' | 'failed';
   scheduledAt?: string;
   startedAt?: string;
   createdAt: string;

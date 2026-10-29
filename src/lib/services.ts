@@ -508,7 +508,7 @@ export async function createCampaign(
     recipientCount: number;
     scheduledAt?: string;
     scheduleData?: any;
-    status?: 'draft' | 'scheduled' | 'sending' | 'completed' | 'paused' | 'cancelled' | 'failed';
+    status?: 'draft' | 'scheduled' | 'sending' | 'completed' | 'paused' | 'cancelled' | 'failed' | 'ready';
     recipients?: any[];
   }
 ) {
@@ -556,6 +556,21 @@ export async function sendScheduledCampaignNowApi(orgId: string, campaignId: str
     body: JSON.stringify({ organizationId: orgId }),
   });
   return parseJsonResponse(res, 'Failed to trigger immediate campaign broadcast.');
+}
+
+/**
+ * Trigger immediate dispatch of a broadcast campaign (Trigger Now)
+ */
+export async function triggerCampaignApi(orgId: string, campaignId: string) {
+  const res = await fetch(`/api/meta/campaigns/${campaignId}/trigger`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-organization-id': orgId,
+    },
+    body: JSON.stringify({ organizationId: orgId }),
+  });
+  return parseJsonResponse(res, 'Failed to trigger campaign broadcast.');
 }
 
 /**

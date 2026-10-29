@@ -2400,17 +2400,27 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
 
                     {/* Failure details if applicable */}
                     {selectedRecipientForModal.failureReason && (
-                      <div className="p-3.5 rounded-2xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/40 text-xs text-red-800 dark:text-red-300 space-y-1">
-                        <p className="font-semibold flex items-center space-x-1.5">
-                          <AlertTriangle className="w-4 h-4 text-red-600 dark:text-red-400" />
-                          <span>WhatsApp Delivery Failure Notice</span>
-                        </p>
-                        <p className="text-[11px] font-mono">
-                          {selectedRecipientForModal.failureCode
-                            ? `Error Code [${selectedRecipientForModal.failureCode}]: `
-                            : ''}
+                      <div className="p-3.5 rounded-2xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 text-xs text-red-900 dark:text-red-200 space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <p className="font-semibold flex items-center space-x-1.5 text-red-700 dark:text-red-300">
+                            <AlertTriangle className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0" />
+                            <span>WhatsApp Delivery Failure Notice</span>
+                          </p>
+                          {selectedRecipientForModal.failureCode && (
+                            <span className="px-2 py-0.5 rounded-full bg-red-200/80 dark:bg-red-900/60 text-red-900 dark:text-red-200 font-mono text-[10px] font-bold">
+                              Code {selectedRecipientForModal.failureCode}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] font-mono text-red-700 dark:text-red-300 p-2 rounded-xl bg-white dark:bg-neutral-900 border border-red-200/60 dark:border-red-900/40">
                           {selectedRecipientForModal.failureReason}
                         </p>
+                        {(selectedRecipientForModal.failureCode === '130429' ||
+                          String(selectedRecipientForModal.failureReason).toLowerCase().includes('rate limit')) && (
+                          <p className="text-[10.5px] text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 p-2 rounded-xl border border-amber-200 dark:border-amber-900/40">
+                            <strong>Rate Limit Hit:</strong> Daily 24h tier limit reached or Meta recipient marketing fatigue capping. Check the <em>Webhook Delivery Audit</em> tab for full details.
+                          </p>
+                        )}
                       </div>
                     )}
                   </div>
@@ -2513,19 +2523,60 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
                     </div>
                   </div>
 
-                  {/* Failure Error Info */}
+                  {/* Failure Error Info with Actionable Diagnostics */}
                   {selectedRecipientForModal.failureReason && (
-                    <div className="p-3.5 rounded-2xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/40 text-xs text-red-800 dark:text-red-300 space-y-1">
-                      <p className="font-semibold flex items-center space-x-1.5">
-                        <AlertTriangle className="w-4 h-4 text-red-600 dark:text-red-400" />
-                        <span>WhatsApp Failure Details</span>
-                      </p>
-                      <p className="text-[11px] font-mono">
-                        {selectedRecipientForModal.failureCode
-                          ? `Error Code: [${selectedRecipientForModal.failureCode}] `
-                          : ''}
+                    <div className="p-4 rounded-2xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 text-xs text-red-900 dark:text-red-200 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <p className="font-bold flex items-center space-x-1.5 text-red-700 dark:text-red-300">
+                          <AlertTriangle className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0" />
+                          <span>WhatsApp Failure Details</span>
+                        </p>
+                        {selectedRecipientForModal.failureCode && (
+                          <span className="px-2 py-0.5 rounded-full bg-red-200/80 dark:bg-red-900/60 text-red-900 dark:text-red-200 font-mono text-[10px] font-bold">
+                            Code: {selectedRecipientForModal.failureCode}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="p-2.5 rounded-xl bg-white dark:bg-neutral-900 border border-red-200/70 dark:border-red-900/40 text-[11px] font-mono text-red-700 dark:text-red-300">
+                        {selectedRecipientForModal.failureCode ? `[${selectedRecipientForModal.failureCode}] ` : ''}
                         {selectedRecipientForModal.failureReason}
-                      </p>
+                      </div>
+
+                      {/* Diagnostic Guidance for Error 130429 (Rate limit hit) */}
+                      {(selectedRecipientForModal.failureCode === '130429' ||
+                        String(selectedRecipientForModal.failureReason).toLowerCase().includes('rate limit')) && (
+                        <div className="pt-2 border-t border-red-200/70 dark:border-red-900/40 space-y-2 text-[11px] text-neutral-800 dark:text-neutral-200">
+                          <p className="font-bold text-red-700 dark:text-red-400">
+                            🔍 Error 130429 (Rate Limit Hit) — Naye Number Par Bhi Kyu Aaya?
+                          </p>
+                          <div className="p-2.5 rounded-xl bg-red-100/60 dark:bg-red-950/50 border border-red-300 dark:border-red-800 text-[11px] text-red-900 dark:text-red-200">
+                            <strong>Meta Exact Reason:</strong> <em>"Message failed to send because there were too many messages sent <u>from this phone number</u> in a short period of time."</em>
+                            <p className="mt-1">
+                              Yahan "from this phone number" ka matlab aapka <strong>Sender Business Number</strong> hai (recipient nahi). Meta ne aapke sender number par temporary <strong>Speed/Throughput Throttle (Cool-down)</strong> laga diya hai, isiliye kisi bhi naye number par bhejoge toh bhi Meta deliver nahi karega!
+                            </p>
+                          </div>
+
+                          <ul className="list-disc pl-4 space-y-1 text-neutral-700 dark:text-neutral-300">
+                            <li>
+                              <strong>Throughput / Burst Speed Limit:</strong> Ek saath bina gap ke messages trigger hone par Meta per-second speed limit cross ho jaati hai. (Ab software me automated 500ms pacing add kar di gayi hai).
+                            </li>
+                            <li>
+                              <strong>Temporary Sender Cooldown (1 hr to 24 hrs):</strong> Jab Meta spam protection trigger karta hai, toh wo sender number ko temporary cool-down mode me daal deta hai.
+                            </li>
+                            <li>
+                              <strong>Phone Number Quality Rating:</strong> WhatsApp Manager ke <em>Phone numbers</em> tab me check karein ki status "Connected" hai aur Quality "High/Medium" hai ya "Flagged".
+                            </li>
+                          </ul>
+
+                          <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/40 text-[11px] text-amber-900 dark:text-amber-200 space-y-1">
+                            <span className="font-bold block">💡 Abhi Kya Karein (Solution):</span>
+                            <p>1. Abhi 1–2 ghante ke liye continuous messages bhejna rok dein taaki Meta ka temporary throttle clear ho sake.</p>
+                            <p>2. Meta WhatsApp Manager me <strong>Phone numbers</strong> tab me jakar apne number ka Status &amp; Quality check karein.</p>
+                            <p>3. Cool-down ke baad automated pacing ke sath messages aaram se deliver hone lagenge.</p>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

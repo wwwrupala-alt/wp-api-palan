@@ -277,6 +277,9 @@ export async function handleSaveAdminMetaConfig(req: Request, res: Response) {
   }
 }
 
+const tenantMetaConfigCache = new Map<string, { config: any; timestamp: number }>();
+const TENANT_CONFIG_TTL = 10 * 60 * 1000; // 10 minutes cache to prevent Firestore quota drain
+
 // Multi-tenant resolution: Returns custom organization Meta credentials if saved,
 // dynamically resolving parent Admin's dedicated Meta App if requested by a team user,
 // otherwise falls back to Master platform default
@@ -284,6 +287,12 @@ export async function getEffectiveMetaConfig(organizationId?: string, parentOrgI
   const globalConfig = getMetaConfig();
   if (!organizationId && !parentOrgIdHint) {
     return { ...globalConfig, isCustomTenantApp: false };
+  }
+
+  const cacheKey = `${organizationId || ''}__${parentOrgIdHint || ''}`;
+  const cached = tenantMetaConfigCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < TENANT_CONFIG_TTL) {
+    return cached.config;
   }
 
   try {
@@ -300,7 +309,7 @@ export async function getEffectiveMetaConfig(organizationId?: string, parentOrgI
 
     // 1. Direct check on custom organization credentials
     if (custom && custom.appId && (custom.configId || custom.appSecret || custom.systemUserToken || custom.systemToken)) {
-      return {
+      const resolved = {
         appId: String(custom.appId || globalConfig.appId).trim(),
         appSecret: String(custom.appSecret || globalConfig.appSecret).trim(),
         configId: String(custom.configId || globalConfig.configId).trim(),
@@ -315,6 +324,8 @@ export async function getEffectiveMetaConfig(organizationId?: string, parentOrgI
         isCustomTenantApp: true,
         organizationName: orgData?.name || organizationId,
       };
+      tenantMetaConfigCache.set(cacheKey, { config: resolved, timestamp: Date.now() });
+      return resolved;
     }
 
     // 2. Multi-tier resolution: If this is a team user workspace, resolve parent Admin's dedicated Meta App!
@@ -354,7 +365,7 @@ export async function getEffectiveMetaConfig(organizationId?: string, parentOrgI
           parentCustom.appId &&
           (parentCustom.configId || parentCustom.appSecret || parentCustom.systemUserToken || parentCustom.systemToken)
         ) {
-          return {
+          const resolved = {
             appId: String(parentCustom.appId || globalConfig.appId).trim(),
             appSecret: String(parentCustom.appSecret || globalConfig.appSecret).trim(),
             configId: String(parentCustom.configId || globalConfig.configId).trim(),
@@ -369,14 +380,20 @@ export async function getEffectiveMetaConfig(organizationId?: string, parentOrgI
             isCustomTenantApp: true,
             organizationName: parentOrgData.name || orgData?.name || organizationId,
           };
+          tenantMetaConfigCache.set(cacheKey, { config: resolved, timestamp: Date.now() });
+          return resolved;
         }
       }
     }
-  } catch (err) {
-    console.warn('[MetaConfig] Error fetching tenant metaAppConfig:', err);
+  } catch (err: any) {
+    if (err?.code !== 'resource-exhausted' && !err?.message?.includes('Quota limit exceeded')) {
+      console.warn('[MetaConfig] Error fetching tenant metaAppConfig:', err?.message || err);
+    }
   }
 
-  return { ...globalConfig, isCustomTenantApp: false };
+  const fallback = { ...globalConfig, isCustomTenantApp: false };
+  tenantMetaConfigCache.set(cacheKey, { config: fallback, timestamp: Date.now() });
+  return fallback;
 }
 
 // Handler: Check Meta Configuration status (supports per-tenant custom Meta App, parent Admin dedicated Meta App, or Master default)
@@ -1569,7 +1586,56 @@ export async function executeCampaignDispatchCore(params: {
     }
   }
 
-  // Send messages in batches adhering to Meta rate limits
+  // 1. Pre-queue all recipients in Firestore and in-memory queue store so the UI immediately shows QUEUED progress
+  if (organizationId && campaignId) {
+    try {
+      const initialQueueRecipients: CampaignRecipient[] = recipients.map((r, idx) => {
+        const cleanP = (r.phone || r).replace(/[^0-9]/g, '');
+        const rId = r.id || `rec_${Date.now()}_${idx}_${cleanP.slice(-4)}`;
+        r.id = rId; // retain stable id for subsequent updates in the dispatch loop
+        return {
+          id: rId,
+          campaignId,
+          campaignName: campaignName || template.name,
+          organizationId,
+          phoneNumber: `+${cleanP}`,
+          customerName: r.name || 'Customer',
+          currentStatus: 'queued',
+          variableValues: r.variableValues || variableValues || {},
+          timeline: [
+            {
+              status: 'queued',
+              timestamp: nowIso,
+              description: 'Campaign message queued for automated dispatch',
+            },
+          ],
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        };
+      });
+
+      // Save initial queued state in campaign doc
+      const campDocRef = doc(serverDb, `organizations/${organizationId}/campaigns`, campaignId);
+      updateDoc(campDocRef, {
+        status: 'sending',
+        'stats.total': recipients.length,
+        'stats.queued': recipients.length,
+        'stats.sent': 0,
+        'stats.failed': 0,
+        'stats.delivered': 0,
+        'stats.read': 0,
+        startedAt: nowIso,
+        updatedAt: nowIso,
+      }).catch(() => {});
+
+      // Register all recipients in the in-memory analytics store and persist to subcollection
+      registerRecipients(campaignId, initialQueueRecipients, organizationId);
+    } catch (preQueueErr) {
+      console.warn('[executeCampaignDispatchCore] Error pre-queueing recipients:', preQueueErr);
+    }
+  }
+
+  // 2. Dispatch messages with automated pacing delay adhering to Meta rate limits
   for (const recipient of recipients) {
     const cleanPhone = (recipient.phone || recipient).replace(/[^0-9]/g, '');
     const recipientVariables = recipient.variableValues || variableValues || {};
@@ -1698,10 +1764,30 @@ export async function executeCampaignDispatchCore(params: {
           }
         }
       }
-    } catch (err) {
+    } catch (err: any) {
       failedCount++;
       const netError = err instanceof Error ? err.message : 'Network error';
       errors.push({ phone: cleanPhone, error: netError });
+    }
+
+    // Periodic progress update in Firestore every 5 recipients so live UI shows progress
+    const processedSoFar = sentCount + failedCount;
+    if (organizationId && campaignId && (processedSoFar % 5 === 0 || processedSoFar === recipients.length)) {
+      try {
+        const campDocRef = doc(serverDb, `organizations/${organizationId}/campaigns`, campaignId);
+        updateDoc(campDocRef, {
+          'stats.sent': sentCount,
+          'stats.failed': failedCount,
+          'stats.queued': Math.max(0, recipients.length - processedSoFar),
+          'stats.total': recipients.length,
+          updatedAt: new Date().toISOString(),
+        }).catch(() => {});
+      } catch {}
+    }
+
+    // Pacing delay (500ms) between recipient dispatches to adhere to Meta Cloud API burst rate limit
+    if (recipients.length > 1 && processedSoFar < recipients.length) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
     }
   }
 
@@ -2795,10 +2881,14 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
       let interactiveButtonId = '';
       let interactiveListId = '';
 
-      if (msg.type === 'interactive') {
+      if (msg.type === 'button') {
+        // Quick Reply button click on a WhatsApp Template Message
+        interactiveButtonId = msg.button?.payload || msg.button?.text || '';
+        textBody = msg.button?.text || msg.button?.payload || '';
+      } else if (msg.type === 'interactive') {
         interactiveButtonId = msg.interactive?.button_reply?.id || '';
         interactiveListId = msg.interactive?.list_reply?.id || '';
-        textBody = msg.interactive?.button_reply?.title || msg.interactive?.list_reply?.title || 'Option selected';
+        textBody = msg.interactive?.button_reply?.title || msg.interactive?.list_reply?.title || msg.interactive?.button_reply?.id || 'Option selected';
       } else if (msg.type === 'text') {
         textBody = msg.text?.body || '';
       } else if (msg.type === 'image') {
@@ -2896,12 +2986,17 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
         const isNotPaused = f.status !== 'paused';
         if (isFlowEnabled && isNotPaused) {
           const flowPhone = f.phoneNumberId?.trim();
+          const cleanFlowPhone = flowPhone ? flowPhone.replace(/[^0-9]/g, '') : '';
+          const cleanDisplayPhone = f.displayPhoneNumber ? f.displayPhoneNumber.replace(/[^0-9]/g, '') : '';
           const isPhoneMatch =
             !flowPhone ||
             flowPhone === 'all' ||
             flowPhone === phoneNumberId ||
             flowPhone === matchedPhoneNum ||
-            flowPhone === `+${matchedPhoneNum}`;
+            flowPhone === `+${matchedPhoneNum}` ||
+            cleanFlowPhone === matchedPhoneNum ||
+            cleanFlowPhone === phoneNumberId ||
+            (cleanDisplayPhone && cleanDisplayPhone === matchedPhoneNum);
 
           if (isPhoneMatch) {
             activeFlows.push({ id: d.id, ...f, orgId: targetOrgId });
@@ -2971,11 +3066,45 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
 
         // 2. If not a button transition, match by keyword trigger
         if (targetSteps.length === 0) {
-          for (const flow of activeFlows) {
+          const normalizeVariant = (str: string) =>
+            String(str || '')
+              .toUpperCase()
+              .replace(/CATALOUGE/g, 'CATALOGUE')
+              .replace(/\bCATALOG\b/g, 'CATALOGUE')
+              .replace(/[!?.,;:\-_#*]/g, '')
+              .replace(/\s+/g, ' ')
+              .trim();
+
+          const upperButtonId = (interactiveButtonId || '').trim().toUpperCase();
+          const normIncoming = normalizeVariant(upperText);
+          const normBtnId = normalizeVariant(upperButtonId);
+
+          // Prioritize candidate flows: flows whose name matches the keyword or message come first
+          const sortedFlows = [...activeFlows].sort((a, b) => {
+            const aNameMatch =
+              a.name?.trim().toUpperCase() === upperText ||
+              normalizeVariant(a.name || '') === normIncoming;
+            const bNameMatch =
+              b.name?.trim().toUpperCase() === upperText ||
+              normalizeVariant(b.name || '') === normIncoming;
+            if (aNameMatch && !bNameMatch) return -1;
+            if (!aNameMatch && bNameMatch) return 1;
+            return 0;
+          });
+
+          for (const flow of sortedFlows) {
             const condition = flow.triggerCondition || 'contains';
             const flowKeywords = (flow.keywords || [])
               .map((k: string) => k.trim().toUpperCase())
               .filter((k: string) => k.length > 0);
+
+            // Also include the flow's own name as an automatic trigger candidate
+            if (flow.name && flow.name.trim().length > 0) {
+              const nameKw = flow.name.trim().toUpperCase();
+              if (!flowKeywords.includes(nameKw)) {
+                flowKeywords.push(nameKw);
+              }
+            }
 
             if (condition === 'anything_else') {
               matchedFlow = flow;
@@ -2984,7 +3113,7 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
               break;
             }
 
-            // If no keywords are configured, never auto-reply
+            // If no keywords are configured, skip
             if (flowKeywords.length === 0) {
               continue;
             }
@@ -2993,15 +3122,39 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
             const cleanUpperText = upperText.replace(/[!?.,;:\-_#*]/g, '').trim();
             const isMatch = flowKeywords.some((kw: string) => {
               if (!kw) return false;
-              if (condition === 'exact') return upperText === kw || cleanUpperText === kw;
-              if (condition === 'contains') return upperText.includes(kw) || cleanUpperText.includes(kw);
-              if (condition === 'begins_with') return upperText.startsWith(kw) || cleanUpperText.startsWith(kw);
-              if (condition === 'ends_with') return upperText.endsWith(kw) || cleanUpperText.endsWith(kw);
+              const upperKw = kw.toUpperCase();
+              const normKw = normalizeVariant(kw);
+
+              // Check direct equality or normalized equality (handles spelling variations like CATALOUGE vs CATALOGUE)
+              const matchesDirect =
+                upperText === upperKw ||
+                cleanUpperText === upperKw ||
+                upperButtonId === upperKw ||
+                normIncoming === normKw ||
+                normBtnId === normKw;
+
+              if (matchesDirect) return true;
+
+              if (condition === 'exact') {
+                return matchesDirect;
+              }
+              if (condition === 'begins_with') {
+                return upperText.startsWith(upperKw) || cleanUpperText.startsWith(upperKw) || normIncoming.startsWith(normKw);
+              }
+              if (condition === 'ends_with') {
+                return upperText.endsWith(upperKw) || cleanUpperText.endsWith(upperKw) || normIncoming.endsWith(normKw);
+              }
               if (condition === 'whole_word') {
                 const regex = new RegExp(`\\b${kw}\\b`, 'i');
-                return regex.test(textBody) || regex.test(cleanUpperText);
+                return regex.test(textBody) || regex.test(cleanUpperText) || normIncoming.includes(normKw);
               }
-              return upperText.includes(kw) || cleanUpperText.includes(kw);
+              // default 'contains'
+              return (
+                upperText.includes(upperKw) ||
+                cleanUpperText.includes(upperKw) ||
+                upperButtonId.includes(upperKw) ||
+                normIncoming.includes(normKw)
+              );
             });
 
             if (isMatch) {
@@ -3739,6 +3892,8 @@ export async function handleWebhookPost(req: Request, res: Response) {
         const contactInfo = value.contacts?.[0] || {};
         const senderName = contactInfo.profile?.name || msg.from;
         const textBody =
+          msg.button?.text ||
+          msg.button?.payload ||
           msg.interactive?.button_reply?.title ||
           msg.interactive?.list_reply?.title ||
           msg.text?.body ||

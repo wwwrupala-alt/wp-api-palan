@@ -75,7 +75,7 @@ export const CreateDripCampaignModal: React.FC<CreateDripCampaignModalProps> = (
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [whatsAppAccountId, setWhatsAppAccountId] = useState('');
-  const [triggerType, setTriggerType] = useState<'group_enrollment' | 'all_opted_in' | 'manual_contacts'>('group_enrollment');
+  const [triggerType, setTriggerType] = useState<'group_enrollment' | 'all_opted_in' | 'manual_contacts'>('manual_contacts');
   const [targetGroupId, setTargetGroupId] = useState('');
   const [manualPhoneList, setManualPhoneList] = useState('');
   const [autoEnrollExisting, setAutoEnrollExisting] = useState(true);
@@ -210,7 +210,7 @@ export const CreateDripCampaignModal: React.FC<CreateDripCampaignModalProps> = (
       setName('');
       setDescription('');
       setWhatsAppAccountId(activeAccount?.phoneNumberId || accounts[0]?.phoneNumberId || '');
-      setTriggerType('group_enrollment');
+      setTriggerType('manual_contacts');
       setTargetGroupId(groups[0]?.id || '');
       setManualPhoneList('');
       setAutoEnrollExisting(true);

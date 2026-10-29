@@ -456,26 +456,32 @@ export async function checkAndExecuteDripCampaigns(): Promise<void> {
       }
     }
   } catch (err: any) {
-    console.error('[DripScheduler] Error in checkAndExecuteDripCampaigns:', err);
+    if (err?.message?.includes('Quota') || err?.message?.includes('quota')) {
+      console.warn('[DripScheduler] Firebase Quota reached. Backing off for 15 minutes.');
+      dripQuotaBackoffUntil = Date.now() + 15 * 60 * 1000;
+    } else {
+      console.error('[DripScheduler] Error in checkAndExecuteDripCampaigns:', err);
+    }
   } finally {
     isProcessingDrip = false;
   }
 }
 
+let dripQuotaBackoffUntil = 0;
+
 /**
- * Start background polling loop for drip campaigns (every 20s)
+ * Start background polling loop for drip campaigns (every 60s)
  */
 export function startDripScheduler(): void {
   if (dripInterval) return;
-  console.log('[DripScheduler] Starting background WhatsApp Drip Campaign engine (every 20s)...');
-
-  checkAndExecuteDripCampaigns().catch(() => {});
+  console.log('[DripScheduler] Starting background WhatsApp Drip Campaign engine (every 60s)...');
 
   dripInterval = setInterval(() => {
+    if (Date.now() < dripQuotaBackoffUntil) return;
     checkAndExecuteDripCampaigns().catch((err) => {
       console.warn('[DripScheduler] Interval error:', err);
     });
-  }, 20000);
+  }, 60000);
 }
 
 /**
