@@ -86,15 +86,7 @@ ensureDefaultAccounts().catch((err) => {
 
 export const apiApp = express();
 
-// 1. Normalize route URLs: Ensure req.url begins with /api if a host rewrite (e.g. Vercel) stripped it
-apiApp.use((req, res, next) => {
-  if (!req.url.startsWith('/api') && !req.url.startsWith('/uploads')) {
-    req.url = '/api' + (req.url.startsWith('/') ? req.url : '/' + req.url);
-  }
-  next();
-});
-
-// 2. Parse JSON bodies safely - support both raw stream and pre-parsed bodies (e.g. Vercel serverless)
+// Parse JSON bodies safely - support both raw stream and pre-parsed bodies (e.g. Vercel serverless)
 apiApp.use((req, res, next) => {
   if (req.body && typeof req.body === 'object') {
     return next();
