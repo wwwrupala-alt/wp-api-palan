@@ -671,7 +671,7 @@ export async function handleLookupIdentifier(req: Request, res: Response): Promi
 
 export async function handleTenantAuthLogin(req: Request, res: Response): Promise<void> {
   try {
-    const { identifier, password, expectedRole } = req.body;
+    const { identifier, password, expectedRole } = req.body || {};
     if (!identifier || !password) {
       res.status(400).json({ error: 'Username/Email/Mobile and Password are required.' });
       return;

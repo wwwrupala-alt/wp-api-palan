@@ -86,8 +86,27 @@ ensureDefaultAccounts().catch((err) => {
 
 export const apiApp = express();
 
-// Parse JSON bodies with support for media file uploads (up to 60MB)
-apiApp.use(express.json({ limit: '60mb' }));
+// 1. Normalize route URLs: Ensure req.url begins with /api if a host rewrite (e.g. Vercel) stripped it
+apiApp.use((req, res, next) => {
+  if (!req.url.startsWith('/api') && !req.url.startsWith('/uploads')) {
+    req.url = '/api' + (req.url.startsWith('/') ? req.url : '/' + req.url);
+  }
+  next();
+});
+
+// 2. Parse JSON bodies safely - support both raw stream and pre-parsed bodies (e.g. Vercel serverless)
+apiApp.use((req, res, next) => {
+  if (req.body && typeof req.body === 'object') {
+    return next();
+  }
+  express.json({ limit: '60mb' })(req, res, (err) => {
+    if (err) {
+      console.warn('[apiApp] JSON body parse error:', err.message);
+      return res.status(400).json({ error: 'Invalid JSON request payload: ' + err.message, success: false });
+    }
+    next();
+  });
+});
 apiApp.use(express.urlencoded({ extended: true, limit: '60mb' }));
 
 // Serve uploaded media files publicly from /uploads (supports memory cache, tmpdir, static disk, and fuzzy base prefix matching)
@@ -280,4 +299,19 @@ apiApp.post('/api/meta/simulate-status', async (req, res) => {
     res.status(500).json({ error: err.message || 'Error simulating status' });
   }
 });
+
+// Global Error Handler: Always return structured JSON instead of default HTML 500
+apiApp.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error('[apiApp Global Error Handler]:', err);
+  if (res.headersSent) {
+    return next(err);
+  }
+  const status = typeof err?.status === 'number' ? err.status : 500;
+  return res.status(status).json({
+    error: err?.message || 'Internal server error occurred during request processing.',
+    code: err?.code || 'SERVER_ERROR',
+    success: false,
+  });
+});
+
 
