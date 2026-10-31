@@ -1649,7 +1649,7 @@ export async function executeCampaignDispatchCore(params: {
 
     try {
       const sendUrl = `https://graph.facebook.com/${config.graphVersion}/${phoneNumberId}/messages`;
-      const resMeta = await fetch(sendUrl, {
+      let resMeta = await fetch(sendUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1668,7 +1668,45 @@ export async function executeCampaignDispatchCore(params: {
         }),
       });
 
-      const dataMeta = await resMeta.json();
+      let dataMeta = await resMeta.json();
+
+      // SMART RATE LIMIT PROTECTION (Error 130429 / HTTP 429)
+      // If Meta throttle is hit, pause 3s and retry once automatically before marking failed
+      if (dataMeta?.error?.code === 130429 || resMeta.status === 429) {
+        console.warn(`[Broadcast] Rate limit (130429) detected for ${cleanPhone}. Pausing 3s for throttle cooldown...`);
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+
+        try {
+          const retryRes = await fetch(sendUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              messaging_product: 'whatsapp',
+              recipient_type: 'individual',
+              to: cleanPhone,
+              type: 'template',
+              template: {
+                name: template.name,
+                language: { code: template.language || 'en_US' },
+                ...(formattedComponents.length > 0 ? { components: formattedComponents } : {}),
+              },
+            }),
+          });
+          const retryData = await retryRes.json();
+          if (retryRes.ok && !retryData.error) {
+            resMeta = retryRes;
+            dataMeta = retryData;
+            console.log(`[Broadcast] Auto-retry succeeded for ${cleanPhone} after rate limit pause.`);
+          } else {
+            // Still hitting rate limit, pause 4s to protect subsequent campaign numbers
+            await new Promise((resolve) => setTimeout(resolve, 4000));
+          }
+        } catch {}
+      }
+
       if (resMeta.ok && !dataMeta.error) {
         sentCount++;
         const wamid = dataMeta.messages?.[0]?.id || `wamid_${Date.now()}_${cleanPhone}`;

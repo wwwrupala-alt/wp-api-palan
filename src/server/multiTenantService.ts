@@ -1165,12 +1165,18 @@ export async function handleTenantAuthLogin(req: Request, res: Response): Promis
 // -------------------------------------------------------------
 
 let cachedMasterOverview: { data: any; cachedAt: number } | null = null;
-const MASTER_OVERVIEW_TTL = 15 * 60 * 1000; // 15 minutes cache
+const MASTER_OVERVIEW_TTL = 3000; // 3 seconds short burst cache
+
+export function invalidateMasterAdminCache(): void {
+  cachedMasterOverview = null;
+  cachedMasterAdmins = null;
+}
 
 // Global Overview Metrics
 export async function handleGetMasterOverview(req: Request, res: Response): Promise<void> {
   const now = Date.now();
-  if (cachedMasterOverview && now - cachedMasterOverview.cachedAt < MASTER_OVERVIEW_TTL) {
+  const forceRefresh = req.query.refresh === 'true' || Boolean(req.query.t) || Boolean(req.query.bust);
+  if (!forceRefresh && cachedMasterOverview && now - cachedMasterOverview.cachedAt < MASTER_OVERVIEW_TTL) {
     res.json(cachedMasterOverview.data);
     return;
   }
@@ -1580,12 +1586,13 @@ export async function handleGetMasterCloudUsage(req: Request, res: Response): Pr
 }
 
 let cachedMasterAdmins: { data: any; cachedAt: number } | null = null;
-const MASTER_ADMINS_TTL = 15 * 60 * 1000; // 15 minutes cache
+const MASTER_ADMINS_TTL = 3000; // 3 seconds short burst cache
 
 // List all Admins with tenant stats (Zero extra queries, in-memory aggregation)
 export async function handleGetMasterAdmins(req: Request, res: Response): Promise<void> {
   const now = Date.now();
-  if (cachedMasterAdmins && now - cachedMasterAdmins.cachedAt < MASTER_ADMINS_TTL) {
+  const forceRefresh = req.query.refresh === 'true' || Boolean(req.query.t) || Boolean(req.query.bust);
+  if (!forceRefresh && cachedMasterAdmins && now - cachedMasterAdmins.cachedAt < MASTER_ADMINS_TTL) {
     res.json(cachedMasterAdmins.data);
     return;
   }
@@ -1769,9 +1776,11 @@ export async function handleCreateMasterAdmin(req: Request, res: Response): Prom
       action: 'CREATE_ADMIN',
       targetId: adminUid,
       targetType: 'admin',
-      organizationId: newOrgId,
       details: `Created new Admin ${adminName} (${cleanPhone || cleanEmail}) with fresh 0-data workspace ${newOrgId}`,
     });
+
+    // Invalidate master admin caches immediately so new tenant displays live!
+    invalidateMasterAdminCache();
 
     res.json({
       success: true,
@@ -1955,10 +1964,10 @@ export async function handleUpdateMasterAdmin(req: Request, res: Response): Prom
       action: 'UPDATE_ADMIN',
       targetId: adminId,
       targetType: 'admin',
-      organizationId: orgId,
       details: `Updated Admin ${currentData.displayName}: status=${status || 'unchanged'}, extendedDays=${extendDays || 0}`,
     });
 
+    invalidateMasterAdminCache();
     res.json({ success: true, message: `Admin ${currentData.displayName} updated successfully.` });
   } catch (err: any) {
     console.error('[UpdateAdmin] Error:', err);
@@ -2182,6 +2191,7 @@ export async function handleDeleteMasterAdmin(req: Request, res: Response): Prom
       details: `Permanently deleted Admin ${adminData.displayName} (${adminData.email || adminData.phone}) and workspace ${orgId}`,
     });
 
+    invalidateMasterAdminCache();
     res.json({
       success: true,
       message: `Admin ${adminData.displayName} and their tenant workspace have been deleted.`,

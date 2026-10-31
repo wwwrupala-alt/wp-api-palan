@@ -269,13 +269,14 @@ export const MasterAdminPage: React.FC = () => {
   // Load all master data
   const loadMasterData = async () => {
     setLoading(true);
+    const ts = Date.now();
     try {
       const [ovRes, admRes, plnRes, audRes, featRes] = await Promise.all([
-        fetch('/api/master/overview'),
-        fetch('/api/master/admins'),
-        fetch('/api/master/plans'),
-        fetch('/api/master/audit-logs'),
-        fetch('/api/master/features'),
+        fetch(`/api/master/overview?refresh=true&t=${ts}`),
+        fetch(`/api/master/admins?refresh=true&t=${ts}`),
+        fetch(`/api/master/plans?refresh=true&t=${ts}`),
+        fetch(`/api/master/audit-logs?refresh=true&t=${ts}`),
+        fetch(`/api/master/features?refresh=true&t=${ts}`),
       ]);
 
       if (ovRes.ok) setOverview(await ovRes.json());

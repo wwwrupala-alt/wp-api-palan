@@ -2901,7 +2901,7 @@ async function executeCampaignDispatchCore(params) {
     const customerName = recipient.name || "Customer";
     try {
       const sendUrl = `https://graph.facebook.com/${config.graphVersion}/${phoneNumberId}/messages`;
-      const resMeta = await fetch(sendUrl, {
+      let resMeta = await fetch(sendUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -2919,7 +2919,40 @@ async function executeCampaignDispatchCore(params) {
           }
         })
       });
-      const dataMeta = await resMeta.json();
+      let dataMeta = await resMeta.json();
+      if (dataMeta?.error?.code === 130429 || resMeta.status === 429) {
+        console.warn(`[Broadcast] Rate limit (130429) detected for ${cleanPhone}. Pausing 3s for throttle cooldown...`);
+        await new Promise((resolve) => setTimeout(resolve, 3e3));
+        try {
+          const retryRes = await fetch(sendUrl, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`
+            },
+            body: JSON.stringify({
+              messaging_product: "whatsapp",
+              recipient_type: "individual",
+              to: cleanPhone,
+              type: "template",
+              template: {
+                name: template.name,
+                language: { code: template.language || "en_US" },
+                ...formattedComponents.length > 0 ? { components: formattedComponents } : {}
+              }
+            })
+          });
+          const retryData = await retryRes.json();
+          if (retryRes.ok && !retryData.error) {
+            resMeta = retryRes;
+            dataMeta = retryData;
+            console.log(`[Broadcast] Auto-retry succeeded for ${cleanPhone} after rate limit pause.`);
+          } else {
+            await new Promise((resolve) => setTimeout(resolve, 4e3));
+          }
+        } catch {
+        }
+      }
       if (resMeta.ok && !dataMeta.error) {
         sentCount++;
         const wamid = dataMeta.messages?.[0]?.id || `wamid_${Date.now()}_${cleanPhone}`;
@@ -7775,10 +7808,15 @@ async function handleTenantAuthLogin(req, res) {
   }
 }
 var cachedMasterOverview = null;
-var MASTER_OVERVIEW_TTL = 15 * 60 * 1e3;
+var MASTER_OVERVIEW_TTL = 3e3;
+function invalidateMasterAdminCache() {
+  cachedMasterOverview = null;
+  cachedMasterAdmins = null;
+}
 async function handleGetMasterOverview(req, res) {
   const now = Date.now();
-  if (cachedMasterOverview && now - cachedMasterOverview.cachedAt < MASTER_OVERVIEW_TTL) {
+  const forceRefresh = req.query.refresh === "true" || Boolean(req.query.t) || Boolean(req.query.bust);
+  if (!forceRefresh && cachedMasterOverview && now - cachedMasterOverview.cachedAt < MASTER_OVERVIEW_TTL) {
     res.json(cachedMasterOverview.data);
     return;
   }
@@ -8135,10 +8173,11 @@ async function handleGetMasterCloudUsage(req, res) {
   }
 }
 var cachedMasterAdmins = null;
-var MASTER_ADMINS_TTL = 15 * 60 * 1e3;
+var MASTER_ADMINS_TTL = 3e3;
 async function handleGetMasterAdmins(req, res) {
   const now = Date.now();
-  if (cachedMasterAdmins && now - cachedMasterAdmins.cachedAt < MASTER_ADMINS_TTL) {
+  const forceRefresh = req.query.refresh === "true" || Boolean(req.query.t) || Boolean(req.query.bust);
+  if (!forceRefresh && cachedMasterAdmins && now - cachedMasterAdmins.cachedAt < MASTER_ADMINS_TTL) {
     res.json(cachedMasterAdmins.data);
     return;
   }
@@ -8296,9 +8335,9 @@ async function handleCreateMasterAdmin(req, res) {
       action: "CREATE_ADMIN",
       targetId: adminUid,
       targetType: "admin",
-      organizationId: newOrgId,
       details: `Created new Admin ${adminName} (${cleanPhone || cleanEmail}) with fresh 0-data workspace ${newOrgId}`
     });
+    invalidateMasterAdminCache();
     res.json({
       success: true,
       message: `Admin ${adminName} created successfully with a clean, fresh 0-data workspace.`,
@@ -8462,9 +8501,9 @@ async function handleUpdateMasterAdmin(req, res) {
       action: "UPDATE_ADMIN",
       targetId: adminId,
       targetType: "admin",
-      organizationId: orgId,
       details: `Updated Admin ${currentData.displayName}: status=${status || "unchanged"}, extendedDays=${extendDays || 0}`
     });
+    invalidateMasterAdminCache();
     res.json({ success: true, message: `Admin ${currentData.displayName} updated successfully.` });
   } catch (err) {
     console.error("[UpdateAdmin] Error:", err);
@@ -8636,6 +8675,7 @@ async function handleDeleteMasterAdmin(req, res) {
       organizationId: orgId,
       details: `Permanently deleted Admin ${adminData.displayName} (${adminData.email || adminData.phone}) and workspace ${orgId}`
     });
+    invalidateMasterAdminCache();
     res.json({
       success: true,
       message: `Admin ${adminData.displayName} and their tenant workspace have been deleted.`
