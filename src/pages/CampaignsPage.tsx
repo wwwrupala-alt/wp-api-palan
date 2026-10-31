@@ -915,7 +915,7 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800">
-                {filteredCampaigns.map((c) => {
+                {paginatedCampaigns.map((c) => {
                   const isSelected = selectedCampaignIds.includes(c.id);
                   return (
                     <tr
@@ -1215,6 +1215,61 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
               </tbody>
             </table>
           </div>
+
+          {/* Pagination Controls & Rows Per Page */}
+          {filteredCampaigns.length > 0 && (
+            <div className="p-3 border-t border-neutral-200 dark:border-neutral-800 flex flex-wrap items-center justify-between gap-3 text-xs text-neutral-500 bg-neutral-50/40 dark:bg-neutral-800/20">
+              <div className="flex items-center space-x-3">
+                <span>
+                  Showing {Math.min((currentPage - 1) * pageSize + 1, filteredCampaigns.length)} to{' '}
+                  {Math.min(currentPage * pageSize, filteredCampaigns.length)} of{' '}
+                  {filteredCampaigns.length} campaigns
+                </span>
+
+                <div className="flex items-center space-x-1.5 pl-3 border-l border-neutral-200 dark:border-neutral-700">
+                  <span className="text-[11px] font-medium text-neutral-400">Rows:</span>
+                  <select
+                    aria-label="Rows per page selector in campaigns table"
+                    value={pageSize || 10}
+                    onChange={(e) => {
+                      setPageSize(Number(e.target.value) || 10);
+                      setCurrentPage(1);
+                    }}
+                    className="px-2 py-1 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs font-semibold text-neutral-800 dark:text-neutral-200 cursor-pointer focus:outline-hidden"
+                  >
+                    <option value={10}>10</option>
+                    <option value={25}>25</option>
+                    <option value={50}>50</option>
+                    <option value={100}>100</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                  className="p-1.5 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 disabled:opacity-40 hover:bg-neutral-100 dark:hover:bg-neutral-700 cursor-pointer transition-colors"
+                  title="Previous page"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <span className="font-semibold text-neutral-800 dark:text-neutral-200">
+                  Page {currentPage} of {totalPages}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={currentPage === totalPages}
+                  className="p-1.5 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 disabled:opacity-40 hover:bg-neutral-100 dark:hover:bg-neutral-700 cursor-pointer transition-colors"
+                  title="Next page"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

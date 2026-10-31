@@ -29,6 +29,7 @@ import {
   ArrowRight,
   Smartphone,
   Eye,
+  ArrowLeft,
   Variable,
   UserCheck,
   Image as ImageIcon,
@@ -48,6 +49,8 @@ import {
   updateCampaignRecipientStatus,
   reconcileCampaignDelivery,
 } from '../lib/services.ts';
+import { doc, updateDoc } from 'firebase/firestore';
+import { db } from '../lib/firebase.ts';
 import {
   calculateMessageCharge,
   resolveTemplateCategory,
@@ -592,10 +595,10 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
   useEffect(() => {
     if (!autoSyncDeliveries || !organization?.id || !selectedCampaignId) return;
 
-    // Periodically poll for real Meta Webhook status events every 15 seconds
+    // Periodically poll for real Meta Webhook status events fast every 3 seconds
     const interval = setInterval(() => {
       refreshReportingFromMeta(false).catch(() => {});
-    }, 15000);
+    }, 3000);
 
     return () => clearInterval(interval);
   }, [autoSyncDeliveries, organization?.id, selectedCampaignId]);
@@ -629,6 +632,51 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
         'Delivery confirmed on recipient handset'
       );
       toast.showSuccess('Status Updated', `Message to ${r.customerName} marked as Delivered`);
+      refreshReportingFromMeta(false);
+    } catch (err: any) {
+      toast.showError('Update Failed', err?.message || 'Could not update status');
+    }
+  };
+
+  const handleMarkSingleRead = async (r: CampaignRecipient) => {
+    if (!organization?.id || !selectedCampaignId) return;
+    try {
+      await updateCampaignRecipientStatus(
+        organization.id,
+        selectedCampaignId,
+        r.id,
+        'read',
+        'Message read by recipient (blue ticks)'
+      );
+      toast.showSuccess('Status Updated', `Message to ${r.customerName || r.phoneNumber} marked as Read (Blue Ticks)`);
+      refreshReportingFromMeta(false);
+    } catch (err: any) {
+      toast.showError('Update Failed', err?.message || 'Could not update status');
+    }
+  };
+
+  const handleMarkSingleReplied = async (r: CampaignRecipient) => {
+    if (!organization?.id || !selectedCampaignId) return;
+    try {
+      const nowIso = new Date().toISOString();
+      const recRef = doc(db, 'organizations', organization.id, 'campaigns', selectedCampaignId, 'recipients', r.id);
+      await updateDoc(recRef, {
+        hasReplied: true,
+        repliedAt: nowIso,
+        currentStatus: 'read',
+        readAt: r.readAt || nowIso,
+        updatedAt: nowIso,
+        timeline: [
+          ...(r.timeline || []),
+          {
+            status: 'replied',
+            timestamp: nowIso,
+            description: 'Customer replied to campaign message',
+          },
+        ],
+      });
+      toast.showSuccess('Status Updated', `Customer reply recorded for ${r.customerName || r.phoneNumber}`);
+      refreshReportingFromMeta(false);
     } catch (err: any) {
       toast.showError('Update Failed', err?.message || 'Could not update status');
     }
@@ -796,35 +844,49 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
     <div className="p-3 sm:p-4 space-y-4 max-w-7xl mx-auto animate-fadeIn">
       {/* Top Segmented Mode Switcher: Broadcast Campaigns vs Drip Campaigns */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-neutral-200 dark:border-neutral-800">
-        <div className="inline-flex p-1 rounded-2xl bg-neutral-100 dark:bg-neutral-800/90 border border-neutral-200 dark:border-neutral-700/80 shadow-2xs">
-          <button
-            type="button"
-            onClick={() => setAnalyticsMode('broadcast')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center space-x-2 cursor-pointer ${
-              analyticsMode === 'broadcast'
-                ? 'bg-white dark:bg-neutral-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
-                : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white'
-            }`}
-          >
-            <Send className="w-3.5 h-3.5" />
-            <span>Broadcast Campaigns Analytics</span>
-          </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {onNavigateToCampaigns && (
+            <button
+              type="button"
+              onClick={onNavigateToCampaigns}
+              className="inline-flex items-center space-x-1.5 px-3 py-2 rounded-2xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-xs font-bold text-neutral-800 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 shadow-2xs transition-all cursor-pointer group shrink-0"
+              title="Return to Campaigns List"
+            >
+              <ArrowLeft className="w-3.5 h-3.5 text-neutral-500 group-hover:-translate-x-0.5 transition-transform" />
+              <span>Back to Campaigns</span>
+            </button>
+          )}
 
-          <button
-            type="button"
-            onClick={() => setAnalyticsMode('drip')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center space-x-2 cursor-pointer ${
-              analyticsMode === 'drip'
-                ? 'bg-white dark:bg-neutral-900 text-amber-600 dark:text-amber-400 shadow-xs'
-                : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white'
-            }`}
-          >
-            <Workflow className="w-3.5 h-3.5" />
-            <span>Drip Sequence Analytics (Step-by-Step)</span>
-            <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300">
-              Pro
-            </span>
-          </button>
+          <div className="inline-flex p-1 rounded-2xl bg-neutral-100 dark:bg-neutral-800/90 border border-neutral-200 dark:border-neutral-700/80 shadow-2xs">
+            <button
+              type="button"
+              onClick={() => setAnalyticsMode('broadcast')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center space-x-2 cursor-pointer ${
+                analyticsMode === 'broadcast'
+                  ? 'bg-white dark:bg-neutral-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
+                  : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white'
+              }`}
+            >
+              <Send className="w-3.5 h-3.5" />
+              <span>Broadcast Campaigns Analytics</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setAnalyticsMode('drip')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center space-x-2 cursor-pointer ${
+                analyticsMode === 'drip'
+                  ? 'bg-white dark:bg-neutral-900 text-amber-600 dark:text-amber-400 shadow-xs'
+                  : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white'
+              }`}
+            >
+              <Workflow className="w-3.5 h-3.5" />
+              <span>Drip Sequence Analytics (Step-by-Step)</span>
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+                Pro
+              </span>
+            </button>
+          </div>
         </div>
 
         <div className="flex items-center space-x-2 text-xs text-neutral-500">
@@ -1003,6 +1065,18 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
               >
                 {currentCampaign?.status || 'DRAFT'}
               </span>
+
+              {onNavigateToCampaigns && (
+                <button
+                  type="button"
+                  onClick={onNavigateToCampaigns}
+                  className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-neutral-50 hover:bg-neutral-100 dark:bg-neutral-800 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-300 text-[11px] font-semibold transition-colors cursor-pointer ml-1"
+                  title="Return to Campaigns List"
+                >
+                  <ArrowLeft className="w-3 h-3 text-neutral-500" />
+                  <span>Return to Campaigns</span>
+                </button>
+              )}
             </div>
 
             <div className="flex flex-wrap items-center gap-3 sm:gap-4 text-xs text-neutral-600 dark:text-neutral-400">
@@ -2030,6 +2104,32 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
                               >
                                 <CheckCheck className="w-3 h-3 text-purple-600 dark:text-purple-400" />
                                 <span>Mark Delivered</span>
+                              </button>
+                            )}
+
+                            {/* 1-Click Mark Read if customer opened message */}
+                            {r.currentStatus !== 'read' && (
+                              <button
+                                type="button"
+                                onClick={() => handleMarkSingleRead(r)}
+                                title="Mark message as Read (Blue Ticks)"
+                                className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border border-emerald-200 dark:border-emerald-800/80 bg-emerald-50 dark:bg-emerald-950/40 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 transition-colors cursor-pointer"
+                              >
+                                <Eye className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                                <span>Mark Read</span>
+                              </button>
+                            )}
+
+                            {/* 1-Click Mark Replied if customer replied */}
+                            {!r.hasReplied && (
+                              <button
+                                type="button"
+                                onClick={() => handleMarkSingleReplied(r)}
+                                title="Record Customer Reply"
+                                className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg border border-amber-200 dark:border-amber-800/80 bg-amber-50 dark:bg-amber-950/40 text-[11px] font-semibold text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/60 transition-colors cursor-pointer"
+                              >
+                                <MessageSquare className="w-3 h-3 text-amber-600 dark:text-amber-400" />
+                                <span>Mark Replied</span>
                               </button>
                             )}
 

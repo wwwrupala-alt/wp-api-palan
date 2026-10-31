@@ -2752,6 +2752,11 @@ export async function correlateInboundReplyToCampaignsAndDrips(
           if (r.hasReplied || r.repliedAt) repliedCount++;
         });
 
+        const deliveryRate = totalCount > 0 ? Number(((deliveredCount / totalCount) * 100).toFixed(1)) : 0;
+        const readRate = deliveredCount > 0 ? Number(((readCount / deliveredCount) * 100).toFixed(1)) : 0;
+        const failureRate = totalCount > 0 ? Number(((failedCount / totalCount) * 100).toFixed(1)) : 0;
+        const replyRate = deliveredCount > 0 ? Number(((repliedCount / deliveredCount) * 100).toFixed(1)) : 0;
+
         await updateDoc(doc(serverDb, `organizations/${organizationId}/campaigns`, campId), {
           stats: {
             total: totalCount,
@@ -2760,6 +2765,10 @@ export async function correlateInboundReplyToCampaignsAndDrips(
             read: readCount,
             failed: failedCount,
             replied: repliedCount,
+            deliveryRate,
+            readRate,
+            failureRate,
+            replyRate,
           },
           updatedAt: nowIso,
         }).catch(() => {});

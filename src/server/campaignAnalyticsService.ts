@@ -610,9 +610,92 @@ export async function reconcileAndGetCampaignAnalytics(
 
     let updatedAny = false;
     for (const r of allRecipients) {
-      // Strictly do NOT fake delivery with arbitrary timers (elapsedSec > 5).
-      // Delivery status must strictly come from genuine Meta WhatsApp Cloud API webhooks.
-      // If a message was sent but not yet acknowledged as delivered by the handset, it remains 'sent'.
+      // 1. Cross-check wamidTracker for genuine Meta Webhook read/delivered receipts
+      if (r.whatsappMessageId) {
+        try {
+          const trSnap = await getDoc(doc(serverDb, 'wamidTracker', r.whatsappMessageId));
+          if (trSnap.exists()) {
+            const tr = trSnap.data() as any;
+            if (tr.status === 'read' && r.currentStatus !== 'read') {
+              r.currentStatus = 'read';
+              r.readAt = r.readAt || tr.updatedAt || nowIso;
+              if (!r.deliveredAt) r.deliveredAt = tr.deliveredAt || r.readAt;
+              r.updatedAt = nowIso;
+              r.timeline = r.timeline || [];
+              if (!r.timeline.some((t) => t.status === 'read')) {
+                r.timeline.push({
+                  status: 'read',
+                  timestamp: r.readAt,
+                  description: 'Message read by recipient (blue ticks)',
+                });
+              }
+              updatedAny = true;
+            } else if (tr.status === 'delivered' && r.currentStatus === 'sent') {
+              r.currentStatus = 'delivered';
+              r.deliveredAt = r.deliveredAt || tr.updatedAt || nowIso;
+              r.updatedAt = nowIso;
+              r.timeline = r.timeline || [];
+              if (!r.timeline.some((t) => t.status === 'delivered')) {
+                r.timeline.push({
+                  status: 'delivered',
+                  timestamp: r.deliveredAt,
+                  description: 'Delivery confirmed on recipient handset',
+                });
+              }
+              updatedAny = true;
+            }
+          }
+        } catch {}
+      }
+
+      // 2. Cross-check inbox messages: if customer sent a reply, mark hasReplied and read
+      if (!r.hasReplied && r.phoneNumber) {
+        const cleanPhone = String(r.phoneNumber).replace(/[^0-9]/g, '');
+        try {
+          const inboxCol = collection(serverDb, `organizations/${targetOrgId}/inbox`);
+          const inSnap = await getDocs(inboxCol).catch(() => null);
+          if (inSnap && !inSnap.empty) {
+            for (const inDoc of inSnap.docs) {
+              const inData = inDoc.data() as any;
+              const inPhone = String(inData.customerPhone || inData.from || '').replace(/[^0-9]/g, '');
+              if (inPhone === cleanPhone || inPhone.endsWith(cleanPhone) || cleanPhone.endsWith(inPhone)) {
+                r.hasReplied = true;
+                r.repliedAt = r.repliedAt || inData.timestamp || nowIso;
+                if (r.currentStatus !== 'read') {
+                  r.currentStatus = 'read';
+                  r.readAt = r.readAt || r.repliedAt;
+                }
+                r.updatedAt = nowIso;
+                r.timeline = r.timeline || [];
+                if (!r.timeline.some((t) => t.status === 'replied')) {
+                  r.timeline.push({
+                    status: 'replied',
+                    timestamp: r.repliedAt,
+                    description: `Customer replied: "${(inData.text || inData.body || 'Reply').slice(0, 60)}"`,
+                  });
+                }
+                updatedAny = true;
+                break;
+              }
+            }
+          }
+        } catch {}
+      }
+
+      if (updatedAny) {
+        updateDoc(
+          doc(serverDb, `organizations/${targetOrgId}/campaigns/${campaignId}/recipients`, r.id),
+          {
+            currentStatus: r.currentStatus,
+            readAt: r.readAt || null,
+            deliveredAt: r.deliveredAt || null,
+            hasReplied: Boolean(r.hasReplied),
+            repliedAt: r.repliedAt || null,
+            timeline: r.timeline,
+            updatedAt: nowIso,
+          }
+        ).catch(() => {});
+      }
     }
 
     if (updatedAny) {
