@@ -131,11 +131,28 @@ export const WhatsAppAccountsPage: React.FC<WhatsAppAccountsPageProps> = ({
   };
 
   const handleDelete = async (accId: string) => {
-    if (!window.confirm('Are you sure you want to remove this WhatsApp account from this workspace?')) return;
+    const targetAcc = accounts.find((a) => a.id === accId);
+    const phoneDisplay = targetAcc?.displayPhoneNumber || targetAcc?.name || 'this WhatsApp account';
+
+    if (
+      !window.confirm(
+        `Are you sure you want to completely delete ${phoneDisplay} from this workspace?\n\n` +
+          `⚠️ Storage Auto-Purge & Cascade Cleanup:\n` +
+          `• All campaigns created with this number will be deleted from storage.\n` +
+          `• All recipient tracking & delivery history will be permanently purged.\n` +
+          `• Associated media files will be wiped from disk storage.\n\n` +
+          `Do you want to proceed?`
+      )
+    )
+      return;
+
     setActionLoading(accId);
     try {
-      await deleteAccount(accId);
-      toast.showSuccess('Account Removed', 'WhatsApp account deleted from workspace.');
+      const res = await deleteAccount(accId, { phoneNumberId: targetAcc?.phoneNumberId });
+      const summaryMsg = res.deletedCampaignsCount
+        ? `Deleted account along with ${res.deletedCampaignsCount} campaigns, ${res.deletedRecipientsCount || 0} tracking records, and media files.`
+        : 'WhatsApp account and related storage data cleared.';
+      toast.showSuccess('Account & Data Purged', summaryMsg);
     } catch (err) {
       toast.showError('Delete Failed', err);
     } finally {

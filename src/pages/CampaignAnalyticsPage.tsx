@@ -587,27 +587,18 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
     }
   };
 
-  // Auto-Sync Deliveries: Automatically reconciles pending sent messages to delivered
-  // in the background after a short grace period, so users don't have to manually click each time
+  // Auto-Sync Deliveries: Polls real Meta Webhook events in the background
+  // NEVER fabricates synthetic deliveries; only reflects genuine handset delivery confirmed by Meta
   useEffect(() => {
     if (!autoSyncDeliveries || !organization?.id || !selectedCampaignId) return;
-    if (pendingSentRecipients.length === 0 || reconciling) return;
 
-    const timer = setTimeout(async () => {
-      if (pendingSentRecipients.length > 0 && !reconciling) {
-        const ids = pendingSentRecipients.map((r) => r.id);
-        try {
-          await reconcileCampaignDelivery(organization.id, selectedCampaignId, ids);
-          await refreshReportingFromMeta(false);
-          console.log(`[Auto-Sync] Automatically verified & reconciled ${ids.length} deliveries.`);
-        } catch (err) {
-          console.warn('[Auto-Sync] Auto-reconcile error:', err);
-        }
-      }
-    }, 8000);
+    // Periodically poll for real Meta Webhook status events every 15 seconds
+    const interval = setInterval(() => {
+      refreshReportingFromMeta(false).catch(() => {});
+    }, 15000);
 
-    return () => clearTimeout(timer);
-  }, [autoSyncDeliveries, organization?.id, selectedCampaignId, pendingSentRecipients.length, reconciling]);
+    return () => clearInterval(interval);
+  }, [autoSyncDeliveries, organization?.id, selectedCampaignId]);
 
   const handleReconcilePendingToDelivered = async () => {
     if (!organization?.id || !selectedCampaignId || pendingSentRecipients.length === 0) return;

@@ -30,19 +30,53 @@ export async function checkAndExecuteDripCampaigns(): Promise<void> {
     const nowIso = new Date().toISOString();
     const nowMs = Date.now();
 
-    // 1. Query all active drip campaigns across tenant organizations
-    const activeDripsQuery = query(
-      collectionGroup(serverDb, 'drip_campaigns'),
-      where('status', '==', 'active')
-    );
+    // 1. Query all active drip campaigns across tenant organizations (Resilient index-free fallback)
+    let candidateDripDocs: Array<any> = [];
+    try {
+      const activeDripsQuery = query(
+        collectionGroup(serverDb, 'drip_campaigns'),
+        where('status', '==', 'active')
+      );
+      const dripsSnapshot = await getDocs(activeDripsQuery);
+      candidateDripDocs = dripsSnapshot.docs;
+    } catch (err: any) {
+      if (err?.code === 'failed-precondition' || err?.message?.includes('index') || err?.message?.includes('COLLECTION_GROUP')) {
+        // Fallback: Query per active organization directly without requiring COLLECTION_GROUP_ASC index
+        const orgsSnap = await getDocs(collection(serverDb, 'organizations')).catch(() => null);
+        if (orgsSnap && !orgsSnap.empty) {
+          for (const orgDoc of orgsSnap.docs) {
+            const orgId = orgDoc.id;
+            const dripSnap1 = await getDocs(
+              query(
+                collection(serverDb, `organizations/${orgId}/drip_campaigns`),
+                where('status', '==', 'active')
+              )
+            ).catch(() => null);
+            if (dripSnap1 && !dripSnap1.empty) {
+              candidateDripDocs.push(...dripSnap1.docs);
+            }
+            const dripSnap2 = await getDocs(
+              query(
+                collection(serverDb, `organizations/${orgId}/dripCampaigns`),
+                where('status', '==', 'active')
+              )
+            ).catch(() => null);
+            if (dripSnap2 && !dripSnap2.empty) {
+              candidateDripDocs.push(...dripSnap2.docs);
+            }
+          }
+        }
+      } else {
+        throw err;
+      }
+    }
 
-    const dripsSnapshot = await getDocs(activeDripsQuery);
-    if (dripsSnapshot.empty) {
+    if (candidateDripDocs.length === 0) {
       isProcessingDrip = false;
       return;
     }
 
-    for (const dripDoc of dripsSnapshot.docs) {
+    for (const dripDoc of candidateDripDocs) {
       const camp = dripDoc.data();
       const pathSegments = dripDoc.ref.path.split('/');
       const orgId = pathSegments[1] || camp.organizationId;

@@ -279,6 +279,18 @@ export function registerRecipients(
 }
 
 /**
+ * Clears in-memory recipients and indexes for a deleted campaign.
+ */
+export function clearRecipientStoreForCampaign(campaignId: string) {
+  const existing = recipientsStore.get(campaignId) || [];
+  for (const r of existing) {
+    if (r.whatsappMessageId) wamidIndex.delete(r.whatsappMessageId);
+  }
+  recipientsStore.delete(campaignId);
+}
+
+
+/**
  * Processes an incoming WhatsApp webhook status update idempotently.
  * Status precedence: queued (0) < sent (1) < delivered (2) < read (3); failed is terminal.
  */
@@ -598,52 +610,9 @@ export async function reconcileAndGetCampaignAnalytics(
 
     let updatedAny = false;
     for (const r of allRecipients) {
-      if (r.currentStatus === 'sent' || r.currentStatus === 'queued') {
-        let isDelivered = false;
-
-        if (r.whatsappMessageId && token) {
-          try {
-            const metaRes = await fetch(
-              `https://graph.facebook.com/v22.0/${encodeURIComponent(r.whatsappMessageId)}?access_token=${token}`
-            );
-            if (metaRes.ok) {
-              const metaMsgData = await metaRes.json();
-              if (metaMsgData?.id) {
-                isDelivered = true;
-              }
-            }
-          } catch (metaErr) {
-            console.warn('[AnalyticsService] Meta Graph API check error:', metaErr);
-          }
-        }
-
-        const sentTime = r.sentAt ? new Date(r.sentAt).getTime() : 0;
-        const elapsedSec = (Date.now() - sentTime) / 1000;
-        if (isDelivered || (r.sentAt && elapsedSec > 5 && !r.failedAt)) {
-          r.currentStatus = 'delivered';
-          r.deliveredAt = r.deliveredAt || nowIso;
-          r.updatedAt = nowIso;
-          r.timeline = r.timeline || [];
-          if (!r.timeline.some((t) => t.status === 'delivered')) {
-            r.timeline.push({
-              status: 'delivered',
-              timestamp: nowIso,
-              description: 'Delivery confirmed via Meta Graph API verification',
-            });
-          }
-          updatedAny = true;
-
-          updateDoc(
-            doc(serverDb, `organizations/${targetOrgId}/campaigns/${campaignId}/recipients`, r.id),
-            {
-              currentStatus: 'delivered',
-              deliveredAt: r.deliveredAt,
-              updatedAt: nowIso,
-              timeline: r.timeline,
-            }
-          ).catch(() => {});
-        }
-      }
+      // Strictly do NOT fake delivery with arbitrary timers (elapsedSec > 5).
+      // Delivery status must strictly come from genuine Meta WhatsApp Cloud API webhooks.
+      // If a message was sent but not yet acknowledged as delivered by the handset, it remains 'sent'.
     }
 
     if (updatedAny) {

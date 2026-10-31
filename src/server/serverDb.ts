@@ -57,13 +57,14 @@ const require = createRequire(import.meta.url);
 
 // Embedded static Firebase configuration (guaranteed to work in serverless/Vercel)
 const EMBEDDED_FIREBASE_CONFIG = {
-  projectId: 'utility-sky-7f6jr',
-  appId: '1:1086191221773:web:a078831e5e4352de1da944',
-  apiKey: 'AIzaSyB0w7QFly4zIu90w9OqLKUia8Sai53h1lA',
-  authDomain: 'utility-sky-7f6jr.firebaseapp.com',
-  firestoreDatabaseId: 'ai-studio-eb8ad6af-49f2-4fff-9c59-69f62d1e9a05',
-  storageBucket: 'utility-sky-7f6jr.firebasestorage.app',
-  messagingSenderId: '1086191221773',
+  projectId: 'whatsap-api-saas',
+  appId: '1:208644645020:web:4ef4757f87172b439a0d59',
+  apiKey: 'AIzaSyDCkXsb4LgjdscXR3Nn6u5qxRJ8BFAG6Qk',
+  authDomain: 'whatsap-api-saas.firebaseapp.com',
+  firestoreDatabaseId: '(default)',
+  storageBucket: 'whatsap-api-saas.firebasestorage.app',
+  messagingSenderId: '208644645020',
+  measurementId: 'G-PB602S59T4',
 };
 
 let firebaseConfig: any = { ...EMBEDDED_FIREBASE_CONFIG };
@@ -87,13 +88,18 @@ try {
 
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
+const dbId =
+  firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== '(default)'
+    ? firebaseConfig.firestoreDatabaseId
+    : undefined;
+
 export const serverDb = initializeFirestore(
   app,
   {
     experimentalForceLongPolling: true,
     localCache: memoryLocalCache(),
   },
-  firebaseConfig.firestoreDatabaseId
+  dbId
 );
 
 export { doc, setDoc, getDoc, getDocs, collection, query, where, updateDoc, deleteDoc };

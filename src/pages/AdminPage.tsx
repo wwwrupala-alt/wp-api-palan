@@ -17,6 +17,11 @@ import {
   ArrowRight,
   Send,
   Server,
+  Database,
+  Trash2,
+  HardDrive,
+  Clock,
+  Sparkles,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -35,10 +40,25 @@ export const AdminPage: React.FC = () => {
   const { refreshMetaStatus } = useWhatsAppAccounts();
   const toast = useToast();
 
-  const [activeTab, setActiveTab] = useState<'meta_app' | 'health' | 'logs'>('meta_app');
+  const [activeTab, setActiveTab] = useState<'meta_app' | 'health' | 'logs' | 'storage'>('meta_app');
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [copiedToken, setCopiedToken] = useState(false);
   const [copiedRedirect, setCopiedRedirect] = useState(false);
+
+  // Storage & Data Retention State
+  const [storageMetrics, setStorageMetrics] = useState<{
+    mediaFilesCount: number;
+    totalMediaSizeBytes: number;
+    totalMediaSizeMB: string;
+    totalCampaignsCount: number;
+    settings?: any;
+  } | null>(null);
+  const [storageLoading, setStorageLoading] = useState(false);
+  const [purging, setPurging] = useState(false);
+  const [retentionDaysInput, setRetentionDaysInput] = useState(30);
+  const [autoPurgeEnabledInput, setAutoPurgeEnabledInput] = useState(true);
+  const [cascadeDeleteInput, setCascadeDeleteInput] = useState(true);
+  const [savingStorageSettings, setSavingStorageSettings] = useState(false);
 
   // Check if this tenant has their own custom dedicated Meta App
   const hasCustomMetaApp = Boolean(organization?.metaAppConfig?.appId);
@@ -263,6 +283,97 @@ export const AdminPage: React.FC = () => {
     }
   };
 
+  const fetchStorageMetrics = async () => {
+    setStorageLoading(true);
+    try {
+      const res = await fetch('/api/storage/metrics', {
+        headers: { 'x-organization-id': organization?.id || 'org_master_platform' },
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setStorageMetrics(data);
+        if (data.settings) {
+          setRetentionDaysInput(data.settings.retentionDays ?? 30);
+          setAutoPurgeEnabledInput(data.settings.autoPurgeEnabled ?? true);
+          setCascadeDeleteInput(data.settings.cascadeDeleteOnAccountRemove ?? true);
+        }
+      }
+    } catch {}
+    finally {
+      setStorageLoading(false);
+    }
+  };
+
+  const handleSaveStorageSettings = async () => {
+    setSavingStorageSettings(true);
+    try {
+      const res = await fetch('/api/storage/settings', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-organization-id': organization?.id || 'org_master_platform',
+        },
+        body: JSON.stringify({
+          retentionDays: retentionDaysInput,
+          autoPurgeEnabled: autoPurgeEnabledInput,
+          cascadeDeleteOnAccountRemove: cascadeDeleteInput,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        toast.showSuccess('Retention Policy Saved', 'Data storage & auto-cleanup policy updated.');
+        fetchStorageMetrics();
+      } else {
+        toast.showError('Save Failed', data.error || 'Failed to update storage settings');
+      }
+    } catch (err: any) {
+      toast.showError('Save Failed', err.message);
+    } finally {
+      setSavingStorageSettings(false);
+    }
+  };
+
+  const handlePurgeNow = async () => {
+    if (
+      !window.confirm(
+        `Are you sure you want to run storage purge now?\n\n` +
+          `• Media uploads and tracking logs older than ${retentionDaysInput} days will be permanently deleted from disk & database storage.\n` +
+          `• This will immediately free up space and optimize quota.`
+      )
+    )
+      return;
+
+    setPurging(true);
+    try {
+      const res = await fetch('/api/storage/purge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ retentionDays: retentionDaysInput }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        const freedMB = (data.freedBytes / (1024 * 1024)).toFixed(2);
+        toast.showSuccess(
+          'Storage Purged',
+          `Successfully freed ${freedMB} MB across ${data.purgedMediaFilesCount} old media files.`
+        );
+        fetchStorageMetrics();
+      } else {
+        toast.showError('Purge Failed', data.error || 'Error executing purge');
+      }
+    } catch (err: any) {
+      toast.showError('Purge Failed', err.message);
+    } finally {
+      setPurging(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'storage') {
+      fetchStorageMetrics();
+    }
+  }, [activeTab]);
+
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-7xl mx-auto animate-fadeIn">
       {/* Header */}
@@ -348,6 +459,24 @@ export const AdminPage: React.FC = () => {
         >
           <Terminal className="w-4 h-4" />
           <span>Meta Live Webhook Logs ({webhookLogs.length})</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setActiveTab('storage');
+            fetchStorageMetrics();
+          }}
+          className={`pb-3 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer shrink-0 ${
+            activeTab === 'storage'
+              ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400 font-semibold'
+              : 'border-transparent text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-300'
+          }`}
+        >
+          <Database className="w-4 h-4 text-indigo-500" />
+          <span>Storage &amp; Auto-Purge Lifecycle</span>
+          <span className="px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-800">
+            AUTO-CLEAN
+          </span>
         </button>
       </div>
 
@@ -904,6 +1033,171 @@ export const AdminPage: React.FC = () => {
                 ))}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* TAB 4: DATA STORAGE & AUTO-PURGE LIFECYCLE */}
+      {activeTab === 'storage' && (
+        <div className="space-y-6">
+          {/* Storage Overview Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="p-5 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 shadow-xs space-y-1">
+              <div className="flex items-center justify-between text-neutral-500 text-xs">
+                <span className="font-medium flex items-center space-x-1.5">
+                  <HardDrive className="w-4 h-4 text-indigo-500" />
+                  <span>Media Uploads Storage</span>
+                </span>
+                <span className="text-[10px] text-indigo-600 font-bold">Disk &amp; Temp</span>
+              </div>
+              <p className="text-2xl font-bold font-mono text-neutral-900 dark:text-white mt-1">
+                {storageMetrics ? `${storageMetrics.totalMediaSizeMB} MB` : '...'}
+              </p>
+              <p className="text-[11px] text-neutral-400">
+                {storageMetrics ? `${storageMetrics.mediaFilesCount} media files stored` : 'Calculating files...'}
+              </p>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 shadow-xs space-y-1">
+              <div className="flex items-center justify-between text-neutral-500 text-xs">
+                <span className="font-medium flex items-center space-x-1.5">
+                  <Database className="w-4 h-4 text-emerald-500" />
+                  <span>Total Broadcast Campaigns</span>
+                </span>
+                <span className="text-[10px] text-emerald-600 font-bold">Active Workspace</span>
+              </div>
+              <p className="text-2xl font-bold font-mono text-neutral-900 dark:text-white mt-1">
+                {storageMetrics ? storageMetrics.totalCampaignsCount : '...'}
+              </p>
+              <p className="text-[11px] text-neutral-400">Stored in database</p>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 shadow-xs space-y-1">
+              <div className="flex items-center justify-between text-neutral-500 text-xs">
+                <span className="font-medium flex items-center space-x-1.5">
+                  <Clock className="w-4 h-4 text-amber-500" />
+                  <span>Auto-Purge Scheduler</span>
+                </span>
+                <span className="text-[10px] text-emerald-600 font-bold">● 24h Background Cron</span>
+              </div>
+              <p className="text-lg font-bold font-mono text-neutral-900 dark:text-white mt-1">
+                {autoPurgeEnabledInput ? `Active (Older than ${retentionDaysInput}d)` : 'Disabled'}
+              </p>
+              <p className="text-[11px] text-neutral-400">
+                {storageMetrics?.settings?.lastPurgedAt
+                  ? `Last purged: ${new Date(storageMetrics.settings.lastPurgedAt).toLocaleDateString()}`
+                  : 'Runs daily at 03:00 AM server time'}
+              </p>
+            </div>
+          </div>
+
+          {/* Retention & Cascade Policy Configuration Form */}
+          <div className="p-6 rounded-3xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 shadow-sm space-y-6">
+            <div className="border-b border-neutral-200 dark:border-neutral-800 pb-4">
+              <h3 className="text-base font-bold text-neutral-900 dark:text-white flex items-center space-x-2">
+                <Database className="w-5 h-5 text-indigo-600" />
+                <span>Storage Retention &amp; Auto-Delete Policy</span>
+              </h3>
+              <p className="text-xs text-neutral-500 mt-1">
+                Set automatic deletion rules for media files and campaign tracking logs to prevent database bloating and keep storage optimal.
+              </p>
+            </div>
+
+            <div className="space-y-5">
+              {/* Feature 1: Cascade Deletion on WhatsApp Number Removal */}
+              <div className="p-4 rounded-2xl bg-indigo-50/60 dark:bg-indigo-950/20 border border-indigo-100 dark:border-indigo-900/50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="flex items-center space-x-2">
+                    <Trash2 className="w-4 h-4 text-rose-500" />
+                    <span className="text-sm font-bold text-neutral-900 dark:text-white">
+                      WhatsApp Account Cascade Deletion
+                    </span>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
+                      ENABLED BY DEFAULT
+                    </span>
+                  </div>
+                  <p className="text-xs text-neutral-600 dark:text-neutral-400 max-w-2xl">
+                    Jab aap koi WhatsApp number delete ya remove karte hain, toh us number ke sath bani hui <strong>saari campaigns, recipient tracking lists, aur uploaded media files</strong> storage se automatically delete ho jayengi.
+                  </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={cascadeDeleteInput}
+                    onChange={(e) => setCascadeDeleteInput(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-neutral-200 peer-focus:outline-hidden rounded-full peer dark:bg-neutral-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-neutral-600 peer-checked:bg-emerald-600"></div>
+                </label>
+              </div>
+
+              {/* Feature 2: Automated Media & Log Retention Period */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-neutral-700 dark:text-neutral-300 flex items-center space-x-1.5">
+                    <Clock className="w-4 h-4 text-neutral-500" />
+                    <span>Media &amp; Tracking Auto-Retention Period</span>
+                  </label>
+                  <label className="flex items-center space-x-2 text-xs cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={autoPurgeEnabledInput}
+                      onChange={(e) => setAutoPurgeEnabledInput(e.target.checked)}
+                      className="rounded text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <span className="text-neutral-700 dark:text-neutral-300 font-medium">
+                      Enable Daily Auto-Purge
+                    </span>
+                  </label>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                  {[7, 15, 30, 60].map((days) => (
+                    <button
+                      key={days}
+                      type="button"
+                      onClick={() => setRetentionDaysInput(days)}
+                      className={`p-3 rounded-xl border text-center transition-all cursor-pointer ${
+                        retentionDaysInput === days
+                          ? 'border-indigo-600 bg-indigo-50/70 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300 font-bold shadow-xs'
+                          : 'border-neutral-200 dark:border-neutral-800 hover:border-neutral-300 text-neutral-600 dark:text-neutral-400'
+                      }`}
+                    >
+                      <p className="text-sm font-mono">{days} Days</p>
+                      <p className="text-[10px] text-neutral-400 mt-0.5">
+                        {days === 30 ? 'Recommended' : days < 30 ? 'Aggressive Clean' : 'Extended'}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-neutral-500">
+                  Files and logs older than <strong>{retentionDaysInput} days</strong> will be automatically purged daily to save disk space and stay within optimal limits.
+                </p>
+              </div>
+
+              {/* Action Buttons: Save & Purge Now */}
+              <div className="pt-4 border-t border-neutral-200 dark:border-neutral-800 flex flex-col sm:flex-row items-center justify-between gap-3">
+                <button
+                  type="button"
+                  onClick={handleSaveStorageSettings}
+                  disabled={savingStorageSettings}
+                  className="w-full sm:w-auto inline-flex items-center justify-center space-x-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-all shadow-md cursor-pointer disabled:opacity-50"
+                >
+                  {savingStorageSettings ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  <span>Save Retention Policy</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handlePurgeNow}
+                  disabled={purging}
+                  className="w-full sm:w-auto inline-flex items-center justify-center space-x-2 px-5 py-2.5 rounded-xl border border-rose-300 dark:border-rose-900 bg-rose-50/60 dark:bg-rose-950/30 text-rose-700 dark:text-rose-300 text-xs font-bold hover:bg-rose-100 transition-all cursor-pointer disabled:opacity-50"
+                >
+                  {purging ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4 text-rose-600" />}
+                  <span>Purge Expired Media &amp; Data Now</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

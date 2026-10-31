@@ -1,6 +1,6 @@
-import type { Request, Response } from 'express';
 import {
   collectionGroup,
+  collection,
   query,
   where,
   getDocs,
@@ -30,18 +30,42 @@ export async function checkAndExecuteScheduledCampaigns(): Promise<void> {
     const nowMs = Date.now();
 
     // Query campaigns across all tenant organizations where status == 'scheduled'
-    const scheduledQuery = query(
-      collectionGroup(serverDb, 'campaigns'),
-      where('status', '==', 'scheduled')
-    );
+    let candidateDocs: Array<any> = [];
+    try {
+      const scheduledQuery = query(
+        collectionGroup(serverDb, 'campaigns'),
+        where('status', '==', 'scheduled')
+      );
+      const snapshot = await getDocs(scheduledQuery);
+      candidateDocs = snapshot.docs;
+    } catch (err: any) {
+      if (err?.code === 'failed-precondition' || err?.message?.includes('index') || err?.message?.includes('COLLECTION_GROUP')) {
+        // Fallback: Query per active organization directly without requiring COLLECTION_GROUP_ASC index
+        const orgsSnap = await getDocs(collection(serverDb, 'organizations')).catch(() => null);
+        if (orgsSnap && !orgsSnap.empty) {
+          for (const orgDoc of orgsSnap.docs) {
+            const orgCampSnap = await getDocs(
+              query(
+                collection(serverDb, `organizations/${orgDoc.id}/campaigns`),
+                where('status', '==', 'scheduled')
+              )
+            ).catch(() => null);
+            if (orgCampSnap && !orgCampSnap.empty) {
+              candidateDocs.push(...orgCampSnap.docs);
+            }
+          }
+        }
+      } else {
+        throw err;
+      }
+    }
 
-    const snapshot = await getDocs(scheduledQuery);
-    if (snapshot.empty) {
+    if (candidateDocs.length === 0) {
       isProcessingScheduled = false;
       return;
     }
 
-    for (const docSnap of snapshot.docs) {
+    for (const docSnap of candidateDocs) {
       const camp = docSnap.data();
       const scheduledAt = camp.scheduledAt;
 

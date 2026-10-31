@@ -78,11 +78,21 @@ import {
   handleAdminImpersonate,
   ensureDefaultAccounts,
 } from './multiTenantService.ts';
+import {
+  getStorageMetrics,
+  saveStorageSettings,
+  purgeOldDataAndMedia,
+  cascadeDeleteWhatsAppAccountData,
+  startStorageCleanupScheduler,
+} from './storageCleanupService.ts';
 
 // Initialize default accounts and persistent disk backups
 ensureDefaultAccounts().catch((err) => {
   console.warn('[MultiTenant] Startup seed notice:', err?.message);
 });
+
+// Initialize background storage auto-cleanup scheduler
+startStorageCleanupScheduler();
 
 export const apiApp = express();
 
@@ -289,6 +299,64 @@ apiApp.post('/api/meta/simulate-status', async (req, res) => {
     res.json({ success: true, statusObj });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Error simulating status' });
+  }
+});
+
+// -------------------------------------------------------------
+// STORAGE LIFECYCLE & DATA RETENTION ENDPOINTS
+// -------------------------------------------------------------
+apiApp.get('/api/storage/metrics', async (req, res) => {
+  try {
+    const orgId = (req.headers['x-organization-id'] as string) || (req.query.organizationId as string);
+    const metrics = await getStorageMetrics(orgId);
+    res.json({ success: true, ...metrics });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Error fetching storage metrics' });
+  }
+});
+
+apiApp.post('/api/storage/settings', async (req, res) => {
+  try {
+    const orgId = (req.headers['x-organization-id'] as string) || req.body?.organizationId;
+    const updated = await saveStorageSettings(req.body, orgId);
+    res.json({ success: true, settings: updated });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Error saving storage settings' });
+  }
+});
+
+apiApp.post('/api/storage/purge', async (req, res) => {
+  try {
+    const days = Number(req.body?.retentionDays) || 30;
+    const result = await purgeOldDataAndMedia(days);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Error executing storage purge' });
+  }
+});
+
+// Dedicated Cascade Deletion on WhatsApp Account Removal:
+// Automatically wipes all linked campaigns, tracking records, WAMID logs & media files
+apiApp.post('/api/meta/accounts/:accountId/cascade-delete', async (req, res) => {
+  try {
+    const { accountId } = req.params;
+    const { organizationId, phoneNumberId } = req.body || {};
+    const effectiveOrgId = (req.headers['x-organization-id'] as string) || organizationId;
+
+    if (!effectiveOrgId) {
+      return res.status(400).json({ error: 'organizationId is required for cascade deletion' });
+    }
+
+    const result = await cascadeDeleteWhatsAppAccountData({
+      organizationId: effectiveOrgId,
+      accountId,
+      phoneNumberId,
+      deleteAccountDoc: true,
+    });
+
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Error executing cascade account deletion' });
   }
 });
 

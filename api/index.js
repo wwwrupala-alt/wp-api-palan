@@ -1,8 +1,8 @@
 // src/server/apiApp.ts
 import express from "express";
-import path7 from "path";
-import os2 from "os";
-import fs7 from "fs";
+import path8 from "path";
+import os3 from "os";
+import fs8 from "fs";
 
 // src/server/metaMediaManager.ts
 import fs from "fs";
@@ -307,13 +307,14 @@ process.on("unhandledRejection", (reason) => {
 });
 var require2 = createRequire(import.meta.url);
 var EMBEDDED_FIREBASE_CONFIG = {
-  projectId: "utility-sky-7f6jr",
-  appId: "1:1086191221773:web:a078831e5e4352de1da944",
-  apiKey: "AIzaSyB0w7QFly4zIu90w9OqLKUia8Sai53h1lA",
-  authDomain: "utility-sky-7f6jr.firebaseapp.com",
-  firestoreDatabaseId: "ai-studio-eb8ad6af-49f2-4fff-9c59-69f62d1e9a05",
-  storageBucket: "utility-sky-7f6jr.firebasestorage.app",
-  messagingSenderId: "1086191221773"
+  projectId: "whatsap-api-saas",
+  appId: "1:208644645020:web:4ef4757f87172b439a0d59",
+  apiKey: "AIzaSyDCkXsb4LgjdscXR3Nn6u5qxRJ8BFAG6Qk",
+  authDomain: "whatsap-api-saas.firebaseapp.com",
+  firestoreDatabaseId: "(default)",
+  storageBucket: "whatsap-api-saas.firebasestorage.app",
+  messagingSenderId: "208644645020",
+  measurementId: "G-PB602S59T4"
 };
 var firebaseConfig = { ...EMBEDDED_FIREBASE_CONFIG };
 try {
@@ -331,13 +332,14 @@ try {
   }
 }
 var app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+var dbId = firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== "(default)" ? firebaseConfig.firestoreDatabaseId : void 0;
 var serverDb = initializeFirestore(
   app,
   {
     experimentalForceLongPolling: true,
     localCache: memoryLocalCache()
   },
-  firebaseConfig.firestoreDatabaseId
+  dbId
 );
 
 // src/server/metaAccountSyncService.ts
@@ -1094,6 +1096,13 @@ function registerRecipients(campaignId, recipients, orgId) {
     });
   }
 }
+function clearRecipientStoreForCampaign(campaignId) {
+  const existing = recipientsStore.get(campaignId) || [];
+  for (const r of existing) {
+    if (r.whatsappMessageId) wamidIndex.delete(r.whatsappMessageId);
+  }
+  recipientsStore.delete(campaignId);
+}
 async function processWebhookStatusUpdate(params) {
   const { wamid, status, timestampSeconds, recipientPhone, errorObj, rawPayload } = params;
   const nowIso = (/* @__PURE__ */ new Date()).toISOString();
@@ -1311,50 +1320,6 @@ async function reconcileAndGetCampaignAnalytics(campaignId, options) {
     }
     let updatedAny = false;
     for (const r of allRecipients) {
-      if (r.currentStatus === "sent" || r.currentStatus === "queued") {
-        let isDelivered = false;
-        if (r.whatsappMessageId && token) {
-          try {
-            const metaRes = await fetch(
-              `https://graph.facebook.com/v22.0/${encodeURIComponent(r.whatsappMessageId)}?access_token=${token}`
-            );
-            if (metaRes.ok) {
-              const metaMsgData = await metaRes.json();
-              if (metaMsgData?.id) {
-                isDelivered = true;
-              }
-            }
-          } catch (metaErr) {
-            console.warn("[AnalyticsService] Meta Graph API check error:", metaErr);
-          }
-        }
-        const sentTime = r.sentAt ? new Date(r.sentAt).getTime() : 0;
-        const elapsedSec = (Date.now() - sentTime) / 1e3;
-        if (isDelivered || r.sentAt && elapsedSec > 5 && !r.failedAt) {
-          r.currentStatus = "delivered";
-          r.deliveredAt = r.deliveredAt || nowIso;
-          r.updatedAt = nowIso;
-          r.timeline = r.timeline || [];
-          if (!r.timeline.some((t) => t.status === "delivered")) {
-            r.timeline.push({
-              status: "delivered",
-              timestamp: nowIso,
-              description: "Delivery confirmed via Meta Graph API verification"
-            });
-          }
-          updatedAny = true;
-          updateDoc(
-            doc(serverDb, `organizations/${targetOrgId}/campaigns/${campaignId}/recipients`, r.id),
-            {
-              currentStatus: "delivered",
-              deliveredAt: r.deliveredAt,
-              updatedAt: nowIso,
-              timeline: r.timeline
-            }
-          ).catch(() => {
-          });
-        }
-      }
     }
     if (updatedAny) {
       recipientsStore.set(campaignId, [...allRecipients]);
@@ -5208,6 +5173,7 @@ async function handleVerifyConnectionHealth(req, res) {
 // src/server/campaignSchedulerService.ts
 import {
   collectionGroup,
+  collection as collection2,
   query as query2,
   where as where2,
   getDocs as getDocs2,
@@ -5365,7 +5331,7 @@ async function handleSendScheduledCampaignNow(req, res) {
 // src/server/dripSchedulerService.ts
 import {
   collectionGroup as collectionGroup2,
-  collection as collection2,
+  collection as collection3,
   query as query3,
   where as where3,
   getDocs as getDocs3,
@@ -5381,16 +5347,49 @@ async function checkAndExecuteDripCampaigns() {
   try {
     const nowIso = (/* @__PURE__ */ new Date()).toISOString();
     const nowMs = Date.now();
-    const activeDripsQuery = query3(
-      collectionGroup2(serverDb, "drip_campaigns"),
-      where3("status", "==", "active")
-    );
-    const dripsSnapshot = await getDocs3(activeDripsQuery);
-    if (dripsSnapshot.empty) {
+    let candidateDripDocs = [];
+    try {
+      const activeDripsQuery = query3(
+        collectionGroup2(serverDb, "drip_campaigns"),
+        where3("status", "==", "active")
+      );
+      const dripsSnapshot = await getDocs3(activeDripsQuery);
+      candidateDripDocs = dripsSnapshot.docs;
+    } catch (err) {
+      if (err?.code === "failed-precondition" || err?.message?.includes("index") || err?.message?.includes("COLLECTION_GROUP")) {
+        const orgsSnap = await getDocs3(collection3(serverDb, "organizations")).catch(() => null);
+        if (orgsSnap && !orgsSnap.empty) {
+          for (const orgDoc of orgsSnap.docs) {
+            const orgId = orgDoc.id;
+            const dripSnap1 = await getDocs3(
+              query3(
+                collection3(serverDb, `organizations/${orgId}/drip_campaigns`),
+                where3("status", "==", "active")
+              )
+            ).catch(() => null);
+            if (dripSnap1 && !dripSnap1.empty) {
+              candidateDripDocs.push(...dripSnap1.docs);
+            }
+            const dripSnap2 = await getDocs3(
+              query3(
+                collection3(serverDb, `organizations/${orgId}/dripCampaigns`),
+                where3("status", "==", "active")
+              )
+            ).catch(() => null);
+            if (dripSnap2 && !dripSnap2.empty) {
+              candidateDripDocs.push(...dripSnap2.docs);
+            }
+          }
+        }
+      } else {
+        throw err;
+      }
+    }
+    if (candidateDripDocs.length === 0) {
       isProcessingDrip = false;
       return;
     }
-    for (const dripDoc of dripsSnapshot.docs) {
+    for (const dripDoc of candidateDripDocs) {
       const camp = dripDoc.data();
       const pathSegments = dripDoc.ref.path.split("/");
       const orgId = pathSegments[1] || camp.organizationId;
@@ -5398,7 +5397,7 @@ async function checkAndExecuteDripCampaigns() {
       if (!orgId || !Array.isArray(camp.steps) || camp.steps.length === 0) {
         continue;
       }
-      const subsRef = collection2(serverDb, `organizations/${orgId}/drip_campaigns/${campaignId}/subscribers`);
+      const subsRef = collection3(serverDb, `organizations/${orgId}/drip_campaigns/${campaignId}/subscribers`);
       const activeSubsQuery = query3(subsRef, where3("status", "==", "active"));
       const subsSnap = await getDocs3(activeSubsQuery);
       if (subsSnap.empty) continue;
@@ -5428,7 +5427,7 @@ async function checkAndExecuteDripCampaigns() {
           try {
             const cleanPhone = (sub.phone || "").replace(/[^0-9]/g, "");
             const msgQuery = query3(
-              collection2(serverDb, `organizations/${orgId}/messages`),
+              collection3(serverDb, `organizations/${orgId}/messages`),
               where3("direction", "==", "inbound")
             );
             const msgSnap = await getDocs3(msgQuery);
@@ -5469,7 +5468,7 @@ async function checkAndExecuteDripCampaigns() {
             const prevStepNum = currentStepNum - 1;
             try {
               const prevRecsQuery = query3(
-                collection2(serverDb, `organizations/${orgId}/campaigns/${campaignId}_step_${prevStepNum}/recipients`)
+                collection3(serverDb, `organizations/${orgId}/campaigns/${campaignId}_step_${prevStepNum}/recipients`)
               );
               const prevRecsSnap = await getDocs3(prevRecsQuery);
               for (const rDoc of prevRecsSnap.docs) {
@@ -5491,7 +5490,7 @@ async function checkAndExecuteDripCampaigns() {
             if (!isRead) {
               try {
                 const msgQuery = query3(
-                  collection2(serverDb, `organizations/${orgId}/messages`),
+                  collection3(serverDb, `organizations/${orgId}/messages`),
                   where3("direction", "==", "outbound")
                 );
                 const msgSnap = await getDocs3(msgQuery);
@@ -5543,7 +5542,7 @@ async function checkAndExecuteDripCampaigns() {
             }
             if (!template && currentStep.templateName) {
               const tQuery = query3(
-                collection2(serverDb, `organizations/${orgId}/templates`),
+                collection3(serverDb, `organizations/${orgId}/templates`),
                 where3("name", "==", currentStep.templateName)
               );
               const tSnap = await getDocs3(tQuery);
@@ -5988,7 +5987,7 @@ async function handleRescanDripCampaign(req, res) {
       return;
     }
     const camp = snap.data();
-    const subsRef = collection2(serverDb, `organizations/${orgId}/drip_campaigns/${id}/subscribers`);
+    const subsRef = collection3(serverDb, `organizations/${orgId}/drip_campaigns/${id}/subscribers`);
     const subsSnap = await getDocs3(subsRef);
     let totalSubscribers = subsSnap.size;
     let completedSubscribers = 0;
@@ -6033,7 +6032,7 @@ async function handleRescanDripCampaign(req, res) {
     });
     const inboundPhoneMap = /* @__PURE__ */ new Map();
     try {
-      const convsSnap = await getDocs3(collection2(serverDb, `organizations/${orgId}/conversations`));
+      const convsSnap = await getDocs3(collection3(serverDb, `organizations/${orgId}/conversations`));
       for (const cDoc of convsSnap.docs) {
         const c = cDoc.data();
         const p = String(c.contactPhone || c.phoneNumber || "").replace(/[^0-9]/g, "");
@@ -6056,7 +6055,7 @@ async function handleRescanDripCampaign(req, res) {
       stepDeliveredCounts[st.stepNumber] = st.stats?.delivered || 0;
       try {
         const stepRecsSnap = await getDocs3(
-          collection2(serverDb, `organizations/${orgId}/campaigns/${id}_step_${st.stepNumber}/recipients`)
+          collection3(serverDb, `organizations/${orgId}/campaigns/${id}_step_${st.stepNumber}/recipients`)
         );
         if (!stepRecsSnap.empty) {
           let rCount = 0;
@@ -6172,7 +6171,7 @@ async function handleGetDripCampaignAnalytics(req, res) {
       }
     }
     if (!campDocData) {
-      const orgsSnap = await getDocs3(collection2(serverDb, "organizations"));
+      const orgsSnap = await getDocs3(collection3(serverDb, "organizations"));
       for (const o of orgsSnap.docs) {
         const docRef = doc4(serverDb, `organizations/${o.id}/drip_campaigns/${id}`);
         const snap = await getDoc4(docRef);
@@ -6188,7 +6187,7 @@ async function handleGetDripCampaignAnalytics(req, res) {
       return res.status(404).json({ error: "Drip campaign sequence not found" });
     }
     const subsSnap = await getDocs3(
-      collection2(serverDb, `organizations/${orgId}/drip_campaigns/${id}/subscribers`)
+      collection3(serverDb, `organizations/${orgId}/drip_campaigns/${id}/subscribers`)
     );
     const subscribers = [];
     subsSnap.forEach((d) => {
@@ -6196,7 +6195,7 @@ async function handleGetDripCampaignAnalytics(req, res) {
     });
     const templatesMap = {};
     try {
-      const tSnap = await getDocs3(collection2(serverDb, `organizations/${orgId}/templates`));
+      const tSnap = await getDocs3(collection3(serverDb, `organizations/${orgId}/templates`));
       tSnap.forEach((td) => {
         const t = td.data();
         templatesMap[td.id] = t;
@@ -6229,7 +6228,7 @@ async function handleGetDripCampaignAnalytics(req, res) {
       let stepFailed = 0;
       try {
         const stepRecsSnap = await getDocs3(
-          collection2(serverDb, `organizations/${orgId}/campaigns/${id}_step_${stepNum}/recipients`)
+          collection3(serverDb, `organizations/${orgId}/campaigns/${id}_step_${stepNum}/recipients`)
         );
         stepRecsSnap.forEach((rd) => {
           const r = { id: rd.id, ...rd.data() };
@@ -6426,7 +6425,7 @@ async function handleReconcileDripCampaignDeliveries(req, res) {
       return res.status(400).json({ error: "Drip campaign ID is required" });
     }
     if (!orgId) {
-      const orgsSnap = await getDocs3(collection2(serverDb, "organizations"));
+      const orgsSnap = await getDocs3(collection3(serverDb, "organizations"));
       for (const o of orgsSnap.docs) {
         const snap = await getDoc4(doc4(serverDb, `organizations/${o.id}/drip_campaigns/${id}`));
         if (snap.exists()) {
@@ -6444,11 +6443,11 @@ async function handleReconcileDripCampaignDeliveries(req, res) {
       return res.status(404).json({ error: "Drip campaign not found." });
     }
     const campData = campSnap.data();
-    const subsRef = collection2(serverDb, `organizations/${orgId}/drip_campaigns/${id}/subscribers`);
+    const subsRef = collection3(serverDb, `organizations/${orgId}/drip_campaigns/${id}/subscribers`);
     const subsSnap = await getDocs3(subsRef);
     const inboundPhoneMap = /* @__PURE__ */ new Map();
     try {
-      const convsSnap = await getDocs3(collection2(serverDb, `organizations/${orgId}/conversations`));
+      const convsSnap = await getDocs3(collection3(serverDb, `organizations/${orgId}/conversations`));
       for (const cDoc of convsSnap.docs) {
         const c = cDoc.data();
         const p = String(c.contactPhone || c.phoneNumber || "").replace(/[^0-9]/g, "");
@@ -6576,7 +6575,7 @@ async function handleMarkDripSubscriberRead(req, res) {
       return res.status(400).json({ error: "Campaign ID and Subscriber ID are required" });
     }
     if (!orgId) {
-      const orgsSnap = await getDocs3(collection2(serverDb, "organizations"));
+      const orgsSnap = await getDocs3(collection3(serverDb, "organizations"));
       for (const o of orgsSnap.docs) {
         const snap = await getDoc4(doc4(serverDb, `organizations/${o.id}/drip_campaigns/${id}`));
         if (snap.exists()) {
@@ -6643,7 +6642,7 @@ async function handleMarkDripSubscriberRead(req, res) {
       const campSnap = await getDoc4(campRef);
       if (campSnap.exists()) {
         const campData = campSnap.data();
-        const subsSnap = await getDocs3(collection2(serverDb, `organizations/${orgId}/drip_campaigns/${id}/subscribers`));
+        const subsSnap = await getDocs3(collection3(serverDb, `organizations/${orgId}/drip_campaigns/${id}/subscribers`));
         const allSubs = subsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
         const updatedSteps = (campData.steps || []).map((st) => {
           let sCount = 0;
@@ -9156,10 +9155,268 @@ async function handleAdminImpersonate(req, res) {
   }
 }
 
+// src/server/storageCleanupService.ts
+import fs7 from "fs";
+import path7 from "path";
+import os2 from "os";
+var DEFAULT_STORAGE_SETTINGS = {
+  autoPurgeEnabled: true,
+  retentionDays: 30,
+  cascadeDeleteOnAccountRemove: true,
+  autoPurgeHour: 3
+};
+var inMemoryStorageSettings = { ...DEFAULT_STORAGE_SETTINGS };
+async function getStorageSettings(organizationId) {
+  const targetOrgId = organizationId || "org_master_platform";
+  try {
+    const snap = await getDoc(doc(serverDb, "systemSettings", `storage_${targetOrgId}`));
+    if (snap.exists()) {
+      inMemoryStorageSettings = { ...DEFAULT_STORAGE_SETTINGS, ...snap.data() };
+      return inMemoryStorageSettings;
+    }
+  } catch {
+  }
+  return inMemoryStorageSettings;
+}
+async function saveStorageSettings(settings, organizationId) {
+  const targetOrgId = organizationId || "org_master_platform";
+  inMemoryStorageSettings = { ...inMemoryStorageSettings, ...settings };
+  try {
+    await setDoc(doc(serverDb, "systemSettings", `storage_${targetOrgId}`), inMemoryStorageSettings, { merge: true });
+  } catch (err) {
+    console.warn("[StorageCleanup] Failed to persist storage settings in Firestore:", err.message);
+  }
+  return inMemoryStorageSettings;
+}
+async function cascadeDeleteWhatsAppAccountData(params) {
+  const { organizationId, accountId, phoneNumberId, deleteAccountDoc = true } = params;
+  let deletedCampaignsCount = 0;
+  let deletedRecipientsCount = 0;
+  let deletedMediaCount = 0;
+  let accountDeleted = false;
+  const targetPhoneId = phoneNumberId || accountId;
+  console.log(`[StorageCleanup] Starting cascade deletion for WhatsApp Account ${accountId} (Phone ID: ${targetPhoneId}) in Org ${organizationId}`);
+  try {
+    const campaignsCol = collection(serverDb, `organizations/${organizationId}/campaigns`);
+    const campaignsSnap = await getDocs(campaignsCol).catch(() => null);
+    const matchingCampaignIds = [];
+    const mediaUrlsToClean = [];
+    if (campaignsSnap && !campaignsSnap.empty) {
+      campaignsSnap.forEach((d) => {
+        const data = d.data();
+        if (data.phoneNumberId === targetPhoneId || data.phoneNumberId === accountId || data.whatsAppAccountId === accountId || data.accountId === accountId) {
+          matchingCampaignIds.push(d.id);
+          if (data.mediaUrl) mediaUrlsToClean.push(data.mediaUrl);
+          if (data.headerMediaUrl) mediaUrlsToClean.push(data.headerMediaUrl);
+        }
+      });
+    }
+    for (const cId of matchingCampaignIds) {
+      try {
+        const recCol = collection(serverDb, `organizations/${organizationId}/campaigns/${cId}/recipients`);
+        const recSnap = await getDocs(recCol).catch(() => null);
+        if (recSnap && !recSnap.empty) {
+          for (const recDoc of recSnap.docs) {
+            const recData = recDoc.data();
+            const wamid = recData.whatsappMessageId;
+            if (wamid) {
+              deleteDoc(doc(serverDb, "wamidTracker", wamid)).catch(() => {
+              });
+            }
+            await deleteDoc(recDoc.ref).catch(() => {
+            });
+            deletedRecipientsCount++;
+          }
+        }
+        clearRecipientStoreForCampaign(cId);
+        await deleteDoc(doc(serverDb, `organizations/${organizationId}/campaigns`, cId)).catch(() => {
+        });
+        deletedCampaignsCount++;
+      } catch (err) {
+        console.warn(`[StorageCleanup] Error deleting campaign ${cId}:`, err.message);
+      }
+    }
+    const uploadsDir = getUploadsWritableDir();
+    for (const mUrl of mediaUrlsToClean) {
+      try {
+        const filename = path7.basename(mUrl);
+        const filePath = path7.join(uploadsDir, filename);
+        if (fs7.existsSync(filePath)) {
+          fs7.unlinkSync(filePath);
+          deletedMediaCount++;
+        }
+        if (inMemoryMediaBufferCache.has(filename)) {
+          inMemoryMediaBufferCache.delete(filename);
+          deletedMediaCount++;
+        }
+      } catch {
+      }
+    }
+    if (deleteAccountDoc) {
+      const accRef = doc(serverDb, `organizations/${organizationId}/whatsappAccounts`, accountId);
+      await deleteDoc(accRef).catch(() => {
+      });
+      accountDeleted = true;
+    }
+    console.log(`[StorageCleanup] Cascade deletion complete for ${accountId}: ${deletedCampaignsCount} campaigns, ${deletedRecipientsCount} tracking items, ${deletedMediaCount} media files removed.`);
+    return {
+      success: true,
+      deletedCampaignsCount,
+      deletedRecipientsCount,
+      deletedMediaCount,
+      accountDeleted,
+      message: `Successfully cleaned up account and purged ${deletedCampaignsCount} campaigns, ${deletedRecipientsCount} tracking logs, and ${deletedMediaCount} media files.`
+    };
+  } catch (error) {
+    console.error("[StorageCleanup] Cascade deletion error:", error);
+    return {
+      success: false,
+      deletedCampaignsCount,
+      deletedRecipientsCount,
+      deletedMediaCount,
+      accountDeleted,
+      message: error?.message || "Error executing cascade deletion"
+    };
+  }
+}
+async function purgeOldDataAndMedia(retentionDays = 30) {
+  const startTime = Date.now();
+  let purgedMediaFilesCount = 0;
+  let freedBytes = 0;
+  let purgedRecipientsCount = 0;
+  let purgedCampaignsCount = 0;
+  const cutoffMs = Date.now() - retentionDays * 24 * 60 * 60 * 1e3;
+  const cutoffDate = new Date(cutoffMs);
+  console.log(`[StorageCleanup] Running Purge Engine (Retention: ${retentionDays} days, Cutoff: ${cutoffDate.toISOString()})`);
+  const searchDirs = [
+    getUploadsWritableDir(),
+    path7.join(process.cwd(), "public", "uploads"),
+    path7.join(os2.tmpdir(), "cloudwaba_uploads")
+  ];
+  const processedFiles = /* @__PURE__ */ new Set();
+  for (const dir of searchDirs) {
+    try {
+      if (fs7.existsSync(dir)) {
+        const files = fs7.readdirSync(dir);
+        for (const file of files) {
+          if (file.startsWith(".")) continue;
+          const fullPath = path7.join(dir, file);
+          if (processedFiles.has(fullPath)) continue;
+          processedFiles.add(fullPath);
+          try {
+            const stats = fs7.statSync(fullPath);
+            if (stats.isFile() && stats.mtimeMs < cutoffMs) {
+              freedBytes += stats.size;
+              fs7.unlinkSync(fullPath);
+              purgedMediaFilesCount++;
+            }
+          } catch {
+          }
+        }
+      }
+    } catch {
+    }
+  }
+  if (inMemoryMediaBufferCache.size > 20) {
+    const keys = Array.from(inMemoryMediaBufferCache.keys());
+    for (let i = 0; i < keys.length - 20; i++) {
+      inMemoryMediaBufferCache.delete(keys[i]);
+    }
+  }
+  await saveStorageSettings({ lastPurgedAt: (/* @__PURE__ */ new Date()).toISOString() }).catch(() => {
+  });
+  const durationMs = Date.now() - startTime;
+  console.log(`[StorageCleanup] Purge complete in ${durationMs}ms: Freed ${(freedBytes / (1024 * 1024)).toFixed(2)} MB across ${purgedMediaFilesCount} files.`);
+  return {
+    success: true,
+    purgedMediaFilesCount,
+    freedBytes,
+    purgedRecipientsCount,
+    purgedCampaignsCount,
+    durationMs,
+    timestamp: (/* @__PURE__ */ new Date()).toISOString()
+  };
+}
+async function getStorageMetrics(organizationId) {
+  const settings = await getStorageSettings(organizationId);
+  let mediaFilesCount = 0;
+  let totalMediaSizeBytes = 0;
+  const searchDirs = [
+    getUploadsWritableDir(),
+    path7.join(process.cwd(), "public", "uploads"),
+    path7.join(os2.tmpdir(), "cloudwaba_uploads")
+  ];
+  const counted = /* @__PURE__ */ new Set();
+  for (const dir of searchDirs) {
+    try {
+      if (fs7.existsSync(dir)) {
+        const files = fs7.readdirSync(dir);
+        for (const file of files) {
+          if (file.startsWith(".")) continue;
+          const fullPath = path7.join(dir, file);
+          if (counted.has(file)) continue;
+          counted.add(file);
+          try {
+            const stats = fs7.statSync(fullPath);
+            if (stats.isFile()) {
+              mediaFilesCount++;
+              totalMediaSizeBytes += stats.size;
+            }
+          } catch {
+          }
+        }
+      }
+    } catch {
+    }
+  }
+  let totalCampaignsCount = 0;
+  if (organizationId && organizationId !== "org_master_platform") {
+    try {
+      const snap = await getDocs(collection(serverDb, `organizations/${organizationId}/campaigns`));
+      totalCampaignsCount = snap.size;
+    } catch {
+    }
+  }
+  return {
+    mediaFilesCount,
+    totalMediaSizeBytes,
+    totalMediaSizeMB: (totalMediaSizeBytes / (1024 * 1024)).toFixed(2),
+    totalCampaignsCount,
+    settings
+  };
+}
+var isSchedulerRunning = false;
+function startStorageCleanupScheduler() {
+  if (isSchedulerRunning) return;
+  isSchedulerRunning = true;
+  console.log("[StorageCleanup] Background Auto-Purge & Storage Lifecycle Scheduler started.");
+  setTimeout(async () => {
+    try {
+      const settings = await getStorageSettings();
+      if (settings.autoPurgeEnabled) {
+        await purgeOldDataAndMedia(settings.retentionDays || 30);
+      }
+    } catch (err) {
+      console.warn("[StorageCleanup] Startup purge notice:", err.message);
+    }
+  }, 30 * 1e3);
+  setInterval(async () => {
+    try {
+      const settings = await getStorageSettings();
+      if (settings.autoPurgeEnabled) {
+        await purgeOldDataAndMedia(settings.retentionDays || 30);
+      }
+    } catch (err) {
+      console.warn("[StorageCleanup] Scheduled 24h purge notice:", err.message);
+    }
+  }, 24 * 60 * 60 * 1e3);
+}
+
 // src/server/apiApp.ts
 ensureDefaultAccounts().catch((err) => {
   console.warn("[MultiTenant] Startup seed notice:", err?.message);
 });
+startStorageCleanupScheduler();
 var apiApp = express();
 apiApp.use((req, res, next) => {
   if (req.body && typeof req.body === "object") {
@@ -9181,34 +9438,34 @@ apiApp.get("/uploads/:filename", (req, res, next) => {
     res.setHeader("Content-Type", memCached.mimeType || "application/octet-stream");
     return res.send(memCached.buffer);
   }
-  const publicDir = path7.join(process.cwd(), "public", "uploads");
-  const exactPublicPath = path7.join(publicDir, filename);
-  if (fs7.existsSync(exactPublicPath)) {
+  const publicDir = path8.join(process.cwd(), "public", "uploads");
+  const exactPublicPath = path8.join(publicDir, filename);
+  if (fs8.existsSync(exactPublicPath)) {
     return res.sendFile(exactPublicPath);
   }
-  const distDir = path7.join(process.cwd(), "dist", "uploads");
-  const exactDistPath = path7.join(distDir, filename);
-  if (fs7.existsSync(exactDistPath)) {
+  const distDir = path8.join(process.cwd(), "dist", "uploads");
+  const exactDistPath = path8.join(distDir, filename);
+  if (fs8.existsSync(exactDistPath)) {
     return res.sendFile(exactDistPath);
   }
-  const tmpDir = path7.join(os2.tmpdir(), "cloudwaba_uploads");
-  const tmpPath = path7.join(tmpDir, filename);
-  if (fs7.existsSync(tmpPath)) {
+  const tmpDir = path8.join(os3.tmpdir(), "cloudwaba_uploads");
+  const tmpPath = path8.join(tmpDir, filename);
+  if (fs8.existsSync(tmpPath)) {
     return res.sendFile(tmpPath);
   }
   const basePrefix = filename.split("_")[0];
-  const ext = path7.extname(filename).toLowerCase();
+  const ext = path8.extname(filename).toLowerCase();
   const searchDirs = [publicDir, distDir, tmpDir];
   for (const dir of searchDirs) {
-    if (fs7.existsSync(dir)) {
+    if (fs8.existsSync(dir)) {
       try {
-        const files = fs7.readdirSync(dir);
+        const files = fs8.readdirSync(dir);
         if (basePrefix && basePrefix.length >= 2) {
           const match = files.find(
-            (f) => f.toLowerCase().startsWith(basePrefix.toLowerCase()) && path7.extname(f).toLowerCase() === ext
+            (f) => f.toLowerCase().startsWith(basePrefix.toLowerCase()) && path8.extname(f).toLowerCase() === ext
           );
           if (match) {
-            return res.sendFile(path7.join(dir, match));
+            return res.sendFile(path8.join(dir, match));
           }
         }
       } catch {
@@ -9217,7 +9474,7 @@ apiApp.get("/uploads/:filename", (req, res, next) => {
   }
   return res.status(404).type("text/plain").send("File not found in uploads");
 });
-apiApp.use("/uploads", express.static(path7.join(process.cwd(), "public", "uploads")));
+apiApp.use("/uploads", express.static(path8.join(process.cwd(), "public", "uploads")));
 apiApp.post("/api/media/upload", handleUploadMedia);
 apiApp.get("/api/meta/media-proxy", async (req, res) => {
   const targetUrl = req.query.url;
@@ -9332,6 +9589,52 @@ apiApp.post("/api/meta/simulate-status", async (req, res) => {
     res.json({ success: true, statusObj });
   } catch (err) {
     res.status(500).json({ error: err.message || "Error simulating status" });
+  }
+});
+apiApp.get("/api/storage/metrics", async (req, res) => {
+  try {
+    const orgId = req.headers["x-organization-id"] || req.query.organizationId;
+    const metrics = await getStorageMetrics(orgId);
+    res.json({ success: true, ...metrics });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Error fetching storage metrics" });
+  }
+});
+apiApp.post("/api/storage/settings", async (req, res) => {
+  try {
+    const orgId = req.headers["x-organization-id"] || req.body?.organizationId;
+    const updated = await saveStorageSettings(req.body, orgId);
+    res.json({ success: true, settings: updated });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Error saving storage settings" });
+  }
+});
+apiApp.post("/api/storage/purge", async (req, res) => {
+  try {
+    const days = Number(req.body?.retentionDays) || 30;
+    const result = await purgeOldDataAndMedia(days);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Error executing storage purge" });
+  }
+});
+apiApp.post("/api/meta/accounts/:accountId/cascade-delete", async (req, res) => {
+  try {
+    const { accountId } = req.params;
+    const { organizationId, phoneNumberId } = req.body || {};
+    const effectiveOrgId = req.headers["x-organization-id"] || organizationId;
+    if (!effectiveOrgId) {
+      return res.status(400).json({ error: "organizationId is required for cascade deletion" });
+    }
+    const result = await cascadeDeleteWhatsAppAccountData({
+      organizationId: effectiveOrgId,
+      accountId,
+      phoneNumberId,
+      deleteAccountDoc: true
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Error executing cascade account deletion" });
   }
 });
 apiApp.use((err, req, res, next) => {

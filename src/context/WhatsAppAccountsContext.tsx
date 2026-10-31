@@ -118,7 +118,10 @@ interface WhatsAppAccountsContextType {
   ) => Promise<{ success: boolean; error?: string }>;
   disconnectAccount: (accountId: string) => Promise<void>;
   reconnectAccount: (accountId: string) => Promise<void>;
-  deleteAccount: (accountId: string) => Promise<void>;
+  deleteAccount: (
+    accountId: string,
+    options?: { cascadeCampaigns?: boolean; phoneNumberId?: string }
+  ) => Promise<{ success: boolean; deletedCampaignsCount?: number; deletedRecipientsCount?: number; message?: string }>;
   refreshMetaStatus: () => Promise<void>;
   verifyConnectionHealth: (params: {
     accountId: string;
@@ -1083,15 +1086,42 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
     }
   };
 
-  const deleteAccount = async (accountId: string) => {
+  const deleteAccount = async (
+    accountId: string,
+    options?: { cascadeCampaigns?: boolean; phoneNumberId?: string }
+  ): Promise<{ success: boolean; deletedCampaignsCount?: number; deletedRecipientsCount?: number; message?: string }> => {
     const effectiveOrgId = getEffectiveOrgId();
-    if (!effectiveOrgId) return;
-    const accountRef = doc(db, 'organizations', effectiveOrgId, 'whatsappAccounts', accountId);
+    if (!effectiveOrgId) return { success: false, message: 'No organization active' };
+    const account = accounts.find((a) => a.id === accountId);
+    const phoneNumberId = options?.phoneNumberId || account?.phoneNumberId;
+
     try {
-      await deleteDoc(accountRef);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, `organizations/${effectiveOrgId}/whatsappAccounts/${accountId}`);
+      // 1. Call server cascade deletion API to wipe campaigns, recipients, trackers, and media files
+      const res = await fetch(`/api/meta/accounts/${accountId}/cascade-delete`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-organization-id': effectiveOrgId,
+        },
+        body: JSON.stringify({
+          organizationId: effectiveOrgId,
+          phoneNumberId,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        return data;
+      }
+    } catch {
+      // Fallback: direct doc deletion if API call fails
+      try {
+        const accountRef = doc(db, 'organizations', effectiveOrgId, 'whatsappAccounts', accountId);
+        await deleteDoc(accountRef);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, `organizations/${effectiveOrgId}/whatsappAccounts/${accountId}`);
+      }
     }
+    return { success: true };
   };
 
   return (

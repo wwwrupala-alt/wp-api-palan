@@ -47,13 +47,18 @@ if (typeof window !== 'undefined') {
 export const app = initializeApp(firebaseConfig);
 
 // Initialize Firestore with forced long polling and memoryLocalCache to prevent streaming and BloomFilter sync errors
+const targetDbId =
+  (firebaseConfig as any).firestoreDatabaseId && (firebaseConfig as any).firestoreDatabaseId !== '(default)'
+    ? (firebaseConfig as any).firestoreDatabaseId
+    : undefined;
+
 export const db = initializeFirestore(
   app,
   {
     experimentalForceLongPolling: true,
     localCache: memoryLocalCache(),
   },
-  firebaseConfig.firestoreDatabaseId
+  targetDbId
 );
 
 // Initialize Firebase Auth
