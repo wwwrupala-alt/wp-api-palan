@@ -22,6 +22,7 @@ import { useAuth } from '../context/AuthContext.tsx';
 import type { UserRole } from '../types/index.ts';
 import { CaptchaBox, generateCaptchaCode } from './CaptchaBox.tsx';
 import { PWAInstallButton } from './PWAInstallButton.tsx';
+import { LoginVectorBackground } from './LoginVectorBackground.tsx';
 
 interface LoginPageProps {
   onOpenLegal?: (doc: 'privacy' | 'terms') => void;
@@ -248,8 +249,11 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onOpenLegal }) => {
   };
 
   return (
-    <div className="min-h-screen bg-neutral-50 dark:bg-neutral-950 flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8 animate-fadeIn">
-      <div className="sm:mx-auto sm:w-full sm:max-w-md text-center space-y-3">
+    <div className="relative min-h-screen bg-neutral-50/80 dark:bg-neutral-950 flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8 animate-fadeIn overflow-hidden">
+      {/* Dynamic Animated Vector Background */}
+      <LoginVectorBackground />
+
+      <div className="relative z-10 sm:mx-auto sm:w-full sm:max-w-md text-center space-y-3">
         <div className="w-16 h-16 rounded-2xl bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 p-2 mx-auto shadow-md flex items-center justify-center">
           <img
             src="/uploads/logo_org_9099268034.png"
@@ -268,8 +272,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onOpenLegal }) => {
         </p>
       </div>
 
-      <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
-        <div className="bg-white dark:bg-neutral-900 py-8 px-6 sm:px-10 shadow-xl border border-neutral-200 dark:border-neutral-800 rounded-3xl space-y-6">
+      <div className="relative z-10 mt-8 sm:mx-auto sm:w-full sm:max-w-md">
+        <div className="bg-white/90 dark:bg-neutral-900/90 backdrop-blur-xl py-8 px-6 sm:px-10 shadow-2xl border border-neutral-200/80 dark:border-neutral-800/80 rounded-3xl space-y-6">
           {/* PWA In-App Install Prompt Banner */}
           <PWAInstallButton variant="login-banner" />
           {!dbConnected && (
