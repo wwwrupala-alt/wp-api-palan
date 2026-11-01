@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
 import { useAuth } from '../context/AuthContext.tsx';
+import { PWAInstallButton } from './PWAInstallButton.tsx';
 
 interface HeaderProps {
   currentTab: string;
@@ -94,6 +95,9 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       <div className="flex items-center space-x-2 shrink-0">
+        {/* PWA Install Button */}
+        <PWAInstallButton variant="compact" />
+
         {/* Real-Time Plan Validity Badge */}
         {validityInfo ? (
           <div

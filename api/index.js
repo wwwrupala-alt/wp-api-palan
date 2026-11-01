@@ -280,6 +280,7 @@ import {
   collection,
   query,
   where,
+  limit,
   updateDoc,
   deleteDoc
 } from "firebase/firestore";
@@ -1240,15 +1241,15 @@ function getCampaignRecipients(campaignId, options) {
   }
   filtered.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   const page = Math.max(1, Number(options?.page) || 1);
-  const limit = Math.max(1, Math.min(100, Number(options?.limit) || 20));
-  const startIndex = (page - 1) * limit;
-  const paginated = filtered.slice(startIndex, startIndex + limit);
+  const limit2 = Math.max(1, Math.min(100, Number(options?.limit) || 20));
+  const startIndex = (page - 1) * limit2;
+  const paginated = filtered.slice(startIndex, startIndex + limit2);
   return {
     recipients: paginated,
     total: filtered.length,
     page,
-    limit,
-    totalPages: Math.ceil(filtered.length / limit) || 1
+    limit: limit2,
+    totalPages: Math.ceil(filtered.length / limit2) || 1
   };
 }
 async function reconcileAndGetCampaignAnalytics(campaignId, options) {
@@ -1549,7 +1550,7 @@ async function handleGetCampaignAnalytics(req, res) {
 async function handleGetCampaignMessages(req, res) {
   try {
     const { campaignId } = req.params;
-    const { search, status, page, limit } = req.query;
+    const { search, status, page, limit: limit2 } = req.query;
     if (!campaignId) {
       return res.status(400).json({ error: "campaignId is required" });
     }
@@ -1557,7 +1558,7 @@ async function handleGetCampaignMessages(req, res) {
       search,
       status,
       page: page ? Number(page) : void 0,
-      limit: limit ? Number(limit) : void 0
+      limit: limit2 ? Number(limit2) : void 0
     });
     return res.json(data);
   } catch (err) {
@@ -1577,6 +1578,296 @@ async function handleGetMessageDetails(req, res) {
     return res.json(data);
   } catch (err) {
     return res.status(500).json({ error: err.message || "Failed to get message details" });
+  }
+}
+
+// src/server/walletService.ts
+var DEFAULT_CATEGORY_PRICING = {
+  marketingRate: 0.88,
+  utilityRate: 0.115,
+  authenticationRate: 0.115,
+  serviceRate: 0,
+  currency: "INR"
+};
+function cleanFirestoreData(obj) {
+  const result = {};
+  for (const key of Object.keys(obj)) {
+    if (obj[key] !== void 0) {
+      result[key] = obj[key];
+    }
+  }
+  return result;
+}
+var inMemoryPricingCache = null;
+var PRICING_TTL = 3e4;
+async function getCategoryPricing() {
+  const now = Date.now();
+  if (inMemoryPricingCache && now - inMemoryPricingCache.cachedAt < PRICING_TTL) {
+    return inMemoryPricingCache.pricing;
+  }
+  try {
+    const docRef = doc(serverDb, "systemSettings", "wallet_pricing");
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      const data = snap.data();
+      const pricing = {
+        marketingRate: typeof data.marketingRate === "number" ? data.marketingRate : DEFAULT_CATEGORY_PRICING.marketingRate,
+        utilityRate: typeof data.utilityRate === "number" ? data.utilityRate : DEFAULT_CATEGORY_PRICING.utilityRate,
+        authenticationRate: typeof data.authenticationRate === "number" ? data.authenticationRate : DEFAULT_CATEGORY_PRICING.authenticationRate,
+        serviceRate: typeof data.serviceRate === "number" ? data.serviceRate : DEFAULT_CATEGORY_PRICING.serviceRate,
+        currency: data.currency || DEFAULT_CATEGORY_PRICING.currency,
+        updatedAt: data.updatedAt,
+        updatedBy: data.updatedBy
+      };
+      inMemoryPricingCache = { pricing, cachedAt: now };
+      return pricing;
+    }
+  } catch (err) {
+    console.warn("[WalletService] Could not read wallet_pricing from Firestore, using default:", err.message);
+  }
+  return DEFAULT_CATEGORY_PRICING;
+}
+async function updateCategoryPricing(newPricing, updatedBy = "Master Admin") {
+  const current = await getCategoryPricing();
+  const updated = {
+    marketingRate: typeof newPricing.marketingRate === "number" ? Math.max(0, newPricing.marketingRate) : current.marketingRate,
+    utilityRate: typeof newPricing.utilityRate === "number" ? Math.max(0, newPricing.utilityRate) : current.utilityRate,
+    authenticationRate: typeof newPricing.authenticationRate === "number" ? Math.max(0, newPricing.authenticationRate) : current.authenticationRate,
+    serviceRate: typeof newPricing.serviceRate === "number" ? Math.max(0, newPricing.serviceRate) : current.serviceRate,
+    currency: newPricing.currency || current.currency || "INR",
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    updatedBy
+  };
+  try {
+    const docRef = doc(serverDb, "systemSettings", "wallet_pricing");
+    await setDoc(docRef, cleanFirestoreData(updated), { merge: true });
+    inMemoryPricingCache = { pricing: updated, cachedAt: Date.now() };
+  } catch (err) {
+    console.warn("[WalletService] Error saving wallet_pricing in Firestore:", err.message);
+  }
+  return updated;
+}
+async function getWalletAccount(organizationId, userId) {
+  const targetOrg = organizationId || "org_master_platform";
+  const docRef = doc(serverDb, `organizations/${targetOrg}/wallet`, "account");
+  try {
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      return snap.data();
+    }
+  } catch {
+  }
+  const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+  const newAccount = {
+    organizationId: targetOrg,
+    userId: userId || void 0,
+    balance: 0,
+    totalRecharged: 0,
+    totalSpent: 0,
+    currency: "INR",
+    lowBalanceThreshold: 100,
+    updatedAt: nowIso,
+    createdAt: nowIso
+  };
+  try {
+    await setDoc(docRef, cleanFirestoreData(newAccount), { merge: true });
+  } catch {
+  }
+  return newAccount;
+}
+async function rechargeWallet(params) {
+  const { organizationId, userId, amount, note, paymentReference } = params;
+  if (!amount || amount <= 0) {
+    throw new Error("Recharge amount must be greater than 0.");
+  }
+  const current = await getWalletAccount(organizationId, userId);
+  const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+  const newBalance = Number((current.balance + amount).toFixed(3));
+  const newTotalRecharged = Number((current.totalRecharged + amount).toFixed(3));
+  const updatedAccount = {
+    ...current,
+    balance: newBalance,
+    totalRecharged: newTotalRecharged,
+    updatedAt: nowIso
+  };
+  const accountRef = doc(serverDb, `organizations/${organizationId}/wallet`, "account");
+  await setDoc(accountRef, cleanFirestoreData(updatedAccount), { merge: true });
+  const txId = `tx_rec_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  const transaction = {
+    id: txId,
+    organizationId,
+    userId: userId || void 0,
+    type: "credit",
+    amount,
+    balanceAfter: newBalance,
+    category: "RECHARGE",
+    description: note || "Prepaid Wallet Funds Added",
+    paymentReference: paymentReference || void 0,
+    createdAt: nowIso
+  };
+  try {
+    const txRef = doc(serverDb, `organizations/${organizationId}/wallet/account/transactions`, txId);
+    await setDoc(txRef, cleanFirestoreData(transaction));
+  } catch (err) {
+    console.warn("[WalletService] Could not write transaction doc:", err.message);
+  }
+  return { account: updatedAccount, transaction };
+}
+async function deductWalletForCampaign(params) {
+  const { organizationId, userId, category, count, campaignId, campaignName } = params;
+  if (!count || count <= 0) {
+    const current2 = await getWalletAccount(organizationId, userId);
+    return {
+      success: true,
+      deducted: 0,
+      ratePerMessage: 0,
+      newBalance: current2.balance,
+      isLowBalance: current2.balance <= current2.lowBalanceThreshold
+    };
+  }
+  const pricing = await getCategoryPricing();
+  const normalizedCategory = String(category || "UTILITY").toUpperCase();
+  let rate = pricing.utilityRate;
+  if (normalizedCategory.includes("MARKET")) rate = pricing.marketingRate;
+  else if (normalizedCategory.includes("AUTH")) rate = pricing.authenticationRate;
+  else if (normalizedCategory.includes("SERV")) rate = pricing.serviceRate;
+  const totalDeduction = Number((count * rate).toFixed(3));
+  const current = await getWalletAccount(organizationId, userId);
+  const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+  const newBalance = Number((current.balance - totalDeduction).toFixed(3));
+  const newTotalSpent = Number((current.totalSpent + totalDeduction).toFixed(3));
+  const updatedAccount = {
+    ...current,
+    balance: newBalance,
+    totalSpent: newTotalSpent,
+    updatedAt: nowIso
+  };
+  try {
+    const accountRef = doc(serverDb, `organizations/${organizationId}/wallet`, "account");
+    await setDoc(accountRef, cleanFirestoreData(updatedAccount), { merge: true });
+  } catch (err) {
+    console.warn("[WalletService] Error updating balance doc:", err.message);
+  }
+  const txId = `tx_deb_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  const transaction = {
+    id: txId,
+    organizationId,
+    userId: userId || void 0,
+    type: "debit",
+    amount: totalDeduction,
+    balanceAfter: newBalance,
+    category: normalizedCategory,
+    description: campaignName ? `Campaign: ${campaignName} (${count} msgs)` : `Outbound ${normalizedCategory} messages (${count} msgs)`,
+    campaignId: campaignId || void 0,
+    campaignName: campaignName || void 0,
+    messageCount: count,
+    ratePerMessage: rate,
+    createdAt: nowIso
+  };
+  try {
+    const txRef = doc(serverDb, `organizations/${organizationId}/wallet/account/transactions`, txId);
+    await setDoc(txRef, cleanFirestoreData(transaction));
+  } catch (err) {
+    console.warn("[WalletService] Error writing debit transaction doc:", err.message);
+  }
+  return {
+    success: true,
+    deducted: totalDeduction,
+    ratePerMessage: rate,
+    newBalance,
+    isLowBalance: newBalance <= current.lowBalanceThreshold
+  };
+}
+async function getWalletTransactions(organizationId, limitCount = 50) {
+  const targetOrg = organizationId || "org_master_platform";
+  try {
+    const txCol = collection(serverDb, `organizations/${targetOrg}/wallet/account/transactions`);
+    const q = query(txCol, limit(limitCount));
+    const snap = await getDocs(q);
+    const list = [];
+    snap.forEach((d) => {
+      list.push({ id: d.id, ...d.data() });
+    });
+    list.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+    return list;
+  } catch (err) {
+    console.warn("[WalletService] Error fetching transactions:", err.message);
+    return [];
+  }
+}
+async function handleGetWallet(req, res) {
+  const orgId = String(req.query.organizationId || req.headers["x-organization-id"] || "org_master_platform").trim();
+  const userId = req.query.userId ? String(req.query.userId).trim() : void 0;
+  try {
+    const [account, pricing, transactions] = await Promise.all([
+      getWalletAccount(orgId, userId),
+      getCategoryPricing(),
+      getWalletTransactions(orgId, 50)
+    ]);
+    res.json({
+      success: true,
+      account,
+      pricing,
+      transactions
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to fetch wallet info." });
+  }
+}
+async function handleRechargeWallet(req, res) {
+  try {
+    const { organizationId, userId, amount, note, paymentReference } = req.body;
+    const targetOrg = organizationId || req.headers["x-organization-id"] || "org_master_platform";
+    const numAmount = Number(amount);
+    if (!numAmount || numAmount <= 0) {
+      res.status(400).json({ error: "Please enter a valid positive recharge amount." });
+      return;
+    }
+    const result = await rechargeWallet({
+      organizationId: String(targetOrg),
+      userId,
+      amount: numAmount,
+      note,
+      paymentReference
+    });
+    res.json({
+      success: true,
+      message: `\u20B9${numAmount.toFixed(2)} added to wallet successfully.`,
+      account: result.account,
+      transaction: result.transaction
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to recharge wallet." });
+  }
+}
+async function handleGetPricing(req, res) {
+  try {
+    const pricing = await getCategoryPricing();
+    res.json({ success: true, pricing });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to fetch pricing." });
+  }
+}
+async function handleUpdatePricing(req, res) {
+  try {
+    const { marketingRate, utilityRate, authenticationRate, serviceRate, currency, updatedBy } = req.body;
+    const updated = await updateCategoryPricing(
+      {
+        marketingRate: typeof marketingRate === "number" ? marketingRate : Number(marketingRate),
+        utilityRate: typeof utilityRate === "number" ? utilityRate : Number(utilityRate),
+        authenticationRate: typeof authenticationRate === "number" ? authenticationRate : Number(authenticationRate),
+        serviceRate: typeof serviceRate === "number" ? serviceRate : Number(serviceRate),
+        currency: currency || "INR"
+      },
+      updatedBy || "Master Admin"
+    );
+    res.json({
+      success: true,
+      message: "Category pricing rates updated successfully.",
+      pricing: updated
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to update pricing." });
   }
 }
 
@@ -3096,6 +3387,21 @@ async function executeCampaignDispatchCore(params) {
       );
     } catch (campErr) {
       console.warn("[Broadcast] Error updating campaign stats:", campErr);
+    }
+    if (sentCount > 0) {
+      try {
+        const templateCategory = template.category || "UTILITY";
+        await deductWalletForCampaign({
+          organizationId,
+          category: templateCategory,
+          count: sentCount,
+          campaignId,
+          campaignName: campaignName || template.name
+        });
+        console.log(`[Wallet] Deducted charges for ${sentCount} messages in campaign ${campaignName || campaignId}`);
+      } catch (walletErr) {
+        console.warn("[Wallet] Notice during campaign deduction:", walletErr.message);
+      }
     }
   }
   addWebhookLog({
@@ -5305,7 +5611,7 @@ import {
   getDocs as getDocs2,
   doc as doc3,
   getDoc as getDoc3,
-  updateDoc as updateDoc2
+  updateDoc as updateDoc3
 } from "firebase/firestore";
 async function handleCancelScheduledCampaign(req, res) {
   try {
@@ -5326,7 +5632,7 @@ async function handleCancelScheduledCampaign(req, res) {
       res.status(400).json({ error: `Cannot cancel campaign with status "${camp.status}". Only scheduled campaigns can be cancelled.` });
       return;
     }
-    await updateDoc2(campRef, {
+    await updateDoc3(campRef, {
       status: "cancelled",
       cancelledAt: (/* @__PURE__ */ new Date()).toISOString(),
       updatedAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -5365,7 +5671,7 @@ async function handleRescheduleCampaign(req, res) {
       res.status(400).json({ error: `Cannot reschedule campaign with status "${camp.status}".` });
       return;
     }
-    await updateDoc2(campRef, {
+    await updateDoc3(campRef, {
       status: "scheduled",
       scheduledAt: targetDate.toISOString(),
       updatedAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -5412,12 +5718,12 @@ async function handleSendScheduledCampaignNow(req, res) {
     const customToken = scheduleData.customToken || camp.customToken;
     const campaignName = camp.name || scheduleData.campaignName || "Broadcast Campaign";
     if (!phoneNumberId || !template || !Array.isArray(recipients) || recipients.length === 0) {
-      await updateDoc2(campRef, { status: "failed", errorReason: "Missing dispatch data (phone number, template, or recipients)" });
+      await updateDoc3(campRef, { status: "failed", errorReason: "Missing dispatch data (phone number, template, or recipients)" });
       res.status(400).json({ error: "Missing phone number ID, template, or target recipients in campaign data." });
       return;
     }
     const nowIso = (/* @__PURE__ */ new Date()).toISOString();
-    await updateDoc2(campRef, {
+    await updateDoc3(campRef, {
       status: "sending",
       startedAt: nowIso,
       updatedAt: nowIso
@@ -5440,7 +5746,7 @@ async function handleSendScheduledCampaignNow(req, res) {
     }).catch(async (dispatchErr) => {
       console.error(`[handleSendScheduledCampaignNow] Background broadcast error for ${campaignId}:`, dispatchErr);
       try {
-        await updateDoc2(campRef, {
+        await updateDoc3(campRef, {
           status: "failed",
           errorReason: dispatchErr?.message || "Background broadcast error",
           updatedAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -5464,7 +5770,7 @@ import {
   doc as doc4,
   getDoc as getDoc4,
   setDoc as setDoc3,
-  updateDoc as updateDoc3
+  updateDoc as updateDoc4
 } from "firebase/firestore";
 var isProcessingDrip = false;
 async function checkAndExecuteDripCampaigns() {
@@ -5535,13 +5841,13 @@ async function checkAndExecuteDripCampaigns() {
         const currentStepNum = sub.currentStep || 1;
         const currentStep = camp.steps.find((s) => s.stepNumber === currentStepNum);
         if (!currentStep) {
-          await updateDoc3(subDoc.ref, {
+          await updateDoc4(subDoc.ref, {
             status: "completed",
             completedAt: nowIso,
             updatedAt: nowIso
           }).catch(() => {
           });
-          await updateDoc3(dripDoc.ref, {
+          await updateDoc4(dripDoc.ref, {
             completedSubscribers: (camp.completedSubscribers || 0) + 1,
             activeSubscribers: Math.max(0, (camp.activeSubscribers || 1) - 1),
             updatedAt: nowIso
@@ -5574,7 +5880,7 @@ async function checkAndExecuteDripCampaigns() {
                   note: "Skipped: Contact replied to previous message"
                 }
               ];
-              await updateDoc3(subDoc.ref, {
+              await updateDoc4(subDoc.ref, {
                 status: "completed",
                 completedAt: nowIso,
                 stepHistory: updatedHistory2,
@@ -5645,7 +5951,7 @@ async function checkAndExecuteDripCampaigns() {
                 isRead = true;
               } else {
                 console.log(`[DripScheduler] Previous message for ${sub.phone} not yet read; holding step for up to 1 hr.`);
-                await updateDoc3(subDoc.ref, {
+                await updateDoc4(subDoc.ref, {
                   nextExecutionAt: new Date(Date.now() + 2 * 60 * 1e3).toISOString(),
                   updatedAt: nowIso
                 });
@@ -5801,7 +6107,7 @@ async function checkAndExecuteDripCampaigns() {
             const delayVal = isNaN(rawDelay) ? 0 : Math.max(0, rawDelay);
             const delayMs = delayUnit === "minutes" ? delayVal * 60 * 1e3 : delayUnit === "hours" ? delayVal * 3600 * 1e3 : delayVal * 86400 * 1e3;
             const nextExecutionAt = new Date(Date.now() + delayMs).toISOString();
-            await updateDoc3(subDoc.ref, {
+            await updateDoc4(subDoc.ref, {
               currentStep: nextStepNum,
               lastStepSentAt: nowIso,
               nextExecutionAt,
@@ -5810,7 +6116,7 @@ async function checkAndExecuteDripCampaigns() {
             }).catch(() => {
             });
           } else {
-            await updateDoc3(subDoc.ref, {
+            await updateDoc4(subDoc.ref, {
               status: "completed",
               completedAt: nowIso,
               lastStepSentAt: nowIso,
@@ -5822,7 +6128,7 @@ async function checkAndExecuteDripCampaigns() {
             const newCompleted = (camp.completedSubscribers || 0) + 1;
             const newActive = Math.max(0, (camp.activeSubscribers || 1) - 1);
             const isAllDone = newActive === 0;
-            await updateDoc3(dripDoc.ref, {
+            await updateDoc4(dripDoc.ref, {
               completedSubscribers: newCompleted,
               activeSubscribers: newActive,
               status: isAllDone ? "completed" : camp.status,
@@ -5831,7 +6137,7 @@ async function checkAndExecuteDripCampaigns() {
             });
           }
         } else {
-          await updateDoc3(subDoc.ref, {
+          await updateDoc4(subDoc.ref, {
             nextExecutionAt: new Date(Date.now() + 6e4).toISOString(),
             stepHistory: updatedHistory,
             lastError: errorMessage,
@@ -5858,7 +6164,7 @@ async function checkAndExecuteDripCampaigns() {
             return st;
           });
           const currentCampStats = freshCamp.stats || { totalMessagesSent: 0, delivered: 0, read: 0, failed: 0 };
-          await updateDoc3(dripDoc.ref, {
+          await updateDoc4(dripDoc.ref, {
             steps: updatedSteps,
             stats: {
               ...currentCampStats,
@@ -5901,7 +6207,7 @@ async function handleToggleDripCampaignStatus(req, res) {
       return;
     }
     const newStatus = status === "active" ? "active" : "paused";
-    await updateDoc3(campRef, {
+    await updateDoc4(campRef, {
       status: newStatus,
       updatedAt: (/* @__PURE__ */ new Date()).toISOString()
     });
@@ -5965,7 +6271,7 @@ async function handleEnrollDripSubscribers(req, res) {
       );
       enrolledCount++;
     }
-    await updateDoc3(campRef, {
+    await updateDoc4(campRef, {
       enrolledCount: (camp.enrolledCount || 0) + enrolledCount,
       activeSubscribers: (camp.activeSubscribers || 0) + enrolledCount,
       updatedAt: nowIso
@@ -6060,7 +6366,7 @@ async function handleAdvanceDripSubscriber(req, res) {
       res.status(404).json({ error: "Subscriber not found." });
       return;
     }
-    await updateDoc3(subRef, {
+    await updateDoc4(subRef, {
       nextExecutionAt: new Date(Date.now() - 5e3).toISOString(),
       updatedAt: (/* @__PURE__ */ new Date()).toISOString()
     });
@@ -6084,7 +6390,7 @@ async function handleCancelDripSubscriber(req, res) {
       return;
     }
     const subRef = doc4(serverDb, `organizations/${orgId}/drip_campaigns/${id}/subscribers`, subId);
-    await updateDoc3(subRef, {
+    await updateDoc4(subRef, {
       status: "cancelled",
       cancelledAt: (/* @__PURE__ */ new Date()).toISOString(),
       updatedAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -6198,7 +6504,7 @@ async function handleRescanDripCampaign(req, res) {
               if (replyTime >= sentTime || new Date(replyTime).getTime() - new Date(sentTime).getTime() > -6e4) {
                 isRead = true;
                 isDelivered = true;
-                await updateDoc3(rd.ref, {
+                await updateDoc4(rd.ref, {
                   currentStatus: "read",
                   readAt: replyTime,
                   deliveredAt: rData.deliveredAt || replyTime,
@@ -6249,7 +6555,7 @@ async function handleRescanDripCampaign(req, res) {
     const isAllCompleted = totalSubscribers > 0 && activeSubscribers === 0 && completedSubscribers >= totalSubscribers;
     const finalStatus = isAllCompleted ? "completed" : camp.status;
     const nowIso = (/* @__PURE__ */ new Date()).toISOString();
-    await updateDoc3(campRef, {
+    await updateDoc4(campRef, {
       enrolledCount: totalSubscribers,
       activeSubscribers,
       completedSubscribers,
@@ -6440,7 +6746,7 @@ async function handleGetDripCampaignAnalytics(req, res) {
             sub.stepHistory[histIdx] = h;
             try {
               const subDocRef = doc4(serverDb, `organizations/${orgId}/drip_campaigns/${id}/subscribers`, sub.id);
-              await updateDoc3(subDocRef, {
+              await updateDoc4(subDocRef, {
                 stepHistory: sub.stepHistory,
                 updatedAt: (/* @__PURE__ */ new Date()).toISOString()
               }).catch(() => {
@@ -6634,7 +6940,7 @@ async function handleReconcileDripCampaignDeliveries(req, res) {
         return h;
       });
       if (historyChanged) {
-        await updateDoc3(subDoc.ref, {
+        await updateDoc4(subDoc.ref, {
           stepHistory: history,
           ...replyTime ? { hasReplied: true, repliedAt: replyTime } : {},
           updatedAt: nowIso
@@ -6676,7 +6982,7 @@ async function handleReconcileDripCampaignDeliveries(req, res) {
         }
       };
     });
-    await updateDoc3(campRef, {
+    await updateDoc4(campRef, {
       steps: updatedSteps,
       stats: {
         totalMessagesSent,
@@ -6745,7 +7051,7 @@ async function handleMarkDripSubscriberRead(req, res) {
       return h;
     });
     if (changed) {
-      await updateDoc3(subRef, {
+      await updateDoc4(subRef, {
         stepHistory: hist,
         updatedAt: nowIso
       });
@@ -6804,7 +7110,7 @@ async function handleMarkDripSubscriberRead(req, res) {
           totalRead += st.stats?.read || 0;
           totalFailed += st.stats?.failed || 0;
         });
-        await updateDoc3(campRef, {
+        await updateDoc4(campRef, {
           steps: updatedSteps,
           stats: {
             totalMessagesSent: totalSent,
@@ -8252,6 +8558,7 @@ async function handleCreateMasterAdmin(req, res) {
       canWatchWorkspaceLive,
       canAccessInbox,
       canAccessDripCampaigns,
+      canAccessWallet,
       logoUrl,
       contactPhone
     } = req.body;
@@ -8312,6 +8619,7 @@ async function handleCreateMasterAdmin(req, res) {
       canWatchWorkspaceLive: canWatchWorkspaceLive !== false,
       canAccessInbox: canAccessInbox !== false,
       canAccessDripCampaigns: canAccessDripCampaigns !== false,
+      canAccessWallet: canAccessWallet !== false,
       subscription: {
         planId: planId || "plan_pro",
         planName,
@@ -8376,7 +8684,8 @@ async function handleUpdateMasterAdmin(req, res) {
       canAccessAutomations,
       canWatchWorkspaceLive,
       canAccessInbox,
-      canAccessDripCampaigns
+      canAccessDripCampaigns,
+      canAccessWallet
     } = req.body;
     const userRef = doc(serverDb, "users", adminId);
     const userSnap = await getDoc(userRef);
@@ -8436,6 +8745,9 @@ async function handleUpdateMasterAdmin(req, res) {
     }
     if (canAccessDripCampaigns !== void 0) {
       updates.canAccessDripCampaigns = Boolean(canAccessDripCampaigns);
+    }
+    if (canAccessWallet !== void 0) {
+      updates.canAccessWallet = Boolean(canAccessWallet);
     }
     if (newPassword && String(newPassword).trim().length >= 6) {
       const cleanP = String(newPassword).trim();
@@ -8965,6 +9277,7 @@ async function handleCreateAdminUser(req, res) {
       loginPassword: hashPassword(password),
       displayPassword: password,
       canAccessAutomations: permissions?.canAutomations !== false,
+      canAccessWallet: permissions?.canAccessWallet !== false,
       subscription: {
         planName: designation || "Team Member",
         status: status || "active",
@@ -9054,6 +9367,9 @@ async function handleUpdateAdminUser(req, res) {
     if (displayName) updates.displayName = displayName;
     if (permissions && permissions.canAutomations !== void 0) {
       updates.canAccessAutomations = Boolean(permissions.canAutomations);
+    }
+    if (permissions && permissions.canAccessWallet !== void 0) {
+      updates.canAccessWallet = Boolean(permissions.canAccessWallet);
     }
     if (phone !== void 0) updates.phone = String(phone).replace(/[^0-9]/g, "");
     if (email !== void 0) updates.email = String(email).trim().toLowerCase();
@@ -9667,6 +9983,10 @@ apiApp.put("/api/admin/users/:userId", handleUpdateAdminUser);
 apiApp.post("/api/admin/users/:userId/reset-password", handleResetAdminUserPassword);
 apiApp.delete("/api/admin/users/:userId", handleDeleteAdminUser);
 apiApp.post("/api/admin/impersonate", handleAdminImpersonate);
+apiApp.get("/api/wallet", handleGetWallet);
+apiApp.post("/api/wallet/recharge", handleRechargeWallet);
+apiApp.get("/api/wallet/pricing", handleGetPricing);
+apiApp.post("/api/wallet/pricing", handleUpdatePricing);
 apiApp.get("/api/meta/status", handleGetMetaStatus);
 apiApp.post("/api/meta/admin-config", handleSaveAdminMetaConfig);
 apiApp.post("/api/meta/embedded-signup-exchange", handleEmbeddedSignupExchange);

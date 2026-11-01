@@ -21,6 +21,7 @@ import {
 import { useAuth } from '../context/AuthContext.tsx';
 import type { UserRole } from '../types/index.ts';
 import { CaptchaBox, generateCaptchaCode } from './CaptchaBox.tsx';
+import { PWAInstallButton } from './PWAInstallButton.tsx';
 
 interface LoginPageProps {
   onOpenLegal?: (doc: 'privacy' | 'terms') => void;
@@ -249,19 +250,28 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onOpenLegal }) => {
   return (
     <div className="min-h-screen bg-neutral-50 dark:bg-neutral-950 flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8 animate-fadeIn">
       <div className="sm:mx-auto sm:w-full sm:max-w-md text-center space-y-3">
-        <div className="w-12 h-12 rounded-2xl bg-emerald-600 text-white flex items-center justify-center mx-auto shadow-md shadow-emerald-600/30">
-          <MessageSquare className="w-6 h-6 fill-white/20" />
+        <div className="w-16 h-16 rounded-2xl bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 p-2 mx-auto shadow-md flex items-center justify-center">
+          <img
+            src="/uploads/logo_org_9099268034.png"
+            alt="WABACLOUD Logo"
+            className="w-full h-full object-contain"
+            onError={(e) => {
+              (e.currentTarget as HTMLElement).style.display = 'none';
+            }}
+          />
         </div>
         <h2 className="text-2xl font-bold tracking-tight text-neutral-900 dark:text-white">
-          CloudWABA Portal
+          WABACLOUD Portal
         </h2>
         <p className="text-xs text-neutral-500 dark:text-neutral-400">
-          Multi-Tenant Meta WhatsApp Business Platform SaaS
+          Complete WhatsApp Business API Platform
         </p>
       </div>
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
         <div className="bg-white dark:bg-neutral-900 py-8 px-6 sm:px-10 shadow-xl border border-neutral-200 dark:border-neutral-800 rounded-3xl space-y-6">
+          {/* PWA In-App Install Prompt Banner */}
+          <PWAInstallButton variant="login-banner" />
           {!dbConnected && (
             <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 text-xs text-amber-800 dark:text-amber-300 flex items-center space-x-2">
               <AlertCircle className="w-4 h-4 shrink-0" />

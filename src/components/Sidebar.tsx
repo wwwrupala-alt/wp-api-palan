@@ -29,6 +29,7 @@ import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
 import { useTheme } from '../context/ThemeContext.tsx';
 import { WhatsAppPinModal } from './WhatsAppPinModal.tsx';
+import { PWAInstallButton } from './PWAInstallButton.tsx';
 
 interface SidebarProps {
   currentTab: string;
@@ -355,6 +356,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
           </div>
         )}
+
+        {/* In-App PWA Install Widget */}
+        <PWAInstallButton variant="sidebar" />
 
         {/* Footer: User profile, theme, logout */}
         <div className="p-3 border-t border-neutral-200 dark:border-neutral-800 space-y-2 bg-neutral-50/50 dark:bg-neutral-900/40">
