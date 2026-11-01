@@ -30,6 +30,7 @@ import {
   processWebhookStatusUpdate,
   processIncomingCustomerReply,
 } from './campaignAnalyticsService.ts';
+import { deductWalletForCampaign } from './walletService.ts';
 import type { CampaignRecipient, UserProfile, Organization } from '../types/index.ts';
 import { parseMessagingLimitTier } from '../lib/metaLimits.ts';
 
@@ -1862,6 +1863,23 @@ export async function executeCampaignDispatchCore(params: {
       );
     } catch (campErr) {
       console.warn('[Broadcast] Error updating campaign stats:', campErr);
+    }
+
+    // Automated Prepaid Wallet Deduction for sent messages
+    if (sentCount > 0) {
+      try {
+        const templateCategory = (template as any).category || 'UTILITY';
+        await deductWalletForCampaign({
+          organizationId,
+          category: templateCategory,
+          count: sentCount,
+          campaignId,
+          campaignName: campaignName || template.name,
+        });
+        console.log(`[Wallet] Deducted charges for ${sentCount} messages in campaign ${campaignName || campaignId}`);
+      } catch (walletErr: any) {
+        console.warn('[Wallet] Notice during campaign deduction:', walletErr.message);
+      }
     }
   }
 

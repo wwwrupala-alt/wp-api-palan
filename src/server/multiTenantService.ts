@@ -1675,6 +1675,7 @@ export async function handleCreateMasterAdmin(req: Request, res: Response): Prom
       canWatchWorkspaceLive,
       canAccessInbox,
       canAccessDripCampaigns,
+      canAccessWallet,
       logoUrl,
       contactPhone,
     } = req.body;
@@ -1750,6 +1751,7 @@ export async function handleCreateMasterAdmin(req: Request, res: Response): Prom
       canWatchWorkspaceLive: canWatchWorkspaceLive !== false,
       canAccessInbox: canAccessInbox !== false,
       canAccessDripCampaigns: canAccessDripCampaigns !== false,
+      canAccessWallet: canAccessWallet !== false,
       subscription: {
         planId: planId || 'plan_pro',
         planName,
@@ -1823,6 +1825,7 @@ export async function handleUpdateMasterAdmin(req: Request, res: Response): Prom
       canWatchWorkspaceLive,
       canAccessInbox,
       canAccessDripCampaigns,
+      canAccessWallet,
     } = req.body;
 
     const userRef = doc(serverDb, 'users', adminId);
@@ -1892,6 +1895,9 @@ export async function handleUpdateMasterAdmin(req: Request, res: Response): Prom
     }
     if (canAccessDripCampaigns !== undefined) {
       updates.canAccessDripCampaigns = Boolean(canAccessDripCampaigns);
+    }
+    if (canAccessWallet !== undefined) {
+      updates.canAccessWallet = Boolean(canAccessWallet);
     }
     if (newPassword && String(newPassword).trim().length >= 6) {
       const cleanP = String(newPassword).trim();
@@ -2539,6 +2545,7 @@ export async function handleCreateAdminUser(req: Request, res: Response): Promis
       loginPassword: hashPassword(password),
       displayPassword: password,
       canAccessAutomations: permissions?.canAutomations !== false,
+      canAccessWallet: permissions?.canAccessWallet !== false,
       subscription: {
         planName: designation || 'Team Member',
         status: status || 'active',
@@ -2650,6 +2657,9 @@ export async function handleUpdateAdminUser(req: Request, res: Response): Promis
     if (displayName) updates.displayName = displayName;
     if (permissions && permissions.canAutomations !== undefined) {
       updates.canAccessAutomations = Boolean(permissions.canAutomations);
+    }
+    if (permissions && permissions.canAccessWallet !== undefined) {
+      updates.canAccessWallet = Boolean(permissions.canAccessWallet);
     }
     if (phone !== undefined) updates.phone = String(phone).replace(/[^0-9]/g, '');
     if (email !== undefined) updates.email = String(email).trim().toLowerCase();

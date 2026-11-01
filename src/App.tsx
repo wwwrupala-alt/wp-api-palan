@@ -22,6 +22,7 @@ import { AdminPage } from './pages/AdminPage.tsx';
 import { MasterAdminPage } from './pages/MasterAdminPage.tsx';
 import { TenantUsersPage } from './pages/TenantUsersPage.tsx';
 import { LegalPage } from './pages/LegalPage.tsx';
+import { WalletPage } from './pages/WalletPage.tsx';
 import { WhatsAppPinModal } from './components/WhatsAppPinModal.tsx';
 import { Loader2, ArrowLeft, ShieldAlert } from 'lucide-react';
 
@@ -249,6 +250,7 @@ const AppContent: React.FC = () => {
               <AutomationsPage />
             )}
           {currentTab === 'admin' && (isAdmin || isMasterAdmin) && (isMasterAdmin || userProfile?.canAccessSettingsMetaApi !== false) && <AdminPage />}
+          {currentTab === 'wallet' && (isMasterAdmin || userProfile?.canAccessWallet !== false) && <WalletPage />}
         </main>
       </div>
 

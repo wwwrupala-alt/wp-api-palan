@@ -97,9 +97,53 @@ export interface UserProfile {
   canWatchWorkspaceLive?: boolean;
   canAccessInbox?: boolean;
   canAccessDripCampaigns?: boolean;
+  canAccessWallet?: boolean;
   organizationId: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface WalletAccount {
+  id?: string;
+  organizationId: string;
+  userId?: string;
+  balance: number;
+  totalRecharged: number;
+  totalSpent: number;
+  currency: string;
+  lowBalanceThreshold: number;
+  updatedAt: string;
+  createdAt: string;
+}
+
+export type WalletTransactionType = 'credit' | 'debit';
+export type WalletMessageCategory = 'MARKETING' | 'UTILITY' | 'AUTHENTICATION' | 'SERVICE' | 'RECHARGE' | 'ADJUSTMENT';
+
+export interface WalletTransaction {
+  id: string;
+  organizationId: string;
+  userId?: string;
+  type: WalletTransactionType;
+  amount: number;
+  balanceAfter: number;
+  category: WalletMessageCategory;
+  description: string;
+  campaignId?: string;
+  campaignName?: string;
+  messageCount?: number;
+  ratePerMessage?: number;
+  paymentReference?: string;
+  createdAt: string;
+}
+
+export interface CategoryPricing {
+  marketingRate: number;
+  utilityRate: number;
+  authenticationRate: number;
+  serviceRate: number;
+  currency: string;
+  updatedAt?: string;
+  updatedBy?: string;
 }
 
 export interface Organization {

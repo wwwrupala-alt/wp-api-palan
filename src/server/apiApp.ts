@@ -85,6 +85,12 @@ import {
   cascadeDeleteWhatsAppAccountData,
   startStorageCleanupScheduler,
 } from './storageCleanupService.ts';
+import {
+  handleGetWallet,
+  handleRechargeWallet,
+  handleGetPricing,
+  handleUpdatePricing,
+} from './walletService.ts';
 
 // Initialize default accounts and persistent disk backups
 ensureDefaultAccounts().catch((err) => {
@@ -236,6 +242,12 @@ apiApp.put('/api/admin/users/:userId', handleUpdateAdminUser);
 apiApp.post('/api/admin/users/:userId/reset-password', handleResetAdminUserPassword);
 apiApp.delete('/api/admin/users/:userId', handleDeleteAdminUser);
 apiApp.post('/api/admin/impersonate', handleAdminImpersonate);
+
+// Multi-Tenant Prepaid Wallet & Pricing Endpoints
+apiApp.get('/api/wallet', handleGetWallet);
+apiApp.post('/api/wallet/recharge', handleRechargeWallet);
+apiApp.get('/api/wallet/pricing', handleGetPricing);
+apiApp.post('/api/wallet/pricing', handleUpdatePricing);
 
 // Meta Cloud API Routes
 apiApp.get('/api/meta/status', handleGetMetaStatus);

@@ -30,6 +30,7 @@ import {
   Smartphone,
   Bot,
   Lock,
+  Wallet,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useToast } from '../context/ToastContext.tsx';
@@ -65,6 +66,7 @@ export const TenantUsersPage: React.FC = () => {
     canManageContacts: true,
     canTemplates: true,
     canAutomations: true,
+    canAccessWallet: true,
   });
   const [creatingUser, setCreatingUser] = useState(false);
 
@@ -86,6 +88,7 @@ export const TenantUsersPage: React.FC = () => {
     canManageContacts: true,
     canTemplates: true,
     canAutomations: true,
+    canAccessWallet: true,
   });
   const [savingEdit, setSavingEdit] = useState(false);
 
@@ -758,6 +761,7 @@ export const TenantUsersPage: React.FC = () => {
                                 canManageContacts: perms.canManageContacts !== false,
                                 canTemplates: perms.canTemplates !== false,
                                 canAutomations: u.canAccessAutomations !== false && perms.canAutomations !== false,
+                                canAccessWallet: u.canAccessWallet !== false && perms.canAccessWallet !== false,
                               });
                             }}
                             title="Edit User & Extend Validity"
@@ -1099,7 +1103,7 @@ export const TenantUsersPage: React.FC = () => {
                       <span>Message Templates</span>
                     </label>
 
-                    <label className="flex items-center space-x-2 p-2 rounded-xl border border-neutral-200 dark:border-neutral-800 cursor-pointer col-span-2">
+                    <label className="flex items-center space-x-2 p-2 rounded-xl border border-neutral-200 dark:border-neutral-800 cursor-pointer">
                       <input
                         type="checkbox"
                         checked={newUserPermissions.canAutomations}
@@ -1114,6 +1118,24 @@ export const TenantUsersPage: React.FC = () => {
                       <div className="flex items-center space-x-1.5">
                         <Bot className="w-3.5 h-3.5 text-purple-600" />
                         <span className="font-semibold text-neutral-900 dark:text-white">Bot &amp; Automations</span>
+                      </div>
+                    </label>
+
+                    <label className="flex items-center space-x-2 p-2 rounded-xl border border-neutral-200 dark:border-neutral-800 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={newUserPermissions.canAccessWallet}
+                        onChange={(e) =>
+                          setNewUserPermissions({
+                            ...newUserPermissions,
+                            canAccessWallet: e.target.checked,
+                          })
+                        }
+                        className="rounded text-emerald-600"
+                      />
+                      <div className="flex items-center space-x-1.5">
+                        <Wallet className="w-3.5 h-3.5 text-emerald-600" />
+                        <span className="font-semibold text-neutral-900 dark:text-white">Prepaid Wallet</span>
                       </div>
                     </label>
                   </div>
@@ -1517,7 +1539,7 @@ export const TenantUsersPage: React.FC = () => {
                       <span>Message Templates</span>
                     </label>
 
-                    <label className="flex items-center space-x-2 p-2 rounded-xl border border-neutral-200 dark:border-neutral-800 cursor-pointer col-span-2">
+                    <label className="flex items-center space-x-2 p-2 rounded-xl border border-neutral-200 dark:border-neutral-800 cursor-pointer">
                       <input
                         type="checkbox"
                         checked={editPermissions.canAutomations}
@@ -1532,6 +1554,24 @@ export const TenantUsersPage: React.FC = () => {
                       <div className="flex items-center space-x-1.5">
                         <Bot className="w-3.5 h-3.5 text-purple-600" />
                         <span className="font-semibold text-neutral-900 dark:text-white">Bot &amp; Automations</span>
+                      </div>
+                    </label>
+
+                    <label className="flex items-center space-x-2 p-2 rounded-xl border border-neutral-200 dark:border-neutral-800 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={editPermissions.canAccessWallet}
+                        onChange={(e) =>
+                          setEditPermissions({
+                            ...editPermissions,
+                            canAccessWallet: e.target.checked,
+                          })
+                        }
+                        className="rounded text-emerald-600"
+                      />
+                      <div className="flex items-center space-x-1.5">
+                        <Wallet className="w-3.5 h-3.5 text-emerald-600" />
+                        <span className="font-semibold text-neutral-900 dark:text-white">Prepaid Wallet</span>
                       </div>
                     </label>
                   </div>

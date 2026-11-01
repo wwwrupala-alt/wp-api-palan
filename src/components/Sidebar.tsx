@@ -23,6 +23,7 @@ import {
   AlertCircle,
   Workflow,
   Phone,
+  Wallet,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -176,6 +177,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
     if (canAccessSettings) {
       navItems.push({ id: 'admin', label: 'Settings & Meta Cloud API', icon: ShieldCheck });
     }
+  }
+
+  // Pre-Paid Wallet & Balance: Placed below Settings & Meta and above WhatsApp Numbers
+  const canAccessWallet = isMasterAdmin || userProfile?.canAccessWallet !== false;
+  if (canAccessWallet) {
+    navItems.push({ id: 'wallet', label: 'Prepaid Wallet & Balance', icon: Wallet });
   }
 
   // LAST ITEM IN MENU: WhatsApp Numbers (PIN protected)

@@ -10,6 +10,7 @@ import {
   collection,
   query,
   where,
+  limit,
   updateDoc,
   deleteDoc,
 } from 'firebase/firestore';
@@ -102,4 +103,4 @@ export const serverDb = initializeFirestore(
   dbId
 );
 
-export { doc, setDoc, getDoc, getDocs, collection, query, where, updateDoc, deleteDoc };
+export { doc, setDoc, getDoc, getDocs, collection, query, where, limit, updateDoc, deleteDoc };

@@ -54,6 +54,7 @@ export const Header: React.FC<HeaderProps> = ({
     analytics: 'Campaign Analytics & Live Tracking',
     automations: 'Bot & Automations',
     admin: 'Settings & Meta Cloud API',
+    wallet: 'Prepaid Wallet & Live Balance Tracker',
   };
 
   const mobileTitles: Record<string, string> = {
@@ -69,6 +70,7 @@ export const Header: React.FC<HeaderProps> = ({
     analytics: 'Analytics',
     automations: 'Automations',
     admin: 'Settings & Meta',
+    wallet: 'Wallet & Balance',
   };
 
   return (

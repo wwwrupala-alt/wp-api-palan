@@ -45,6 +45,7 @@ import {
   Upload,
   Image as ImageIcon,
   Phone,
+  Wallet,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useToast } from '../context/ToastContext.tsx';
@@ -62,6 +63,12 @@ interface AdminTenantItem {
   displayPassword?: string;
   role: string;
   organizationId: string;
+  canAccessWallet?: boolean;
+  canAccessSettingsMetaApi?: boolean;
+  canAccessAutomations?: boolean;
+  canWatchWorkspaceLive?: boolean;
+  canAccessInbox?: boolean;
+  canAccessDripCampaigns?: boolean;
   subscription?: {
     planId?: string;
     planName?: string;
@@ -147,6 +154,7 @@ export const MasterAdminPage: React.FC = () => {
   const [newCanWatchWorkspaceLive, setNewCanWatchWorkspaceLive] = useState(true);
   const [newCanAccessInbox, setNewCanAccessInbox] = useState(true);
   const [newCanAccessDripCampaigns, setNewCanAccessDripCampaigns] = useState(true);
+  const [newCanAccessWallet, setNewCanAccessWallet] = useState(true);
   const [newAdminLogoUrl, setNewAdminLogoUrl] = useState('');
   const [newAdminContactPhone, setNewAdminContactPhone] = useState('');
 
@@ -240,6 +248,7 @@ export const MasterAdminPage: React.FC = () => {
   const [editCanWatchWorkspaceLive, setEditCanWatchWorkspaceLive] = useState(true);
   const [editCanAccessInbox, setEditCanAccessInbox] = useState(true);
   const [editCanAccessDripCampaigns, setEditCanAccessDripCampaigns] = useState(true);
+  const [editCanAccessWallet, setEditCanAccessWallet] = useState(true);
   const [savingEdit, setSavingEdit] = useState(false);
 
   // Modal: Reset Password
@@ -453,6 +462,7 @@ export const MasterAdminPage: React.FC = () => {
           canWatchWorkspaceLive: newCanWatchWorkspaceLive,
           canAccessInbox: newCanAccessInbox,
           canAccessDripCampaigns: newCanAccessDripCampaigns,
+          canAccessWallet: newCanAccessWallet,
           logoUrl: newAdminLogoUrl,
           contactPhone: newAdminContactPhone.trim() || newAdminPhone.trim(),
         }),
@@ -497,6 +507,7 @@ export const MasterAdminPage: React.FC = () => {
       setNewCanWatchWorkspaceLive(true);
       setNewCanAccessInbox(true);
       setNewCanAccessDripCampaigns(true);
+      setNewCanAccessWallet(true);
       await loadMasterData();
     } catch (err: any) {
       toast.showError('Creation Error', err.message || 'Could not create Admin.');
@@ -538,6 +549,7 @@ export const MasterAdminPage: React.FC = () => {
     setEditCanWatchWorkspaceLive(adm.canWatchWorkspaceLive !== false);
     setEditCanAccessInbox(adm.canAccessInbox !== false);
     setEditCanAccessDripCampaigns(adm.canAccessDripCampaigns !== false);
+    setEditCanAccessWallet(adm.canAccessWallet !== false);
     setEditBusinessName(adm.businessName || '');
     setEditAdminLogoUrl(adm.logoUrl || '');
     setEditAdminContactPhone(adm.contactPhone || adm.phone || '');
@@ -563,6 +575,7 @@ export const MasterAdminPage: React.FC = () => {
         canWatchWorkspaceLive: editCanWatchWorkspaceLive,
         canAccessInbox: editCanAccessInbox,
         canAccessDripCampaigns: editCanAccessDripCampaigns,
+        canAccessWallet: editCanAccessWallet,
       };
 
       if (validityMode === 'pick_date' && customDateInput) {
@@ -1401,6 +1414,15 @@ export const MasterAdminPage: React.FC = () => {
                                     <span>⚡ Drip: On</span>
                                   </span>
                                 )}
+                                {adm.canAccessWallet === false ? (
+                                  <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[9px] font-semibold bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400 border border-neutral-300 dark:border-neutral-750" title="Prepaid Wallet is hidden from this admin">
+                                    <span>💳 Wallet: Off</span>
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[9px] font-semibold bg-violet-50 text-violet-700 dark:bg-violet-950/60 dark:text-violet-300 border border-violet-200 dark:border-violet-800" title="Prepaid Wallet is accessible to this admin">
+                                    <span>💳 Wallet: On</span>
+                                  </span>
+                                )}
                               </div>
                             </div>
                           </td>
@@ -2181,6 +2203,53 @@ export const MasterAdminPage: React.FC = () => {
                   </span>
                   <span className="font-bold uppercase text-[10px] px-2 py-0.5 rounded bg-white/70 dark:bg-black/30">
                     {newCanAccessDripCampaigns ? 'Allowed' : 'Not Allowed'}
+                  </span>
+                </div>
+              </div>
+
+              {/* 4. Prepaid Wallet & Live Balance Permission Control */}
+              <div className="p-3.5 rounded-2xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/40 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2.5">
+                    <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${
+                      newCanAccessWallet
+                        ? 'bg-violet-600 text-white shadow-xs'
+                        : 'bg-neutral-200 dark:bg-neutral-700 text-neutral-500 dark:text-neutral-400'
+                    }`}>
+                      <Wallet className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <p className="font-bold text-xs text-neutral-900 dark:text-white">
+                        Prepaid Wallet &amp; Live Balance Permission
+                      </p>
+                      <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                        Admin ko &ldquo;Prepaid Wallet &amp; Balance&rdquo; tracker ka menu allow karna hai ya hide rakhna hai
+                      </p>
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={newCanAccessWallet}
+                      onChange={(e) => setNewCanAccessWallet(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-neutral-300 peer-focus:outline-hidden rounded-full peer dark:bg-neutral-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-neutral-600 peer-checked:bg-violet-600"></div>
+                  </label>
+                </div>
+
+                <div className={`p-2 rounded-xl text-[11px] flex items-center justify-between ${
+                  newCanAccessWallet
+                    ? 'bg-violet-100/70 text-violet-900 dark:bg-violet-950/60 dark:text-violet-300 border border-violet-200 dark:border-violet-800'
+                    : 'bg-rose-100/70 text-rose-900 dark:bg-rose-950/60 dark:text-rose-300 border border-rose-200 dark:border-rose-800'
+                }`}>
+                  <span className="font-medium">
+                    {newCanAccessWallet
+                      ? '✅ Ha, option show hoga (Admin & their users can track balance & recharge).'
+                      : '🚫 Nahi, option hide rahega (Admin cannot see or access Prepaid Wallet).'}
+                  </span>
+                  <span className="font-bold uppercase text-[10px] px-2 py-0.5 rounded bg-white/70 dark:bg-black/30">
+                    {newCanAccessWallet ? 'Allowed' : 'Not Allowed'}
                   </span>
                 </div>
               </div>
@@ -3009,6 +3078,53 @@ export const MasterAdminPage: React.FC = () => {
                   </span>
                   <span className="font-bold uppercase text-[10px] px-2 py-0.5 rounded bg-white/70 dark:bg-black/30">
                     {editCanAccessDripCampaigns ? 'Allowed' : 'Hidden'}
+                  </span>
+                </div>
+              </div>
+
+              {/* 4. Prepaid Wallet & Live Balance Permission Control */}
+              <div className="p-3.5 rounded-2xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/40 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2.5">
+                    <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${
+                      editCanAccessWallet
+                        ? 'bg-violet-600 text-white shadow-xs'
+                        : 'bg-neutral-200 dark:bg-neutral-700 text-neutral-500 dark:text-neutral-400'
+                    }`}>
+                      <Wallet className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <p className="font-bold text-xs text-neutral-900 dark:text-white">
+                        Prepaid Wallet &amp; Live Balance Permission
+                      </p>
+                      <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                        Is admin ko &ldquo;Prepaid Wallet &amp; Balance&rdquo; tracker ka menu allow karna hai ya hide rakhna hai
+                      </p>
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={editCanAccessWallet}
+                      onChange={(e) => setEditCanAccessWallet(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-neutral-300 peer-focus:outline-hidden rounded-full peer dark:bg-neutral-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-neutral-600 peer-checked:bg-violet-600"></div>
+                  </label>
+                </div>
+
+                <div className={`p-2 rounded-xl text-[11px] flex items-center justify-between ${
+                  editCanAccessWallet
+                    ? 'bg-violet-100/70 text-violet-900 dark:bg-violet-950/60 dark:text-violet-300 border border-violet-200 dark:border-violet-800'
+                    : 'bg-rose-100/70 text-rose-900 dark:bg-rose-950/60 dark:text-rose-300 border border-rose-200 dark:border-rose-800'
+                }`}>
+                  <span className="font-medium">
+                    {editCanAccessWallet
+                      ? '✅ Permission Allowed (Admin sees Prepaid Wallet in sidebar).'
+                      : '🚫 Permission Denied (Admin will NOT see Prepaid Wallet).'}
+                  </span>
+                  <span className="font-bold uppercase text-[10px] px-2 py-0.5 rounded bg-white/70 dark:bg-black/30">
+                    {editCanAccessWallet ? 'Allowed' : 'Hidden'}
                   </span>
                 </div>
               </div>

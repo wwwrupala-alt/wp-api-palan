@@ -1102,10 +1102,11 @@ export function subscribeMessages(
   onError: (err: unknown) => void
 ) {
   const path = `organizations/${orgId}/messages`;
+  // Using pure equality filter without composite orderBy so Firestore never requires a composite index.
+  // Chronological ordering is performed cleanly in memory.
   const q = query(
     collection(db, path),
     where('conversationId', '==', conversationId),
-    orderBy('timestamp', 'asc'),
     limit(100)
   );
 
@@ -1116,6 +1117,7 @@ export function subscribeMessages(
       snapshot.forEach((d) => {
         list.push({ id: d.id, ...(d.data() as Omit<Message, 'id'>) });
       });
+      list.sort((a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime());
       onData(list);
     },
     (err) => {
@@ -2151,5 +2153,52 @@ export async function uploadMediaFile(
     };
     reader.readAsDataURL(processedFile);
   });
+}
+
+// -------------------------------------------------------------
+// PREPAID WALLET & CATEGORY PRICING CLIENT SERVICES
+// -------------------------------------------------------------
+
+export async function fetchWalletInfo(orgId: string, userId?: string) {
+  const q = new URLSearchParams({ organizationId: orgId });
+  if (userId) q.set('userId', userId);
+  const res = await fetch(`/api/wallet?${q.toString()}`);
+  return parseJsonResponse(res, 'Failed to fetch prepaid wallet details.');
+}
+
+export async function rechargeWalletApi(params: {
+  organizationId: string;
+  userId?: string;
+  amount: number;
+  note?: string;
+  paymentReference?: string;
+}) {
+  const res = await fetch('/api/wallet/recharge', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  return parseJsonResponse(res, 'Failed to process recharge.');
+}
+
+export async function fetchPricingApi() {
+  const res = await fetch('/api/wallet/pricing');
+  return parseJsonResponse(res, 'Failed to fetch category pricing.');
+}
+
+export async function updatePricingApi(pricing: {
+  marketingRate: number;
+  utilityRate: number;
+  authenticationRate: number;
+  serviceRate: number;
+  currency?: string;
+  updatedBy?: string;
+}) {
+  const res = await fetch('/api/wallet/pricing', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(pricing),
+  });
+  return parseJsonResponse(res, 'Failed to update category pricing.');
 }
 
