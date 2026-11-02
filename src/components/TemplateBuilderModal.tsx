@@ -535,6 +535,27 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
 
   const detectedVarKeys = Object.keys(bodyVariables);
 
+  // Meta Word-to-Variable Ratio Analysis
+  const bodyMatches = bodyText.match(/\{\{(\d+)\}\}/g) || [];
+  const uniqueVarCount = new Set(bodyMatches.map((m) => m.replace(/[\{\}]/g, ''))).size;
+  const textWithoutVars = bodyText.replace(/\{\{\d+\}\}/g, ' ').replace(/[^\w\s\u0900-\u097F]/g, ' ').trim();
+  const staticWordCount = textWithoutVars ? textWithoutVars.split(/\s+/).filter(Boolean).length : 0;
+  const minRequiredWords = uniqueVarCount * 3;
+  const isRatioLow = uniqueVarCount > 0 && staticWordCount < minRequiredWords;
+
+  const handleAutoEnrichBodyText = () => {
+    let text = bodyText.trim();
+    if (/^\s*\{\{\d+\}\}/.test(text)) {
+      text = `Hello,\n\n${text}`;
+    }
+    if (!text.toLowerCase().includes('thank you') && !text.toLowerCase().includes('dhanyawad')) {
+      text = `${text}\n\nThank you for choosing our service. We truly appreciate your business and are here to help you anytime!`;
+    } else {
+      text = `${text}\n\nWe truly appreciate your business and look forward to serving you with the highest quality!`;
+    }
+    setBodyText(text);
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/70 backdrop-blur-xs overflow-y-auto">
       <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-3xl w-full max-w-5xl shadow-2xl overflow-hidden my-auto max-h-[92vh] flex flex-col">
@@ -609,9 +630,14 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
                   >
                     ⚡ Make Template Name Unique
                   </button>
-                  <span className="text-[10.5px] text-rose-600/80 dark:text-rose-400/80">
-                    (Agar name already exist hai to naya unique name set ho jayega)
-                  </span>
+                  <button
+                    type="button"
+                    onClick={handleAutoEnrichBodyText}
+                    className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold transition-all cursor-pointer shadow-xs flex items-center space-x-1"
+                  >
+                    <Sparkles className="w-3 h-3" />
+                    <span>⚡ Auto-Enrich Body Text (Fix Word Ratio)</span>
+                  </button>
                 </div>
               </div>
             )}
@@ -972,6 +998,30 @@ export const TemplateBuilderModal: React.FC<TemplateBuilderModalProps> = ({
                 <p className="text-[10px] text-neutral-500 dark:text-neutral-400 mt-1">
                   💡 <strong>Meta WhatsApp Rule:</strong> Variables cannot be at the very beginning or end of the message text.
                 </p>
+
+                {isRatioLow && (
+                  <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 text-amber-800 dark:text-amber-300 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2 mt-2 animate-fadeIn">
+                    <div className="flex items-start space-x-2">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-semibold text-[11px]">
+                          Meta Word Ratio Warning ({staticWordCount}/{minRequiredWords} words for {uniqueVarCount} variable(s))
+                        </p>
+                        <p className="text-[10px] text-amber-700 dark:text-amber-400 mt-0.5">
+                          Meta requires at least 3-4 descriptive words for every variable. Iske bina Meta Error 2388293 (&apos;Parameters words ratio exceeds limit&apos;) deta hai.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleAutoEnrichBodyText}
+                      className="shrink-0 px-2.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-[10.5px] cursor-pointer shadow-xs transition-colors flex items-center space-x-1 self-start sm:self-auto"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>⚡ Auto-Add Context Words</span>
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Dynamic Variables Inputs for Approval & Live Preview */}

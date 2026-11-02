@@ -44,6 +44,7 @@ interface CreateCampaignModalProps {
   groups: ContactGroup[];
   onSuccess?: () => void;
   initialCloneCampaign?: Campaign | null;
+  initialTemplateId?: string | null;
 }
 
 export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
@@ -57,6 +58,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
   groups,
   onSuccess,
   initialCloneCampaign,
+  initialTemplateId,
 }) => {
   const toast = useToast();
 
@@ -255,6 +257,28 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
       setAudienceMode('manual');
       setManualNumbersText('');
       setErrorMsg(null);
+    } else if (initialTemplateId) {
+      // Direct template-to-campaign flow
+      const targetTpl = templates.find((t) => t.id === initialTemplateId || t.metaTemplateId === initialTemplateId);
+      if (targetTpl) {
+        setSelectedTemplateId(targetTpl.id);
+        setCampName(`${targetTpl.name} Broadcast`);
+        if (targetTpl.whatsAppAccountId && availableAccounts.some((a) => a.id === targetTpl.whatsAppAccountId)) {
+          setSelectedAccountId(targetTpl.whatsAppAccountId);
+        }
+      } else {
+        setSelectedTemplateId(initialTemplateId);
+        setCampName(`Broadcast ${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}`);
+      }
+      setTemplateVariables({});
+      setCampaignMediaUrl('');
+      setCampaignMediaPreviewUrl('');
+      setUploadedCampaignMedia(null);
+      setAudienceMode('manual');
+      setManualNumbersText('');
+      setScheduleMode('immediate');
+      setScheduledDateTime(getQuickPresetTime(60));
+      setErrorMsg(null);
     } else {
       // Default new campaign reset
       setCampName('');
@@ -272,7 +296,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
       setScheduledDateTime(getQuickPresetTime(60));
       setErrorMsg(null);
     }
-  }, [isOpen, initialCloneCampaign, templates]);
+  }, [isOpen, initialCloneCampaign, initialTemplateId, templates]);
 
   // Campaign media PC upload state
   const [campaignMediaSourceMode, setCampaignMediaSourceMode] = useState<'upload' | 'url'>('upload');
@@ -1296,6 +1320,13 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
                     </span>
                     <span className="text-[11px] font-normal text-neutral-500">
                       <code>{`{{1}}`}</code> is auto-personalized to contact name
+                    </span>
+                  </div>
+
+                  <div className="p-2 rounded-xl bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-900/40 text-[10.5px] text-amber-800 dark:text-amber-300 flex items-start space-x-1.5">
+                    <Info className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                    <span>
+                      <strong>Meta WhatsApp API Niyam:</strong> Ek single variable ke andar Enter (New-line break) allow nahi hota (Meta Error #100). Agar aapko ek ke niche dusri line chahiye, toh <strong>Template Body</strong> ke design me Enter dabayein ya alag variables (jaise <code>{`{{1}}`}</code>, <code>{`{{2}}`}</code>, <code>{`{{3}}`}</code>) use karein.
                     </span>
                   </div>
 

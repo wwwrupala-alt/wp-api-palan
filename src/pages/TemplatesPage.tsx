@@ -28,6 +28,7 @@ import {
   AlertTriangle,
   HelpCircle,
   Phone,
+  Send,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -41,9 +42,11 @@ import {
 import { TemplateBuilderModal } from '../components/TemplateBuilderModal.tsx';
 import { MiniTemplatePhonePreview } from '../components/MiniTemplatePhonePreview.tsx';
 import { UpdateAccountTokenModal } from '../components/UpdateAccountTokenModal.tsx';
-import type { Template, TemplateComponent } from '../types/index.ts';
+interface TemplatesPageProps {
+  onUseTemplateInCampaign?: (templateId: string, template: Template) => void;
+}
 
-export const TemplatesPage: React.FC = () => {
+export const TemplatesPage: React.FC<TemplatesPageProps> = ({ onUseTemplateInCampaign }) => {
   const { organization } = useAuth();
   const { activeAccount, accounts } = useWhatsAppAccounts();
   const toast = useToast();
@@ -952,6 +955,20 @@ export const TemplatesPage: React.FC = () => {
                     </span>
 
                     <div className="flex items-center space-x-1 shrink-0">
+                      {/* Direct Create Campaign Action */}
+                      <button
+                        onClick={() => {
+                          if (onUseTemplateInCampaign) {
+                            onUseTemplateInCampaign(t.id, t);
+                          }
+                        }}
+                        title={`Create new campaign using "${t.name}"`}
+                        className="p-1 px-2 rounded-lg text-white bg-emerald-600 hover:bg-emerald-700 font-semibold text-[10px] flex items-center space-x-1 cursor-pointer shadow-2xs transition-colors shrink-0"
+                      >
+                        <Send className="w-2.5 h-2.5" />
+                        <span>Campaign</span>
+                      </button>
+
                       <button
                         onClick={() => setPreviewTemplate(t)}
                         title="Zoom Preview"
@@ -1132,6 +1149,20 @@ export const TemplatesPage: React.FC = () => {
                   </div>
 
                   <div className="flex items-center space-x-2 self-end sm:self-auto">
+                    {/* Direct Create Campaign Action (Wide view) */}
+                    <button
+                      onClick={() => {
+                        if (onUseTemplateInCampaign) {
+                          onUseTemplateInCampaign(t.id, t);
+                        }
+                      }}
+                      title={`Create new campaign using "${t.name}"`}
+                      className="px-3 py-1.5 rounded-xl text-white bg-emerald-600 hover:bg-emerald-700 font-bold transition-colors flex items-center space-x-1.5 cursor-pointer text-xs shadow-2xs"
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                      <span>Create Campaign</span>
+                    </button>
+
                     <button
                       onClick={() => setPreviewTemplate(t)}
                       title="Inspect Fullscreen Mobile Preview"
@@ -1205,17 +1236,31 @@ export const TemplatesPage: React.FC = () => {
               />
             </div>
 
-            <div className="pt-2 border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
-              <button
-                onClick={() => {
-                  handleCloneTemplate(previewTemplate);
-                  setPreviewTemplate(null);
-                }}
-                className="px-3 py-1.5 rounded-xl bg-teal-50 dark:bg-teal-950/40 text-teal-700 dark:text-teal-300 border border-teal-200 dark:border-teal-800 text-xs font-semibold flex items-center space-x-1.5 cursor-pointer"
-              >
-                <Copy className="w-3.5 h-3.5" />
-                <span>Clone This Template</span>
-              </button>
+            <div className="pt-2 border-t border-neutral-200 dark:border-neutral-800 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => {
+                    if (onUseTemplateInCampaign && previewTemplate) {
+                      onUseTemplateInCampaign(previewTemplate.id, previewTemplate);
+                      setPreviewTemplate(null);
+                    }
+                  }}
+                  className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center space-x-1.5 cursor-pointer shadow-xs transition-colors"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>Create Campaign</span>
+                </button>
+                <button
+                  onClick={() => {
+                    handleCloneTemplate(previewTemplate);
+                    setPreviewTemplate(null);
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-teal-50 dark:bg-teal-950/40 text-teal-700 dark:text-teal-300 border border-teal-200 dark:border-teal-800 text-xs font-semibold flex items-center space-x-1.5 cursor-pointer"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>Clone</span>
+                </button>
+              </div>
               <button
                 onClick={() => setPreviewTemplate(null)}
                 className="px-4 py-1.5 rounded-xl bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 text-xs font-semibold cursor-pointer"

@@ -68,6 +68,7 @@ const AppContent: React.FC = () => {
 
   const [selectedAnalyticsCampaignId, setSelectedAnalyticsCampaignId] = useState<string>('');
   const [analyticsMode, setAnalyticsMode] = useState<'broadcast' | 'drip'>('broadcast');
+  const [targetTemplateForCampaign, setTargetTemplateForCampaign] = useState<string | null>(null);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
 
@@ -214,9 +215,18 @@ const AppContent: React.FC = () => {
               />
             ))}
           {currentTab === 'contacts' && <ContactsPage />}
-          {currentTab === 'templates' && <TemplatesPage />}
+          {currentTab === 'templates' && (
+            <TemplatesPage
+              onUseTemplateInCampaign={(templateId) => {
+                setTargetTemplateForCampaign(templateId);
+                setCurrentTab('campaigns');
+              }}
+            />
+          )}
           {currentTab === 'campaigns' && (
             <CampaignsPage
+              initialTemplateId={targetTemplateForCampaign}
+              onClearInitialTemplate={() => setTargetTemplateForCampaign(null)}
               onViewAnalytics={(campId) => {
                 setSelectedAnalyticsCampaignId(campId);
                 setAnalyticsMode('broadcast');

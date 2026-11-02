@@ -1172,10 +1172,77 @@ export async function handleCreateTemplate(req: Request, res: Response) {
 
     if (!createRes.ok || createData.error) {
       const errObj = createData.error;
+      const subcode = errObj?.error_subcode;
+      const rawMsg = errObj?.message || '';
+
+      // Auto-Retry for Error 2388293: "Parameters words ratio exceeds limit"
+      // Meta requires sufficient static words around variables. If ratio failed, enrich body text with professional context words and auto-retry!
+      if (
+        subcode === 2388293 ||
+        rawMsg.toLowerCase().includes('ratio') ||
+        rawMsg.toLowerCase().includes('parameters words ratio') ||
+        String(errObj?.error_user_title || '').toLowerCase().includes('ratio')
+      ) {
+        console.log('[handleCreateTemplate] Meta error 2388293 (Parameters words ratio) detected. Auto-enriching body text with contextual words to satisfy Meta ratio and retrying...');
+        const enrichedComponents = sanitizedComponents.map((c: any) => {
+          if (c.type === 'BODY' && c.text) {
+            let enrichedText = String(c.text).trim();
+            // Ensure variables are not at the very beginning
+            if (/^\s*\{\{\d+\}\}/.test(enrichedText)) {
+              enrichedText = `Hello,\n\n${enrichedText}`;
+            }
+            // Add polite contextual closing words to satisfy Meta's word-to-variable ratio
+            if (!enrichedText.toLowerCase().includes('thank you') && !enrichedText.toLowerCase().includes('dhanyawad')) {
+              enrichedText = `${enrichedText}\n\nThank you for choosing our service. We truly appreciate your business and are here to help you anytime!`;
+            } else {
+              enrichedText = `${enrichedText}\n\nWe truly appreciate your business and look forward to serving you with the highest quality!`;
+            }
+            return {
+              ...c,
+              text: enrichedText,
+            };
+          }
+          return c;
+        });
+
+        try {
+          const retryRes = await fetch(createUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              name: cleanTplName,
+              category,
+              language,
+              components: enrichedComponents,
+            }),
+          });
+
+          const retryData = await retryRes.json();
+          if (retryRes.ok && !retryData.error && retryData.id) {
+            console.log('[handleCreateTemplate] Auto-retry SUCCEEDED with enriched body text on Meta:', retryData.id);
+            return res.json({
+              success: true,
+              metaTemplateId: retryData.id,
+              status: retryData.status || 'PENDING',
+              autoEnriched: true,
+              message: 'Template created successfully on Meta! (Meta requires a minimum word-to-variable ratio, so polite greeting/closing context was automatically added).',
+            });
+          } else {
+            console.warn('[handleCreateTemplate] Auto-retry after word ratio enrichment response:', retryData);
+            if (retryData?.error) {
+              createData = retryData;
+            }
+          }
+        } catch (retryErr: any) {
+          console.warn('[handleCreateTemplate] Auto-retry fetch exception:', retryErr);
+        }
+      }
+
       const userTitle = errObj?.error_user_title;
       const userMsg = errObj?.error_user_msg;
-      const rawMsg = errObj?.message || 'Meta rejected template creation.';
-      const subcode = errObj?.error_subcode;
       const errCode = errObj?.code;
 
       let humanReadableError = '';
@@ -1193,7 +1260,7 @@ export async function handleCreateTemplate(req: Request, res: Response) {
       if (subcode === 2388024 || rawMsg.toLowerCase().includes('already exists') || humanReadableError.toLowerCase().includes('already exists')) {
         humanReadableError = `A template with the name "${cleanTplName}" already exists in your WhatsApp account. Please change the template name (e.g. "${cleanTplName}_v2" or click "Make Name Unique").`;
       } else if (subcode === 2388293 || rawMsg.toLowerCase().includes('ratio') || humanReadableError.toLowerCase().includes('ratio')) {
-        humanReadableError = `Too many variables for the message length. Meta requires more descriptive text around variables. We have added context words, please try clicking submit again.`;
+        humanReadableError = `Meta Rule: Variables to words ratio exceeds limit (Error 2388293). Meta requires at least 3-4 descriptive words for every variable {{n}}. Kripya template me thoda descriptive text add karein (jaise 'Hello', 'Aapka order', 'Dhanyawad') ya variables kam karein.`;
       } else if (errCode === 131009 || subcode === 2494102 || rawMsg.toLowerCase().includes('handle') || humanReadableError.toLowerCase().includes('handle')) {
         humanReadableError = `Uploaded media handle is invalid or expired. Please upload the image/document again from your PC or use a public image URL.`;
       } else if (

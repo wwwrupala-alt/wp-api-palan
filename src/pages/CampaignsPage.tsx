@@ -51,11 +51,15 @@ import { MiniTemplatePhonePreview } from '../components/MiniTemplatePhonePreview
 interface CampaignsPageProps {
   onViewAnalytics?: (campaignId: string) => void;
   onNavigateToDrip?: () => void;
+  initialTemplateId?: string | null;
+  onClearInitialTemplate?: () => void;
 }
 
 export const CampaignsPage: React.FC<CampaignsPageProps> = ({
   onViewAnalytics,
   onNavigateToDrip,
+  initialTemplateId,
+  onClearInitialTemplate,
 }) => {
   const { organization } = useAuth();
   const { activeAccount, accounts } = useWhatsAppAccounts();
@@ -87,6 +91,13 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
 
   // New Advance Campaign Modal
   const [isModalOpen, setIsModalOpen] = useState(false);
+
+  // Auto-open modal when navigated with pre-selected template
+  useEffect(() => {
+    if (initialTemplateId) {
+      setIsModalOpen(true);
+    }
+  }, [initialTemplateId]);
 
   // Campaign Preview Modal State (User Request: View Icon -> Mobile View with variables & media)
   const [previewCampaign, setPreviewCampaign] = useState<Campaign | null>(null);
@@ -1610,6 +1621,7 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
           onClose={() => {
             setIsModalOpen(false);
             setCloneCampaignTarget(null);
+            if (onClearInitialTemplate) onClearInitialTemplate();
           }}
           organizationId={organization.id}
           activeAccount={activeAccount}
@@ -1618,8 +1630,10 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
           contacts={contacts}
           groups={groups}
           initialCloneCampaign={cloneCampaignTarget}
+          initialTemplateId={initialTemplateId}
           onSuccess={() => {
             setCloneCampaignTarget(null);
+            if (onClearInitialTemplate) onClearInitialTemplate();
           }}
         />
       )}

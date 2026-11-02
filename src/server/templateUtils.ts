@@ -58,7 +58,8 @@ export function formatTemplateComponentsForSending(
           const params = matches.map((m: string, i: number) => {
             const varKey = `header_${i + 1}`;
             const val = variableValues?.[varKey] || variableValues?.[String(i + 1)] || 'Value';
-            return { type: 'text' as const, text: String(val) };
+            const safeVal = String(val).replace(/[\r\n\t]+/g, ' ').replace(/\s{4,}/g, '   ').trim();
+            return { type: 'text' as const, text: safeVal || 'Value' };
           });
           result.push({
             type: 'header',
@@ -212,7 +213,7 @@ export function formatTemplateComponentsForSending(
       if (matches && matches.length > 0) {
         const params = matches.map((m: string, i: number) => {
           const num = i + 1;
-          const val =
+          const rawVal =
             variableValues?.[`body_${num}`] ||
             variableValues?.[String(num)] ||
             variableValues?.[`var${num}`] ||
@@ -222,7 +223,15 @@ export function formatTemplateComponentsForSending(
             variableValues?.[`variable${num}`] ||
             (num === 1 && variableValues?.name ? variableValues.name : null) ||
             `Customer`;
-          return { type: 'text' as const, text: String(val) };
+
+          // Meta Cloud API restriction: parameter text cannot contain newlines (\r, \n), tabs (\t) or >4 consecutive spaces
+          // Sanitizing ensures Meta does not reject the campaign with error 100
+          const safeVal = String(rawVal)
+            .replace(/[\r\n\t]+/g, ' ')
+            .replace(/\s{4,}/g, '   ')
+            .trim();
+
+          return { type: 'text' as const, text: safeVal || 'Value' };
         });
         result.push({
           type: 'body',
