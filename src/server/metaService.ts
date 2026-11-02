@@ -46,6 +46,27 @@ export interface WebhookEventRecord {
   latencyMs?: number;
 }
 
+/**
+ * Recursively removes undefined fields from an object or array to prevent Firestore
+ * "Function updateDoc() called with invalid data. Unsupported field value: undefined" errors.
+ */
+export function cleanFirestoreData<T>(val: T): T {
+  if (val === undefined) return undefined as any;
+  if (val === null || typeof val !== 'object') return val;
+  if (Array.isArray(val)) {
+    return val
+      .filter((item) => item !== undefined)
+      .map((item) => cleanFirestoreData(item)) as any;
+  }
+  const clean: any = {};
+  for (const [key, value] of Object.entries(val as any)) {
+    if (value !== undefined) {
+      clean[key] = cleanFirestoreData(value);
+    }
+  }
+  return clean;
+}
+
 const webhookLogs: WebhookEventRecord[] = [];
 
 export const webhookMetrics = {
@@ -3693,23 +3714,24 @@ export async function processIncomingWhatsAppStatusUpdate(statusObj: any, metada
         );
 
         if (!isDuplicate) {
-          updateFields.timeline = [
-            ...existingTimeline,
-            {
-              status,
-              timestamp: eventTimeIso,
-              description: desc,
-              details: errorObj ? JSON.stringify(errorObj) : undefined,
-            },
-          ];
+          const newEntry: Record<string, any> = {
+            status,
+            timestamp: eventTimeIso,
+            description: desc,
+          };
+          if (errorObj) {
+            newEntry.details = typeof errorObj === 'string' ? errorObj : JSON.stringify(errorObj);
+          }
+          updateFields.timeline = [...existingTimeline, newEntry];
         }
 
-        await updateDoc(recRef, updateFields);
+        const cleanFields = cleanFirestoreData(updateFields);
+        await updateDoc(recRef, cleanFields);
 
         // Update wamidTracker for subsequent events
         await setDoc(
           doc(serverDb, 'wamidTracker', wamid),
-          {
+          cleanFirestoreData({
             wamid,
             organizationId: targetOrgId,
             campaignId: targetCampaignId,
@@ -3717,7 +3739,7 @@ export async function processIncomingWhatsAppStatusUpdate(statusObj: any, metada
             phoneNumber: recipientPhone,
             status,
             updatedAt: nowIso,
-          },
+          }),
           { merge: true }
         );
 
@@ -3748,7 +3770,7 @@ export async function processIncomingWhatsAppStatusUpdate(statusObj: any, metada
         const failureRate = totalCount > 0 ? Number(((failedCount / totalCount) * 100).toFixed(1)) : 0;
         const replyRate = deliveredCount > 0 ? Number(((repliedCount / deliveredCount) * 100).toFixed(1)) : 0;
 
-        await updateDoc(doc(serverDb, `organizations/${targetOrgId}/campaigns`, targetCampaignId), {
+        await updateDoc(doc(serverDb, `organizations/${targetOrgId}/campaigns`, targetCampaignId), cleanFirestoreData({
           stats: {
             total: totalCount,
             sent: Math.max(sentCount, deliveredCount, readCount),
@@ -3762,7 +3784,7 @@ export async function processIncomingWhatsAppStatusUpdate(statusObj: any, metada
             replyRate,
           },
           updatedAt: nowIso,
-        }).catch(() => {});
+        })).catch(() => {});
 
         // If this broadcast belongs to a Drip Campaign step (e.g. drip_1792741007698_step_1)
         if (targetCampaignId.includes('_step_')) {
@@ -3872,7 +3894,7 @@ export async function processIncomingWhatsAppStatusUpdate(statusObj: any, metada
                                   : status === 'delivered'
                                   ? 'Delivered to recipient handset (double ticks)'
                                   : `Meta Webhook: ${status}`,
-                              details: errorObj ? JSON.stringify(errorObj) : undefined,
+                              ...(errorObj ? { details: typeof errorObj === 'string' ? errorObj : JSON.stringify(errorObj) } : {}),
                             },
                           ],
                         };
@@ -3881,10 +3903,10 @@ export async function processIncomingWhatsAppStatusUpdate(statusObj: any, metada
                     });
 
                     if (historyChanged) {
-                      await updateDoc(subDoc.ref, {
+                      await updateDoc(subDoc.ref, cleanFirestoreData({
                         stepHistory: hist,
                         updatedAt: nowIso,
-                      }).catch(() => {});
+                      })).catch(() => {});
                       console.log(`[Webhook] Updated Drip Subscriber ${subDoc.id} (${subData.phone}) Step ${stepNum} to ${status}`);
                     }
                   }

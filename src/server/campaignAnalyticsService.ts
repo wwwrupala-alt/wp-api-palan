@@ -395,12 +395,15 @@ export async function processWebhookStatusUpdate(params: {
     if (status === 'read') desc = 'Read by recipient (blue ticks)';
     if (status === 'failed') desc = `Failed to deliver: ${recipient.failureReason || 'Meta rejection'}`;
 
-    recipient.timeline.push({
+    const timelineEntry: Record<string, any> = {
       status,
       timestamp: eventTimeIso,
       description: desc,
-      details: errorObj ? JSON.stringify(errorObj) : undefined,
-    });
+    };
+    if (errorObj) {
+      timelineEntry.details = typeof errorObj === 'string' ? errorObj : JSON.stringify(errorObj);
+    }
+    recipient.timeline.push(timelineEntry as any);
   }
 
   // Re-index

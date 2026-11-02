@@ -1028,9 +1028,59 @@ export async function updateCampaignRecipientStatus(
       updateData.timeline = timeline;
     }
     await updateDoc(docRef, updateData);
+    await syncCampaignStats(orgId, campaignId);
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, `organizations/${orgId}/campaigns/${campaignId}/recipients/${recipientId}`);
     throw err;
+  }
+}
+
+async function syncCampaignStats(orgId: string, campaignId: string): Promise<void> {
+  try {
+    const recsSnap = await getDocs(collection(db, 'organizations', orgId, 'campaigns', campaignId, 'recipients'));
+    let total = 0;
+    let sent = 0;
+    let delivered = 0;
+    let read = 0;
+    let failed = 0;
+    let replied = 0;
+
+    recsSnap.forEach((d) => {
+      total++;
+      const r = d.data();
+      const isRead = r.currentStatus === 'read' || Boolean(r.readAt);
+      const isDelivered = isRead || r.currentStatus === 'delivered' || Boolean(r.deliveredAt);
+      const isSent = isDelivered || r.currentStatus === 'sent' || Boolean(r.sentAt);
+
+      if (isSent) sent++;
+      if (isDelivered) delivered++;
+      if (isRead) read++;
+      if (r.currentStatus === 'failed') failed++;
+      if (r.hasReplied || r.repliedAt) replied++;
+    });
+
+    const deliveryRate = sent > 0 ? Number(((delivered / sent) * 100).toFixed(1)) : 0;
+    const readRate = delivered > 0 ? Number(((read / delivered) * 100).toFixed(1)) : 0;
+    const failureRate = total > 0 ? Number(((failed / total) * 100).toFixed(1)) : 0;
+    const replyRate = delivered > 0 ? Number(((replied / delivered) * 100).toFixed(1)) : 0;
+
+    await updateDoc(doc(db, 'organizations', orgId, 'campaigns', campaignId), {
+      stats: {
+        total,
+        sent,
+        delivered,
+        read,
+        failed,
+        replied,
+        deliveryRate,
+        readRate,
+        failureRate,
+        replyRate,
+      },
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.warn('[syncCampaignStats] Error updating campaign stats:', err);
   }
 }
 
@@ -1066,6 +1116,7 @@ export async function reconcileCampaignDelivery(
       console.warn(`Failed to reconcile recipient ${rId}:`, e);
     }
   }
+  await syncCampaignStats(orgId, campaignId);
 }
 
 // -------------------------------------------------------------

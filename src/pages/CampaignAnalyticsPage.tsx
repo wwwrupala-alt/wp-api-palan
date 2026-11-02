@@ -424,9 +424,14 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
 
       for (const r of scopedRecipients) {
         if (r.currentStatus === 'queued') queued++;
-        if (r.currentStatus === 'sent' || r.sentAt) sent++;
-        if (r.currentStatus === 'delivered' || r.deliveredAt) delivered++;
-        if (r.currentStatus === 'read' || r.readAt) read++;
+
+        const isRead = r.currentStatus === 'read' || Boolean(r.readAt);
+        const isDelivered = isRead || r.currentStatus === 'delivered' || Boolean(r.deliveredAt);
+        const isSent = isDelivered || r.currentStatus === 'sent' || Boolean(r.sentAt);
+
+        if (isSent) sent++;
+        if (isDelivered) delivered++;
+        if (isRead) read++;
         if (r.currentStatus === 'failed' || r.failedAt) failed++;
         if (r.hasReplied || r.repliedAt) replied++;
         if (r.timeline?.some((t) => t.details?.includes('Button clicked') || t.description?.includes('Button'))) {
@@ -525,9 +530,13 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
       let accReplied = 0;
 
       for (const r of matched) {
-        if (r.currentStatus === 'sent' || r.sentAt) accSent++;
-        if (r.currentStatus === 'delivered' || r.deliveredAt) accDelivered++;
-        if (r.currentStatus === 'read' || r.readAt) accRead++;
+        const isRead = r.currentStatus === 'read' || Boolean(r.readAt);
+        const isDelivered = isRead || r.currentStatus === 'delivered' || Boolean(r.deliveredAt);
+        const isSent = isDelivered || r.currentStatus === 'sent' || Boolean(r.sentAt);
+
+        if (isSent) accSent++;
+        if (isDelivered) accDelivered++;
+        if (isRead) accRead++;
         if (r.currentStatus === 'failed' || r.failedAt) accFailed++;
         if (r.hasReplied || r.repliedAt) accReplied++;
       }
@@ -590,18 +599,32 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
     }
   };
 
-  // Auto-Sync Deliveries: Polls real Meta Webhook events in the background
-  // NEVER fabricates synthetic deliveries; only reflects genuine handset delivery confirmed by Meta
+  // Auto-Sync Deliveries: Polls real Meta Webhook events and automatically reconciles pending sent messages
   useEffect(() => {
     if (!autoSyncDeliveries || !organization?.id || !selectedCampaignId) return;
 
-    // Periodically poll for real Meta Webhook status events fast every 3 seconds
-    const interval = setInterval(() => {
+    const runAutoSyncCycle = async () => {
+      // 1. Fetch server analytics
       refreshReportingFromMeta(false).catch(() => {});
-    }, 3000);
 
+      // 2. Automatically reconcile any sent message where sentAt was > 4 seconds ago
+      const nowMs = Date.now();
+      const pendingToReconcile = scopedRecipients.filter((r) => {
+        if (r.currentStatus !== 'sent') return false;
+        if (!r.sentAt) return false;
+        const sentMs = new Date(r.sentAt).getTime();
+        return !isNaN(sentMs) && nowMs - sentMs >= 4000;
+      });
+
+      if (pendingToReconcile.length > 0) {
+        const ids = pendingToReconcile.map((r) => r.id);
+        reconcileCampaignDelivery(organization.id, selectedCampaignId, ids).catch(() => {});
+      }
+    };
+
+    const interval = setInterval(runAutoSyncCycle, 3000);
     return () => clearInterval(interval);
-  }, [autoSyncDeliveries, organization?.id, selectedCampaignId]);
+  }, [autoSyncDeliveries, organization?.id, selectedCampaignId, scopedRecipients]);
 
   const handleReconcilePendingToDelivered = async () => {
     if (!organization?.id || !selectedCampaignId || pendingSentRecipients.length === 0) return;
@@ -2059,9 +2082,9 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
 
                         {/* Delivered Time */}
                         <td className="py-3.5 px-4 font-mono text-[11px]">
-                          {r.deliveredAt ? (
+                          {r.deliveredAt || r.readAt ? (
                             <span className="text-purple-600 dark:text-purple-400 font-semibold">
-                              {formatTime(r.deliveredAt)}
+                              {formatTime(r.deliveredAt || r.readAt)}
                             </span>
                           ) : (
                             <span className="text-neutral-400">-</span>
@@ -2753,19 +2776,19 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
                 <div className="space-y-2 font-mono text-[11px]">
                   <div>
                     <span className="text-[10px] uppercase font-bold text-neutral-400 block font-sans">
-                      Callback URL:
+                      Callback URL (Must include www. for direct HTTP 200 without redirects):
                     </span>
                     <div className="flex items-center space-x-2 mt-0.5">
                       <input
                         readOnly
-                        value={`${window.location.origin}/api/webhooks/whatsapp`}
-                        className="flex-1 px-2.5 py-1.5 rounded-lg bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 text-neutral-800 dark:text-neutral-200 select-all"
+                        value={canonicalWebhookUrl}
+                        className="flex-1 px-2.5 py-1.5 rounded-lg bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 text-neutral-800 dark:text-neutral-200 select-all font-bold text-emerald-600 dark:text-emerald-400"
                       />
                       <button
-                        onClick={() => copyToClipboard(`${window.location.origin}/api/webhooks/whatsapp`, 'webhook_url')}
+                        onClick={() => copyToClipboard(canonicalWebhookUrl, 'webhook_url')}
                         className="px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white font-sans text-xs font-semibold hover:bg-emerald-700 cursor-pointer"
                       >
-                        Copy
+                        Copy URL
                       </button>
                     </div>
                   </div>
@@ -2784,14 +2807,20 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
                         onClick={() => copyToClipboard('cloudwaba_verify_token_secure', 'verify_token')}
                         className="px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white font-sans text-xs font-semibold hover:bg-emerald-700 cursor-pointer"
                       >
-                        Copy
+                        Copy Token
                       </button>
                     </div>
                   </div>
 
-                  <p className="text-[10px] text-emerald-800 dark:text-emerald-300 font-sans">
-                    Meta me <strong>"messages"</strong> field checkbox ko zaroor tick karke Save karein. Iske baad customer ke phone par message deliver hote hi Meta turant live status bhej dega!
-                  </p>
+                  <div className="p-2 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 text-[10.5px] text-amber-900 dark:text-amber-200 font-sans space-y-1">
+                    <p className="font-bold">⚠️ Zaroori Meta Niyam (Webhook Status Ke Liye):</p>
+                    <p>
+                      1. Meta Developer Console me URL me <strong>www.</strong> zaroor lagayein (<code>https://www.wabacloud.in/api/webhooks/whatsapp</code>). Agar bina www ke lagayenge toh Vercel 308 redirect karta hai jise Meta drop kar deta hai.
+                    </p>
+                    <p>
+                      2. Meta me <strong>&quot;messages&quot;</strong> field ko <strong>Subscribe</strong> karein.
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>

@@ -730,7 +730,8 @@ function formatTemplateComponentsForSending(rawComponents, variableValues, resol
           const params = matches.map((m, i) => {
             const varKey = `header_${i + 1}`;
             const val = variableValues?.[varKey] || variableValues?.[String(i + 1)] || "Value";
-            return { type: "text", text: String(val) };
+            const safeVal = String(val).replace(/[\r\n\t]+/g, " ").replace(/\s{4,}/g, "   ").trim();
+            return { type: "text", text: safeVal || "Value" };
           });
           result.push({
             type: "header",
@@ -842,8 +843,9 @@ function formatTemplateComponentsForSending(rawComponents, variableValues, resol
       if (matches && matches.length > 0) {
         const params = matches.map((m, i) => {
           const num = i + 1;
-          const val = variableValues?.[`body_${num}`] || variableValues?.[String(num)] || variableValues?.[`var${num}`] || variableValues?.[`var_${num}`] || variableValues?.[`param${num}`] || variableValues?.[`param_${num}`] || variableValues?.[`variable${num}`] || (num === 1 && variableValues?.name ? variableValues.name : null) || `Customer`;
-          return { type: "text", text: String(val) };
+          const rawVal = variableValues?.[`body_${num}`] || variableValues?.[String(num)] || variableValues?.[`var${num}`] || variableValues?.[`var_${num}`] || variableValues?.[`param${num}`] || variableValues?.[`param_${num}`] || variableValues?.[`variable${num}`] || (num === 1 && variableValues?.name ? variableValues.name : null) || `Customer`;
+          const safeVal = String(rawVal).replace(/[\r\n\t]+/g, " ").replace(/\s{4,}/g, "   ").trim();
+          return { type: "text", text: safeVal || "Value" };
         });
         result.push({
           type: "body",
@@ -1175,12 +1177,15 @@ async function processWebhookStatusUpdate(params) {
     if (status === "delivered") desc = "Delivered to recipient phone";
     if (status === "read") desc = "Read by recipient (blue ticks)";
     if (status === "failed") desc = `Failed to deliver: ${recipient.failureReason || "Meta rejection"}`;
-    recipient.timeline.push({
+    const timelineEntry = {
       status,
       timestamp: eventTimeIso,
-      description: desc,
-      details: errorObj ? JSON.stringify(errorObj) : void 0
-    });
+      description: desc
+    };
+    if (errorObj) {
+      timelineEntry.details = typeof errorObj === "string" ? errorObj : JSON.stringify(errorObj);
+    }
+    recipient.timeline.push(timelineEntry);
   }
   wamidIndex.set(wamid, recipient);
   if (recipient.organizationId) {
@@ -1872,6 +1877,20 @@ async function handleUpdatePricing(req, res) {
 }
 
 // src/server/metaService.ts
+function cleanFirestoreData2(val) {
+  if (val === void 0) return void 0;
+  if (val === null || typeof val !== "object") return val;
+  if (Array.isArray(val)) {
+    return val.filter((item) => item !== void 0).map((item) => cleanFirestoreData2(item));
+  }
+  const clean = {};
+  for (const [key, value] of Object.entries(val)) {
+    if (value !== void 0) {
+      clean[key] = cleanFirestoreData2(value);
+    }
+  }
+  return clean;
+}
 var webhookLogs = [];
 var webhookMetrics = {
   totalReceived: 0,
@@ -2807,10 +2826,70 @@ async function handleCreateTemplate(req, res) {
     let createData = await createRes.json();
     if (!createRes.ok || createData.error) {
       const errObj = createData.error;
+      const subcode = errObj?.error_subcode;
+      const rawMsg = errObj?.message || "";
+      if (subcode === 2388293 || rawMsg.toLowerCase().includes("ratio") || rawMsg.toLowerCase().includes("parameters words ratio") || String(errObj?.error_user_title || "").toLowerCase().includes("ratio")) {
+        console.log("[handleCreateTemplate] Meta error 2388293 (Parameters words ratio) detected. Auto-enriching body text with contextual words to satisfy Meta ratio and retrying...");
+        const enrichedComponents = sanitizedComponents.map((c) => {
+          if (c.type === "BODY" && c.text) {
+            let enrichedText = String(c.text).trim();
+            if (/^\s*\{\{\d+\}\}/.test(enrichedText)) {
+              enrichedText = `Hello,
+
+${enrichedText}`;
+            }
+            if (!enrichedText.toLowerCase().includes("thank you") && !enrichedText.toLowerCase().includes("dhanyawad")) {
+              enrichedText = `${enrichedText}
+
+Thank you for choosing our service. We truly appreciate your business and are here to help you anytime!`;
+            } else {
+              enrichedText = `${enrichedText}
+
+We truly appreciate your business and look forward to serving you with the highest quality!`;
+            }
+            return {
+              ...c,
+              text: enrichedText
+            };
+          }
+          return c;
+        });
+        try {
+          const retryRes = await fetch(createUrl, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`
+            },
+            body: JSON.stringify({
+              name: cleanTplName,
+              category,
+              language,
+              components: enrichedComponents
+            })
+          });
+          const retryData = await retryRes.json();
+          if (retryRes.ok && !retryData.error && retryData.id) {
+            console.log("[handleCreateTemplate] Auto-retry SUCCEEDED with enriched body text on Meta:", retryData.id);
+            return res.json({
+              success: true,
+              metaTemplateId: retryData.id,
+              status: retryData.status || "PENDING",
+              autoEnriched: true,
+              message: "Template created successfully on Meta! (Meta requires a minimum word-to-variable ratio, so polite greeting/closing context was automatically added)."
+            });
+          } else {
+            console.warn("[handleCreateTemplate] Auto-retry after word ratio enrichment response:", retryData);
+            if (retryData?.error) {
+              createData = retryData;
+            }
+          }
+        } catch (retryErr) {
+          console.warn("[handleCreateTemplate] Auto-retry fetch exception:", retryErr);
+        }
+      }
       const userTitle = errObj?.error_user_title;
       const userMsg = errObj?.error_user_msg;
-      const rawMsg = errObj?.message || "Meta rejected template creation.";
-      const subcode = errObj?.error_subcode;
       const errCode = errObj?.code;
       let humanReadableError = "";
       if (userTitle && userMsg) {
@@ -2825,7 +2904,7 @@ async function handleCreateTemplate(req, res) {
       if (subcode === 2388024 || rawMsg.toLowerCase().includes("already exists") || humanReadableError.toLowerCase().includes("already exists")) {
         humanReadableError = `A template with the name "${cleanTplName}" already exists in your WhatsApp account. Please change the template name (e.g. "${cleanTplName}_v2" or click "Make Name Unique").`;
       } else if (subcode === 2388293 || rawMsg.toLowerCase().includes("ratio") || humanReadableError.toLowerCase().includes("ratio")) {
-        humanReadableError = `Too many variables for the message length. Meta requires more descriptive text around variables. We have added context words, please try clicking submit again.`;
+        humanReadableError = `Meta Rule: Variables to words ratio exceeds limit (Error 2388293). Meta requires at least 3-4 descriptive words for every variable {{n}}. Kripya template me thoda descriptive text add karein (jaise 'Hello', 'Aapka order', 'Dhanyawad') ya variables kam karein.`;
       } else if (errCode === 131009 || subcode === 2494102 || rawMsg.toLowerCase().includes("handle") || humanReadableError.toLowerCase().includes("handle")) {
         humanReadableError = `Uploaded media handle is invalid or expired. Please upload the image/document again from your PC or use a public image URL.`;
       } else if (subcode === 2388044 || rawMsg.toLowerCase().includes("button combination") || humanReadableError.toLowerCase().includes("button combination") || humanReadableError.toLowerCase().includes("carousel card")) {
@@ -4856,20 +4935,21 @@ async function processIncomingWhatsAppStatusUpdate(statusObj, metadata) {
           (t) => t.status === status && Math.abs(new Date(t.timestamp).getTime() - new Date(eventTimeIso).getTime()) < 5e3
         );
         if (!isDuplicate) {
-          updateFields.timeline = [
-            ...existingTimeline,
-            {
-              status,
-              timestamp: eventTimeIso,
-              description: desc,
-              details: errorObj ? JSON.stringify(errorObj) : void 0
-            }
-          ];
+          const newEntry = {
+            status,
+            timestamp: eventTimeIso,
+            description: desc
+          };
+          if (errorObj) {
+            newEntry.details = typeof errorObj === "string" ? errorObj : JSON.stringify(errorObj);
+          }
+          updateFields.timeline = [...existingTimeline, newEntry];
         }
-        await updateDoc(recRef, updateFields);
+        const cleanFields = cleanFirestoreData2(updateFields);
+        await updateDoc(recRef, cleanFields);
         await setDoc(
           doc(serverDb, "wamidTracker", wamid),
-          {
+          cleanFirestoreData2({
             wamid,
             organizationId: targetOrgId,
             campaignId: targetCampaignId,
@@ -4877,7 +4957,7 @@ async function processIncomingWhatsAppStatusUpdate(statusObj, metadata) {
             phoneNumber: recipientPhone,
             status,
             updatedAt: nowIso
-          },
+          }),
           { merge: true }
         );
         const allRecsSnap = await getDocs(collection(serverDb, `organizations/${targetOrgId}/campaigns/${targetCampaignId}/recipients`));
@@ -4903,7 +4983,7 @@ async function processIncomingWhatsAppStatusUpdate(statusObj, metadata) {
         const readRate = deliveredCount > 0 ? Number((readCount / deliveredCount * 100).toFixed(1)) : 0;
         const failureRate = totalCount > 0 ? Number((failedCount / totalCount * 100).toFixed(1)) : 0;
         const replyRate = deliveredCount > 0 ? Number((repliedCount / deliveredCount * 100).toFixed(1)) : 0;
-        await updateDoc(doc(serverDb, `organizations/${targetOrgId}/campaigns`, targetCampaignId), {
+        await updateDoc(doc(serverDb, `organizations/${targetOrgId}/campaigns`, targetCampaignId), cleanFirestoreData2({
           stats: {
             total: totalCount,
             sent: Math.max(sentCount, deliveredCount, readCount),
@@ -4917,7 +4997,7 @@ async function processIncomingWhatsAppStatusUpdate(statusObj, metadata) {
             replyRate
           },
           updatedAt: nowIso
-        }).catch(() => {
+        })).catch(() => {
         });
         if (targetCampaignId.includes("_step_")) {
           try {
@@ -4999,7 +5079,7 @@ async function processIncomingWhatsAppStatusUpdate(statusObj, metadata) {
                               status,
                               timestamp: eventTimeIso,
                               description: status === "read" ? "Read by recipient (blue ticks)" : status === "delivered" ? "Delivered to recipient handset (double ticks)" : `Meta Webhook: ${status}`,
-                              details: errorObj ? JSON.stringify(errorObj) : void 0
+                              ...errorObj ? { details: typeof errorObj === "string" ? errorObj : JSON.stringify(errorObj) } : {}
                             }
                           ]
                         };
@@ -5007,10 +5087,10 @@ async function processIncomingWhatsAppStatusUpdate(statusObj, metadata) {
                       return h;
                     });
                     if (historyChanged) {
-                      await updateDoc(subDoc.ref, {
+                      await updateDoc(subDoc.ref, cleanFirestoreData2({
                         stepHistory: hist,
                         updatedAt: nowIso
-                      }).catch(() => {
+                      })).catch(() => {
                       });
                       console.log(`[Webhook] Updated Drip Subscriber ${subDoc.id} (${subData.phone}) Step ${stepNum} to ${status}`);
                     }
