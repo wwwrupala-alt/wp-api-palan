@@ -81,11 +81,6 @@ interface AdminTenantItem {
   usersCount?: number;
   whatsAppCount?: number;
   campaignsCount?: number;
-  canAccessSettingsMetaApi?: boolean;
-  canAccessAutomations?: boolean;
-  canWatchWorkspaceLive?: boolean;
-  canAccessInbox?: boolean;
-  canAccessDripCampaigns?: boolean;
   createdAt: string;
 }
 

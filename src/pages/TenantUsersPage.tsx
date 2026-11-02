@@ -255,6 +255,7 @@ export const TenantUsersPage: React.FC = () => {
         canManageContacts: true,
         canTemplates: true,
         canAutomations: true,
+        canAccessWallet: true,
       });
       await loadTenantUsers();
     } catch (err: any) {

@@ -132,7 +132,7 @@ export const WhatsAppAccountsPage: React.FC<WhatsAppAccountsPageProps> = ({
 
   const handleDelete = async (accId: string) => {
     const targetAcc = accounts.find((a) => a.id === accId);
-    const phoneDisplay = targetAcc?.displayPhoneNumber || targetAcc?.name || 'this WhatsApp account';
+    const phoneDisplay = targetAcc?.verifiedName || targetAcc?.displayPhoneNumber || 'this WhatsApp account';
 
     if (
       !window.confirm(

@@ -120,6 +120,12 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10); // Default 10 entries as requested
 
+  const canonicalWebhookUrl = useMemo(() => {
+    return typeof window !== 'undefined'
+      ? `${window.location.origin}/api/webhook`
+      : 'https://wabacloud.in/api/webhook';
+  }, []);
+
   // Modal for Message Detail & Timeline
   const [selectedRecipientForModal, setSelectedRecipientForModal] = useState<CampaignRecipient | null>(null);
   const [modalActiveTab, setModalActiveTab] = useState<'preview' | 'timeline'>('preview');

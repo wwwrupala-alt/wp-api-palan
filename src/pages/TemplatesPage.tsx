@@ -42,6 +42,7 @@ import {
 import { TemplateBuilderModal } from '../components/TemplateBuilderModal.tsx';
 import { MiniTemplatePhonePreview } from '../components/MiniTemplatePhonePreview.tsx';
 import { UpdateAccountTokenModal } from '../components/UpdateAccountTokenModal.tsx';
+import type { Template, TemplateComponent } from '../types/index.ts';
 interface TemplatesPageProps {
   onUseTemplateInCampaign?: (templateId: string, template: Template) => void;
 }
