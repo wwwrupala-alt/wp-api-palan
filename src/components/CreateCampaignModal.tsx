@@ -224,19 +224,40 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
       }
       setTemplateVariables(clonedVars);
 
-      // Pre-fill media attachment
+      // Pre-fill media attachment (image, video, document)
       const media =
         initialCloneCampaign.headerMediaUrl ||
         initialCloneCampaign.variableValues?.header_media_url ||
         initialCloneCampaign.variableValues?.headerMediaUrl ||
+        (initialCloneCampaign as any).mediaUrl ||
+        matchingTpl?.components?.find((c) => c.type === 'HEADER')?.example?.header_handle?.[0] ||
         '';
+
       if (media) {
+        const rawName = media.split('/').pop()?.split('?')[0] || 'cloned_media_attachment';
+        const cleanName = decodeURIComponent(rawName);
+        const ext = cleanName.split('.').pop()?.toLowerCase() || '';
+        let contentType = 'image/jpeg';
+        if (['png'].includes(ext)) contentType = 'image/png';
+        else if (['webp'].includes(ext)) contentType = 'image/webp';
+        else if (['mp4', '3gp'].includes(ext)) contentType = 'video/mp4';
+        else if (['pdf'].includes(ext)) contentType = 'application/pdf';
+
         setCampaignMediaUrl(media);
         setCampaignMediaPreviewUrl(media);
-        setCampaignMediaSourceMode('url');
+        setUploadedCampaignMedia({
+          filename: cleanName,
+          originalName: cleanName,
+          url: media,
+          fullUrl: media.startsWith('http') ? media : `${typeof window !== 'undefined' ? window.location.origin : ''}${media}`,
+          size: 1024 * 150,
+          contentType,
+        });
+        setCampaignMediaSourceMode('upload');
       } else {
         setCampaignMediaUrl('');
         setCampaignMediaPreviewUrl('');
+        setUploadedCampaignMedia(null);
       }
 
       // Pre-fill schedule mode if cloned campaign was scheduled
@@ -266,14 +287,33 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
         if (targetTpl.whatsAppAccountId && availableAccounts.some((a) => a.id === targetTpl.whatsAppAccountId)) {
           setSelectedAccountId(targetTpl.whatsAppAccountId);
         }
+        const sampleHeaderHandle = targetTpl.components?.find((c) => c.type === 'HEADER')?.example?.header_handle?.[0];
+        if (sampleHeaderHandle) {
+          setCampaignMediaUrl(sampleHeaderHandle);
+          setCampaignMediaPreviewUrl(sampleHeaderHandle);
+          const rawName = sampleHeaderHandle.split('/').pop()?.split('?')[0] || 'template_header_media';
+          setUploadedCampaignMedia({
+            filename: rawName,
+            originalName: rawName,
+            url: sampleHeaderHandle,
+            fullUrl: sampleHeaderHandle,
+            size: 1024 * 100,
+            contentType: 'image/jpeg',
+          });
+          setCampaignMediaSourceMode('upload');
+        } else {
+          setCampaignMediaUrl('');
+          setCampaignMediaPreviewUrl('');
+          setUploadedCampaignMedia(null);
+        }
       } else {
         setSelectedTemplateId(initialTemplateId);
         setCampName(`Broadcast ${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}`);
+        setCampaignMediaUrl('');
+        setCampaignMediaPreviewUrl('');
+        setUploadedCampaignMedia(null);
       }
       setTemplateVariables({});
-      setCampaignMediaUrl('');
-      setCampaignMediaPreviewUrl('');
-      setUploadedCampaignMedia(null);
       setAudienceMode('manual');
       setManualNumbersText('');
       setScheduleMode('immediate');
@@ -358,6 +398,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
   // Ensure selectedTemplateId stays synchronized with the current account's approved templates
   useEffect(() => {
     if (!isOpen) return;
+    if (initialCloneCampaign) return; // Preserve cloned template and variables from being wiped
     if (approvedTemplates.length > 0) {
       const exists = approvedTemplates.some(
         (t) => t.id === selectedTemplateId || t.metaTemplateId === selectedTemplateId
@@ -370,7 +411,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
       setSelectedTemplateId('');
       setTemplateVariables({});
     }
-  }, [isOpen, approvedTemplates, selectedTemplateId]);
+  }, [isOpen, approvedTemplates, selectedTemplateId, initialCloneCampaign]);
 
   const selectedTemplate =
     approvedTemplates.find((t) => t.id === selectedTemplateId || t.metaTemplateId === selectedTemplateId) ||
@@ -1182,12 +1223,12 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
                         }}
                       />
 
-                      {uploadedCampaignMedia ? (
-                        <div className="p-3 rounded-xl border border-emerald-500/40 bg-emerald-50/50 dark:bg-emerald-950/20 flex items-center justify-between gap-3">
+                      {uploadedCampaignMedia || campaignMediaUrl ? (
+                        <div className="p-3 rounded-xl border border-emerald-500/40 bg-emerald-50/50 dark:bg-emerald-950/20 flex items-center justify-between gap-3 animate-fadeIn">
                           <div className="flex items-center space-x-3 overflow-hidden">
                             {headerComponent?.format === 'IMAGE' && (
                               <img
-                                src={campaignMediaPreviewUrl || uploadedCampaignMedia.url}
+                                src={campaignMediaPreviewUrl || uploadedCampaignMedia?.url || campaignMediaUrl}
                                 alt="Banner"
                                 className="w-12 h-12 rounded-lg object-cover border border-emerald-300 dark:border-emerald-700 shrink-0"
                               />
@@ -1204,14 +1245,22 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
                             )}
                             <div className="min-w-0">
                               <p className="text-xs font-bold text-neutral-900 dark:text-white truncate">
-                                {uploadedCampaignMedia.originalName}
+                                {uploadedCampaignMedia?.originalName ||
+                                  campaignMediaUrl.split('/').pop()?.split('?')[0] ||
+                                  'Campaign Media Attachment'}
                               </p>
                               <div className="flex items-center space-x-2 text-[10px] text-neutral-500 dark:text-neutral-400">
-                                <span>{(uploadedCampaignMedia.size / 1024).toFixed(1)} KB</span>
-                                <span>&bull;</span>
+                                {uploadedCampaignMedia?.size ? (
+                                  <>
+                                    <span>{(uploadedCampaignMedia.size / 1024).toFixed(1)} KB</span>
+                                    <span>&bull;</span>
+                                  </>
+                                ) : null}
                                 <span className="text-emerald-600 dark:text-emerald-400 font-semibold flex items-center space-x-0.5">
                                   <CheckCircle2 className="w-3 h-3" />
-                                  <span>Ready to Broadcast</span>
+                                  <span>
+                                    {initialCloneCampaign ? 'Cloned Media Attached' : 'Ready to Broadcast'}
+                                  </span>
                                 </span>
                               </div>
                             </div>
@@ -1320,13 +1369,6 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
                     </span>
                     <span className="text-[11px] font-normal text-neutral-500">
                       <code>{`{{1}}`}</code> is auto-personalized to contact name
-                    </span>
-                  </div>
-
-                  <div className="p-2 rounded-xl bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-900/40 text-[10.5px] text-amber-800 dark:text-amber-300 flex items-start space-x-1.5">
-                    <Info className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-                    <span>
-                      <strong>Meta WhatsApp API Niyam:</strong> Ek single variable ke andar Enter (New-line break) allow nahi hota (Meta Error #100). Agar aapko ek ke niche dusri line chahiye, toh <strong>Template Body</strong> ke design me Enter dabayein ya alag variables (jaise <code>{`{{1}}`}</code>, <code>{`{{2}}`}</code>, <code>{`{{3}}`}</code>) use karein.
                     </span>
                   </div>
 
@@ -1751,15 +1793,15 @@ Rahul: 919974428034
               )}
             </div>
 
-            {/* WhatsApp Phone Mockup - Scaled to fit perfectly into viewport without clipping bottom */}
-            <div className="w-full max-w-[310px] rounded-[28px] bg-neutral-900 p-2 shadow-xl border-3 border-neutral-800 relative flex flex-col shrink-0">
+            {/* WhatsApp Phone Mockup - Scaled with taller height to show full bubble and uncropped media */}
+            <div className="w-full max-w-[340px] rounded-[32px] bg-neutral-900 p-2.5 shadow-2xl border-4 border-neutral-800 relative flex flex-col shrink-0">
               {/* Phone Camera Notch */}
-              <div className="absolute top-2.5 left-1/2 -translate-x-1/2 w-14 h-2.5 bg-neutral-800 rounded-full z-20 flex items-center justify-center">
-                <div className="w-1.5 h-1.5 rounded-full bg-neutral-900" />
+              <div className="absolute top-2.5 left-1/2 -translate-x-1/2 w-16 h-3 bg-neutral-800 rounded-full z-20 flex items-center justify-center">
+                <div className="w-2 h-2 rounded-full bg-neutral-900" />
               </div>
 
-              {/* Phone Screen Container - Fixed compact height fitting top-right with no crop */}
-              <div className="w-full rounded-[20px] overflow-hidden bg-[#E5DDD5] dark:bg-[#0b141a] flex flex-col h-[400px] relative text-neutral-900 dark:text-neutral-100 shadow-inner">
+              {/* Phone Screen Container - Taller height so full message & uncropped poster are visible */}
+              <div className="w-full rounded-[24px] overflow-hidden bg-[#E5DDD5] dark:bg-[#0b141a] flex flex-col h-[520px] sm:h-[580px] relative text-neutral-900 dark:text-neutral-100 shadow-inner">
                 {/* WhatsApp Chat Header */}
                 <div className="bg-[#008069] dark:bg-[#1f2c34] text-white px-3 py-2 pt-4 flex items-center space-x-2 shadow-xs z-10 shrink-0">
                   <div className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center text-[11px] font-bold text-white shrink-0">
@@ -1784,28 +1826,51 @@ Rahul: 919974428034
                         <div className="rounded-xl overflow-hidden bg-neutral-100 dark:bg-neutral-800/80">
                           {headerComponent.format === 'IMAGE' && (
                             (campaignMediaPreviewUrl || campaignMediaUrl) ? (
-                              <img
-                                src={campaignMediaPreviewUrl || campaignMediaUrl}
-                                alt="Header preview"
-                                className="w-full h-28 object-cover rounded-xl"
-                              />
+                              <div className="w-full rounded-xl overflow-hidden bg-neutral-900/5 dark:bg-white/5 flex items-center justify-center p-0.5">
+                                <img
+                                  src={campaignMediaPreviewUrl || campaignMediaUrl}
+                                  alt="Header preview"
+                                  className="w-full max-h-60 object-contain rounded-lg"
+                                />
+                              </div>
                             ) : (
-                              <div className="h-20 flex flex-col items-center justify-center text-neutral-400 space-y-1">
-                                <ImageIcon className="w-5 h-5 text-emerald-500" />
-                                <span className="text-[9px]">Header Image Banner</span>
+                              <div className="h-24 flex flex-col items-center justify-center text-neutral-400 space-y-1">
+                                <ImageIcon className="w-6 h-6 text-emerald-500" />
+                                <span className="text-[10px] font-medium">Header Image Banner</span>
                               </div>
                             )
                           )}
                           {headerComponent.format === 'VIDEO' && (
-                            <div className="h-20 flex flex-col items-center justify-center text-neutral-400 space-y-1">
-                              <Video className="w-5 h-5 text-emerald-500" />
-                              <span className="text-[9px]">Video Header</span>
-                            </div>
+                            (campaignMediaPreviewUrl || campaignMediaUrl) ? (
+                              <div className="w-full rounded-xl overflow-hidden bg-black flex items-center justify-center">
+                                <video
+                                  src={campaignMediaPreviewUrl || campaignMediaUrl}
+                                  className="w-full max-h-56 object-contain rounded-lg"
+                                  controls={false}
+                                  autoPlay
+                                  muted
+                                  loop
+                                />
+                              </div>
+                            ) : (
+                              <div className="h-24 flex flex-col items-center justify-center text-neutral-400 space-y-1">
+                                <Video className="w-6 h-6 text-emerald-500" />
+                                <span className="text-[10px] font-medium">Video Header</span>
+                              </div>
+                            )
                           )}
                           {headerComponent.format === 'DOCUMENT' && (
-                            <div className="p-2 flex items-center space-x-2 text-neutral-600 dark:text-neutral-300">
-                              <FileCheck className="w-4 h-4 text-red-500" />
-                              <span className="text-[10px] font-medium">Document / PDF File</span>
+                            <div className="p-2 flex items-center justify-between text-neutral-700 dark:text-neutral-200 bg-neutral-50 dark:bg-neutral-800/80 rounded-xl border border-neutral-200 dark:border-neutral-700">
+                              <div className="flex items-center space-x-2 truncate">
+                                <FileCheck className="w-4 h-4 text-red-500 shrink-0" />
+                                <span className="text-[10px] font-medium truncate">
+                                  {uploadedCampaignMedia?.originalName ||
+                                    (campaignMediaUrl ? campaignMediaUrl.split('/').pop()?.split('?')[0] : 'Document / PDF File')}
+                                </span>
+                              </div>
+                              <span className="text-[9px] font-mono uppercase bg-red-100 dark:bg-red-950/60 text-red-700 dark:text-red-300 px-1.5 py-0.5 rounded font-bold shrink-0">
+                                PDF
+                              </span>
                             </div>
                           )}
                           {headerComponent.format === 'TEXT' && (

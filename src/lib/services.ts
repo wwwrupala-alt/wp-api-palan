@@ -2172,8 +2172,8 @@ export async function uploadMediaFile(
   size: number;
   contentType: string;
 }> {
-  // Auto-compress large images client-side to prevent 413 Payload Too Large
-  const processedFile = await compressImageIfNeeded(file);
+  // Preserve 100% original file resolution, bitrate, and quality without any downsampling or compression
+  const processedFile = file;
 
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
