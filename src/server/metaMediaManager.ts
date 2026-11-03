@@ -65,7 +65,7 @@ export async function resolveMetaMediaObject(
   if (!trimmed) return null;
 
   // 1. If it's already a numeric Meta Media ID (e.g. "2381431199056815")
-  if (/^\d{10,}$/.test(trimmed)) {
+  if (/^\d+$/.test(trimmed)) {
     return { id: trimmed };
   }
 
@@ -119,16 +119,15 @@ export async function resolveMetaMediaObject(
     }
   }
 
-  // 3. If it's a remote public HTTPS/HTTP URL (and not localhost, not 127.0.0.1, and not our preview domain)
-  const isInternalPreviewDomain =
-    trimmed.includes('run.app') ||
+  // 3. If it's a remote public HTTPS/HTTP URL (and not localhost, not 127.0.0.1, not blob)
+  const isInternalDevHost =
+    trimmed.startsWith('blob:') ||
     trimmed.includes('localhost') ||
-    trimmed.includes('127.0.0.1') ||
-    trimmed.includes('/uploads/');
+    trimmed.includes('127.0.0.1');
 
   if (
     (trimmed.startsWith('https://') || trimmed.startsWith('http://')) &&
-    !isInternalPreviewDomain &&
+    !isInternalDevHost &&
     !trimmed.includes('scontent.whatsapp.net') &&
     !trimmed.includes('lookaside.fbsbx.com')
   ) {
@@ -191,13 +190,27 @@ export async function resolveMetaMediaObject(
 
       fileBuffer = fs.readFileSync(foundPath);
       originalFileName = path.basename(foundPath);
+    } else if (baseFilename) {
+      // If not on serverless disk, try fetching from production domain wabacloud.in
+      try {
+        const publicFallbackUrl = `https://wabacloud.in/uploads/${baseFilename}`;
+        const fetchRes = await fetch(publicFallbackUrl);
+        if (fetchRes.ok) {
+          const arrBuf = await fetchRes.arrayBuffer();
+          fileBuffer = Buffer.from(arrBuf);
+          mimeType = fetchRes.headers.get('content-type') || mimeType;
+        }
+      } catch {}
     }
   }
 
   if (!fileBuffer) {
     console.warn(`[resolveMetaMediaObject] Local media file not found on disk or memory for: ${mediaRef}`);
-    if (trimmed.startsWith('https://') && !isInternalPreviewDomain) {
+    if (trimmed.startsWith('https://') && !isInternalDevHost) {
       return { link: trimmed };
+    }
+    if (baseFilename && (trimmed.includes('/uploads/') || trimmed.startsWith('/'))) {
+      return { link: `https://wabacloud.in/uploads/${baseFilename}` };
     }
     return null;
   }

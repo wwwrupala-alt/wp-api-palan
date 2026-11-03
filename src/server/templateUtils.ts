@@ -67,11 +67,15 @@ export function formatTemplateComponentsForSending(
           });
         }
       } else if (headerFormat === 'IMAGE') {
-        const directMediaId = variableValues?.header_media_id || variableValues?.media_id || resolvedHeaderMedia?.id;
-        if (directMediaId && /^\d{10,}$/.test(String(directMediaId))) {
+        const directMediaId =
+          variableValues?.header_media_id ||
+          variableValues?.media_id ||
+          resolvedHeaderMedia?.id;
+
+        if (directMediaId && /^\d+$/.test(String(directMediaId).trim())) {
           result.push({
             type: 'header',
-            parameters: [{ type: 'image', image: { id: String(directMediaId) } }],
+            parameters: [{ type: 'image', image: { id: String(directMediaId).trim() } }],
           });
         } else if (resolvedHeaderMedia?.id) {
           result.push({
@@ -80,124 +84,151 @@ export function formatTemplateComponentsForSending(
           });
         } else if (
           resolvedHeaderMedia?.link &&
-          !resolvedHeaderMedia.link.includes('scontent.whatsapp.net') &&
-          !resolvedHeaderMedia.link.includes('lookaside.fbsbx.com') &&
-          !resolvedHeaderMedia.link.includes('run.app') &&
-          !resolvedHeaderMedia.link.includes('localhost')
+          !resolvedHeaderMedia.link.startsWith('blob:') &&
+          !resolvedHeaderMedia.link.includes('localhost') &&
+          !resolvedHeaderMedia.link.includes('127.0.0.1')
         ) {
           result.push({
             type: 'header',
             parameters: [{ type: 'image', image: { link: resolvedHeaderMedia.link } }],
           });
         } else {
-          const imgRef = variableValues?.header_media_url || variableValues?.media_url || comp.example?.header_handle?.[0];
+          const imgRef =
+            variableValues?.header_media_url ||
+            variableValues?.media_url ||
+            comp.example?.header_handle?.[0];
+
           if (imgRef) {
-            if (/^\d{10,}$/.test(imgRef)) {
+            const cleanRef = String(imgRef).trim();
+            if (/^\d+$/.test(cleanRef)) {
               result.push({
                 type: 'header',
-                parameters: [{ type: 'image', image: { id: imgRef } }],
+                parameters: [{ type: 'image', image: { id: cleanRef } }],
               });
-            } else if (
-              (imgRef.startsWith('http://') || imgRef.startsWith('https://')) &&
-              !imgRef.includes('scontent.whatsapp.net') &&
-              !imgRef.includes('lookaside.fbsbx.com') &&
-              !imgRef.includes('run.app') &&
-              !imgRef.includes('localhost')
-            ) {
+            } else if (cleanRef.startsWith('http://') || cleanRef.startsWith('https://')) {
+              if (!cleanRef.startsWith('blob:')) {
+                result.push({
+                  type: 'header',
+                  parameters: [{ type: 'image', image: { link: cleanRef } }],
+                });
+              }
+            } else if (cleanRef.startsWith('/uploads/') || cleanRef.startsWith('/')) {
+              // Convert relative path to canonical public URL on production domain
+              const fullPublicUrl = `https://wabacloud.in${cleanRef.startsWith('/') ? '' : '/'}${cleanRef}`;
               result.push({
                 type: 'header',
-                parameters: [{ type: 'image', image: { link: imgRef } }],
-              });
-            } else {
-              // High-reliability public fallback image (verified HTTP 200) to satisfy Meta's mandatory header parameter requirement
-              result.push({
-                type: 'header',
-                parameters: [{ type: 'image', image: { link: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/25.png' } }],
+                parameters: [{ type: 'image', image: { link: fullPublicUrl } }],
               });
             }
-          } else {
-            // Mandatory header parameter when template format is IMAGE
-            result.push({
-              type: 'header',
-              parameters: [{ type: 'image', image: { link: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/25.png' } }],
-            });
           }
         }
       } else if (headerFormat === 'VIDEO') {
-        if (resolvedHeaderMedia?.id) {
+        const directMediaId =
+          variableValues?.header_media_id ||
+          variableValues?.media_id ||
+          resolvedHeaderMedia?.id;
+
+        if (directMediaId && /^\d+$/.test(String(directMediaId).trim())) {
+          result.push({
+            type: 'header',
+            parameters: [{ type: 'video', video: { id: String(directMediaId).trim() } as any }],
+          });
+        } else if (resolvedHeaderMedia?.id) {
           result.push({
             type: 'header',
             parameters: [{ type: 'video', video: { id: resolvedHeaderMedia.id } as any }],
           });
         } else if (
           resolvedHeaderMedia?.link &&
-          !resolvedHeaderMedia.link.includes('scontent.whatsapp.net') &&
-          !resolvedHeaderMedia.link.includes('lookaside.fbsbx.com') &&
-          !resolvedHeaderMedia.link.includes('run.app') &&
-          !resolvedHeaderMedia.link.includes('localhost')
+          !resolvedHeaderMedia.link.startsWith('blob:') &&
+          !resolvedHeaderMedia.link.includes('localhost') &&
+          !resolvedHeaderMedia.link.includes('127.0.0.1')
         ) {
           result.push({
             type: 'header',
             parameters: [{ type: 'video', video: { link: resolvedHeaderMedia.link } as any }],
           });
         } else {
-          const videoRef = variableValues?.header_media_url || variableValues?.media_url || comp.example?.header_handle?.[0];
+          const videoRef =
+            variableValues?.header_media_url ||
+            variableValues?.media_url ||
+            comp.example?.header_handle?.[0];
+
           if (videoRef) {
-            if (/^\d{10,}$/.test(videoRef)) {
+            const cleanRef = String(videoRef).trim();
+            if (/^\d+$/.test(cleanRef)) {
               result.push({
                 type: 'header',
-                parameters: [{ type: 'video', video: { id: videoRef } as any }],
+                parameters: [{ type: 'video', video: { id: cleanRef } as any }],
               });
-            } else if (
-              (videoRef.startsWith('http://') || videoRef.startsWith('https://')) &&
-              !videoRef.includes('scontent.whatsapp.net') &&
-              !videoRef.includes('lookaside.fbsbx.com') &&
-              !videoRef.includes('run.app') &&
-              !videoRef.includes('localhost')
-            ) {
+            } else if (cleanRef.startsWith('http://') || cleanRef.startsWith('https://')) {
+              if (!cleanRef.startsWith('blob:')) {
+                result.push({
+                  type: 'header',
+                  parameters: [{ type: 'video', video: { link: cleanRef } as any }],
+                });
+              }
+            } else if (cleanRef.startsWith('/uploads/') || cleanRef.startsWith('/')) {
+              const fullPublicUrl = `https://wabacloud.in${cleanRef.startsWith('/') ? '' : '/'}${cleanRef}`;
               result.push({
                 type: 'header',
-                parameters: [{ type: 'video', video: { link: videoRef } as any }],
+                parameters: [{ type: 'video', video: { link: fullPublicUrl } as any }],
               });
             }
           }
         }
       } else if (headerFormat === 'DOCUMENT') {
         const docName = resolvedHeaderMedia?.filename || 'Document.pdf';
-        if (resolvedHeaderMedia?.id) {
+        const directMediaId =
+          variableValues?.header_media_id ||
+          variableValues?.media_id ||
+          resolvedHeaderMedia?.id;
+
+        if (directMediaId && /^\d+$/.test(String(directMediaId).trim())) {
+          result.push({
+            type: 'header',
+            parameters: [{ type: 'document', document: { id: String(directMediaId).trim(), filename: docName } }],
+          });
+        } else if (resolvedHeaderMedia?.id) {
           result.push({
             type: 'header',
             parameters: [{ type: 'document', document: { id: resolvedHeaderMedia.id, filename: docName } }],
           });
         } else if (
           resolvedHeaderMedia?.link &&
-          !resolvedHeaderMedia.link.includes('scontent.whatsapp.net') &&
-          !resolvedHeaderMedia.link.includes('lookaside.fbsbx.com') &&
-          !resolvedHeaderMedia.link.includes('run.app') &&
-          !resolvedHeaderMedia.link.includes('localhost')
+          !resolvedHeaderMedia.link.startsWith('blob:') &&
+          !resolvedHeaderMedia.link.includes('localhost') &&
+          !resolvedHeaderMedia.link.includes('127.0.0.1')
         ) {
           result.push({
             type: 'header',
             parameters: [{ type: 'document', document: { link: resolvedHeaderMedia.link, filename: docName } }],
           });
         } else {
-          const docRef = variableValues?.header_media_url || variableValues?.media_url || comp.example?.header_handle?.[0];
+          const docRef =
+            variableValues?.header_media_url ||
+            variableValues?.media_url ||
+            comp.example?.header_handle?.[0];
+
           if (docRef) {
-            if (/^\d{10,}$/.test(docRef)) {
+            const cleanRef = String(docRef).trim();
+            if (/^\d+$/.test(cleanRef)) {
               result.push({
                 type: 'header',
-                parameters: [{ type: 'document', document: { id: docRef, filename: docName } }],
+                parameters: [{ type: 'document', document: { id: cleanRef, filename: docName } }],
               });
-            } else if (
-              (docRef.startsWith('http://') || docRef.startsWith('https://')) &&
-              !docRef.includes('scontent.whatsapp.net') &&
-              !docRef.includes('lookaside.fbsbx.com') &&
-              !docRef.includes('run.app') &&
-              !docRef.includes('localhost')
-            ) {
+            } else if (cleanRef.startsWith('http://') || cleanRef.startsWith('https://')) {
+              if (!cleanRef.startsWith('blob:')) {
+                result.push({
+                  type: 'header',
+                  parameters: [{ type: 'document', document: { link: cleanRef, filename: docName } }],
+                });
+              }
+            } else if (cleanRef.startsWith('/uploads/') || cleanRef.startsWith('/')) {
+              const fullPublicUrl = `https://wabacloud.in${cleanRef.startsWith('/') ? '' : '/'}${cleanRef}`;
               result.push({
                 type: 'header',
-                parameters: [{ type: 'document', document: { link: docRef, filename: docName } }],
+                parameters: [{ type: 'document', document: { link: fullPublicUrl, filename: docName } }],
               });
             }
           }

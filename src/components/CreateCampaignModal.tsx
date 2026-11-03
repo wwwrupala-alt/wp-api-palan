@@ -575,7 +575,16 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
     try {
       const res = await uploadMediaFile(file, currentAccount?.customToken, currentAccount?.phoneNumberId);
       setUploadedCampaignMedia(res);
-      setCampaignMediaUrl(res.url);
+      const mediaId = res.metaMediaId || res.id;
+      if (mediaId && /^\d+$/.test(mediaId)) {
+        setCampaignMediaUrl(mediaId);
+      } else if (res.fullUrl && !res.fullUrl.startsWith('blob:')) {
+        setCampaignMediaUrl(res.fullUrl);
+      } else if (res.url && !res.url.startsWith('blob:')) {
+        setCampaignMediaUrl(res.url);
+      } else if (mediaId) {
+        setCampaignMediaUrl(mediaId);
+      }
     } catch (err: any) {
       setUploadCampaignError(err.message || 'Failed to upload media from PC.');
     } finally {
@@ -600,8 +609,18 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
       requiredVariables.forEach((k) => {
         variablePayload[`body_${k}`] = templateVariables[k] || `Customer`;
       });
-      if (campaignMediaUrl.trim()) {
+
+      const testMediaId = uploadedCampaignMedia?.metaMediaId || uploadedCampaignMedia?.id;
+      if (testMediaId && /^\d+$/.test(String(testMediaId).trim())) {
+        variablePayload.header_media_id = String(testMediaId).trim();
+      } else if (campaignMediaUrl && /^\d{10,}$/.test(campaignMediaUrl.trim())) {
+        variablePayload.header_media_id = campaignMediaUrl.trim();
+      }
+
+      if (campaignMediaUrl.trim() && !campaignMediaUrl.startsWith('blob:')) {
         variablePayload.header_media_url = campaignMediaUrl.trim();
+      } else if (uploadedCampaignMedia?.fullUrl && !uploadedCampaignMedia.fullUrl.startsWith('blob:')) {
+        variablePayload.header_media_url = uploadedCampaignMedia.fullUrl;
       }
 
       const res = await fetch('/api/meta/send-message', {
@@ -684,8 +703,18 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
       requiredVariables.forEach((k) => {
         campaignVariables[`body_${k}`] = templateVariables[k] || `Customer`;
       });
-      if (campaignMediaUrl.trim()) {
+
+      const launchMediaId = uploadedCampaignMedia?.metaMediaId || uploadedCampaignMedia?.id;
+      if (launchMediaId && /^\d+$/.test(String(launchMediaId).trim())) {
+        campaignVariables.header_media_id = String(launchMediaId).trim();
+      } else if (campaignMediaUrl && /^\d{10,}$/.test(campaignMediaUrl.trim())) {
+        campaignVariables.header_media_id = campaignMediaUrl.trim();
+      }
+
+      if (campaignMediaUrl.trim() && !campaignMediaUrl.startsWith('blob:')) {
         campaignVariables.header_media_url = campaignMediaUrl.trim();
+      } else if (uploadedCampaignMedia?.fullUrl && !uploadedCampaignMedia.fullUrl.startsWith('blob:')) {
+        campaignVariables.header_media_url = uploadedCampaignMedia.fullUrl;
       }
 
       const campaignName = campName.trim() || `${selectedTemplate.name} Broadcast`;
@@ -851,8 +880,18 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
       requiredVariables.forEach((k) => {
         campaignVariables[`body_${k}`] = templateVariables[k] || `Customer`;
       });
-      if (campaignMediaUrl.trim()) {
+
+      const saveMediaId = uploadedCampaignMedia?.metaMediaId || uploadedCampaignMedia?.id;
+      if (saveMediaId && /^\d+$/.test(String(saveMediaId).trim())) {
+        campaignVariables.header_media_id = String(saveMediaId).trim();
+      } else if (campaignMediaUrl && /^\d{10,}$/.test(campaignMediaUrl.trim())) {
+        campaignVariables.header_media_id = campaignMediaUrl.trim();
+      }
+
+      if (campaignMediaUrl.trim() && !campaignMediaUrl.startsWith('blob:')) {
         campaignVariables.header_media_url = campaignMediaUrl.trim();
+      } else if (uploadedCampaignMedia?.fullUrl && !uploadedCampaignMedia.fullUrl.startsWith('blob:')) {
+        campaignVariables.header_media_url = uploadedCampaignMedia.fullUrl;
       }
       const campaignName = campName.trim() || `${selectedTemplate.name} Broadcast`;
 

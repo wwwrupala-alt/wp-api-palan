@@ -1432,18 +1432,23 @@ export async function handleSendMessage(req: Request, res: Response) {
       if (headerComp) {
         const headerFormat = String(headerComp.format || '').toUpperCase();
         if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerFormat)) {
-          const rawMedia =
-            variableValues?.header_media_url ||
-            variableValues?.media_url ||
-            headerComp.example?.header_handle?.[0];
-          if (rawMedia) {
-            resolvedHeaderMedia = await resolveMetaMediaObject(
-              rawMedia,
-              phoneNumberId,
-              token,
-              headerFormat.toLowerCase() as any,
-              config.graphVersion
-            );
+          const directMediaId = variableValues?.header_media_id || variableValues?.media_id;
+          if (directMediaId && /^\d+$/.test(String(directMediaId).trim())) {
+            resolvedHeaderMedia = { id: String(directMediaId).trim() };
+          } else {
+            const rawMedia =
+              variableValues?.header_media_url ||
+              variableValues?.media_url ||
+              headerComp.example?.header_handle?.[0];
+            if (rawMedia) {
+              resolvedHeaderMedia = await resolveMetaMediaObject(
+                rawMedia,
+                phoneNumberId,
+                token,
+                headerFormat.toLowerCase() as any,
+                config.graphVersion
+              );
+            }
           }
         }
       }
@@ -1651,7 +1656,7 @@ export async function executeCampaignDispatchCore(params: {
         recipients[0]?.variableValues?.header_media_id ||
         recipients[0]?.variableValues?.media_id;
 
-      if (directMediaId && /^\d{10,}$/.test(String(directMediaId).trim())) {
+      if (directMediaId && /^\d+$/.test(String(directMediaId).trim())) {
         resolvedHeaderMedia = { id: String(directMediaId).trim() };
         console.log(`[executeCampaignDispatchCore] Using directly supplied Meta Media ID: ${directMediaId}`);
       } else {
