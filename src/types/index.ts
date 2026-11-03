@@ -458,6 +458,7 @@ export interface Message {
   metaMessageId?: string;
   body?: string;
   headerText?: string;
+  headerMediaUrl?: string;
   mediaUrl?: string;
   mediaFileName?: string;
   buttons?: BotButton[];

@@ -373,6 +373,8 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
     fullUrl: string;
     size: number;
     contentType: string;
+    id?: string;
+    metaMediaId?: string;
   } | null>(null);
   const [isUploadingCampaignMedia, setIsUploadingCampaignMedia] = useState(false);
   const [uploadCampaignError, setUploadCampaignError] = useState<string | null>(null);
