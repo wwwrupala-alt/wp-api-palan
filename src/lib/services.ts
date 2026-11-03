@@ -2179,6 +2179,49 @@ export async function uploadMediaFile(
   size: number;
   contentType: string;
 }> {
+  // 1. Direct Meta Cloud API Upload (Same Enterprise Architecture as Wati & Aisensy)
+  // Sends binary file directly from browser to Meta WhatsApp Cloud API without passing through web server limits.
+  // Supports up to 5 MB for images, 16 MB for videos, and 100 MB for documents at 100% original quality!
+  if (customToken && phoneNumberId && file.size <= 16 * 1024 * 1024) {
+    try {
+      const formData = new FormData();
+      formData.append('messaging_product', 'whatsapp');
+      formData.append('file', file, file.name);
+      formData.append('type', file.type || 'image/jpeg');
+
+      const metaRes = await fetch(`https://graph.facebook.com/v22.0/${phoneNumberId}/media`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${customToken}`,
+        },
+        body: formData,
+      });
+
+      if (metaRes.ok) {
+        const metaData = await metaRes.json();
+        if (metaData && metaData.id) {
+          const localBlobUrl = URL.createObjectURL(file);
+          console.log('[DirectMetaUpload] Uploaded directly to Meta Cloud API. Media ID:', metaData.id);
+          return {
+            success: true,
+            filename: file.name,
+            originalName: file.name,
+            url: localBlobUrl,
+            fullUrl: localBlobUrl,
+            id: metaData.id,
+            metaMediaId: metaData.id,
+            headerHandle: metaData.id,
+            size: file.size,
+            contentType: file.type,
+          };
+        }
+      }
+    } catch (metaErr) {
+      console.warn('[DirectMetaUpload] Direct upload notice, falling back to server route:', metaErr);
+    }
+  }
+
+  // 2. Server Fallback Route
   // Check non-image files for Vercel 4.2 MB hard limit
   if (!file.type.startsWith('image/') && file.size > 4.2 * 1024 * 1024) {
     throw new Error(

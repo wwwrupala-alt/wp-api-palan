@@ -573,7 +573,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
     });
 
     try {
-      const res = await uploadMediaFile(file, currentAccount?.customToken);
+      const res = await uploadMediaFile(file, currentAccount?.customToken, currentAccount?.phoneNumberId);
       setUploadedCampaignMedia(res);
       setCampaignMediaUrl(res.url);
     } catch (err: any) {
