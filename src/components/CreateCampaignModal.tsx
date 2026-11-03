@@ -590,15 +590,14 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
       const res = await uploadMediaFile(file, currentAccount?.customToken, currentAccount?.phoneNumberId);
       setUploadedCampaignMedia(res);
       const mediaId = res.metaMediaId || res.id;
-      if (mediaId && /^\d+$/.test(mediaId)) {
-        setCampaignMediaUrl(mediaId);
-      } else if (res.fullUrl && !res.fullUrl.startsWith('blob:')) {
-        setCampaignMediaUrl(res.fullUrl);
-      } else if (res.url && !res.url.startsWith('blob:')) {
-        setCampaignMediaUrl(res.url);
-      } else if (mediaId) {
-        setCampaignMediaUrl(mediaId);
-      }
+      const displayUrl =
+        (res.fullUrl && !res.fullUrl.startsWith('blob:') ? res.fullUrl : '') ||
+        (res.url && !res.url.startsWith('blob:') ? res.url : '') ||
+        (mediaId ? `/api/meta/media-proxy?mediaId=${mediaId}` : '') ||
+        localPreviewUrl;
+
+      setCampaignMediaUrl(displayUrl);
+      setCampaignMediaPreviewUrl(localPreviewUrl || displayUrl);
     } catch (err: any) {
       setUploadCampaignError(err.message || 'Failed to upload media from PC.');
     } finally {
@@ -1907,14 +1906,22 @@ Rahul: 919974428034
                             (() => {
                               const rawImgUrl =
                                 campaignMediaPreviewUrl ||
-                                campaignMediaUrl ||
                                 uploadedCampaignMedia?.url ||
+                                uploadedCampaignMedia?.fullUrl ||
+                                campaignMediaUrl ||
                                 headerComponent.example?.header_handle?.[0] ||
                                 '';
-                              const safeImgSrc =
-                                rawImgUrl.includes('lookaside.fbsbx.com') || rawImgUrl.includes('scontent.whatsapp.net')
-                                  ? `/api/meta/media-proxy?url=${encodeURIComponent(rawImgUrl)}`
-                                  : rawImgUrl;
+
+                              let safeImgSrc = rawImgUrl;
+                              const trimmedImg = String(rawImgUrl || '').trim();
+
+                              if (/^\d+$/.test(trimmedImg)) {
+                                safeImgSrc = `/api/meta/media-proxy?mediaId=${encodeURIComponent(trimmedImg)}`;
+                              } else if (trimmedImg.includes('lookaside.fbsbx.com') || trimmedImg.includes('scontent.whatsapp.net')) {
+                                safeImgSrc = `/api/meta/media-proxy?url=${encodeURIComponent(trimmedImg)}`;
+                              } else if (!trimmedImg || trimmedImg.startsWith('4:') || /^[0-9a-f]{8}-[0-9a-f]{4}/i.test(trimmedImg)) {
+                                safeImgSrc = '/uploads/24X4_1793012982079.jpg';
+                              }
 
                               return safeImgSrc ? (
                                 <div className="w-full rounded-xl overflow-hidden bg-neutral-900/5 dark:bg-white/5 flex items-center justify-center p-0.5">

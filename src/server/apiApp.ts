@@ -179,15 +179,48 @@ apiApp.use('/uploads', express.static(path.join(process.cwd(), 'public', 'upload
 // Media Upload from PC / Device
 apiApp.post('/api/media/upload', handleUploadMedia);
 
-// Media Proxy: Safely fetch Meta scontent, lookaside or external image buffers for live preview
+// Media Proxy: Safely fetch Meta scontent, lookaside or Meta Media ID buffers for live preview
 apiApp.get('/api/meta/media-proxy', async (req, res) => {
-  const targetUrl = req.query.url as string;
-  if (!targetUrl || (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://'))) {
-    return res.status(400).json({ error: 'Valid url query param required' });
-  }
+  const mediaIdParam = (req.query.mediaId as string) || '';
+  let targetUrl = (req.query.url as string) || '';
+
+  // If url is actually a numeric Meta Media ID (e.g. "2381431199056815")
+  const effectiveMediaId = mediaIdParam || (/^\d+$/.test(targetUrl.trim()) ? targetUrl.trim() : '');
+
   try {
     const config = getMetaConfig();
     const token = (req.query.token as string) || (req.headers['x-meta-token'] as string) || config.systemToken;
+
+    if (effectiveMediaId) {
+      if (!token) {
+        return res.status(400).json({ error: 'Meta token required to resolve mediaId' });
+      }
+      // 1. Fetch media download URL from Meta Graph API
+      const metaLookupRes = await fetch(`https://graph.facebook.com/${config.graphVersion}/${effectiveMediaId}?access_token=${token}`);
+      const metaLookup = await metaLookupRes.json();
+      if (!metaLookupRes.ok || !metaLookup?.url) {
+        return res.status(404).json({ error: metaLookup?.error?.message || 'Media not found on Meta' });
+      }
+      targetUrl = metaLookup.url;
+    }
+
+    if (!targetUrl) {
+      return res.status(400).json({ error: 'Valid url or mediaId query param required' });
+    }
+
+    // If it's a local relative path like /uploads/...
+    if (targetUrl.startsWith('/uploads/')) {
+      const publicUploads = path.join(process.cwd(), 'public', targetUrl);
+      if (fs.existsSync(publicUploads)) {
+        return res.sendFile(publicUploads);
+      }
+      return res.redirect(`https://wabacloud.in${targetUrl}`);
+    }
+
+    if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+      return res.status(400).json({ error: 'Valid url required' });
+    }
+
     const fetchHeaders: Record<string, string> = {};
     if (token && (targetUrl.includes('facebook.com') || targetUrl.includes('fbsbx.com') || targetUrl.includes('whatsapp.net'))) {
       fetchHeaders['Authorization'] = `Bearer ${token}`;
@@ -196,7 +229,7 @@ apiApp.get('/api/meta/media-proxy', async (req, res) => {
     if (!response.ok) {
       return res.status(response.status).send(`Failed to fetch remote media: ${response.statusText}`);
     }
-    const contentType = response.headers.get('content-type') || 'application/octet-stream';
+    const contentType = response.headers.get('content-type') || 'image/jpeg';
     res.setHeader('Content-Type', contentType);
     res.setHeader('Cache-Control', 'public, max-age=86400');
     const arrayBuffer = await response.arrayBuffer();

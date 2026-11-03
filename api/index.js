@@ -10054,13 +10054,36 @@ apiApp.get("/uploads/:filename", (req, res, next) => {
 apiApp.use("/uploads", express.static(path8.join(process.cwd(), "public", "uploads")));
 apiApp.post("/api/media/upload", handleUploadMedia);
 apiApp.get("/api/meta/media-proxy", async (req, res) => {
-  const targetUrl = req.query.url;
-  if (!targetUrl || !targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
-    return res.status(400).json({ error: "Valid url query param required" });
-  }
+  const mediaIdParam = req.query.mediaId || "";
+  let targetUrl = req.query.url || "";
+  const effectiveMediaId = mediaIdParam || (/^\d+$/.test(targetUrl.trim()) ? targetUrl.trim() : "");
   try {
     const config = getMetaConfig2();
     const token = req.query.token || req.headers["x-meta-token"] || config.systemToken;
+    if (effectiveMediaId) {
+      if (!token) {
+        return res.status(400).json({ error: "Meta token required to resolve mediaId" });
+      }
+      const metaLookupRes = await fetch(`https://graph.facebook.com/${config.graphVersion}/${effectiveMediaId}?access_token=${token}`);
+      const metaLookup = await metaLookupRes.json();
+      if (!metaLookupRes.ok || !metaLookup?.url) {
+        return res.status(404).json({ error: metaLookup?.error?.message || "Media not found on Meta" });
+      }
+      targetUrl = metaLookup.url;
+    }
+    if (!targetUrl) {
+      return res.status(400).json({ error: "Valid url or mediaId query param required" });
+    }
+    if (targetUrl.startsWith("/uploads/")) {
+      const publicUploads = path8.join(process.cwd(), "public", targetUrl);
+      if (fs8.existsSync(publicUploads)) {
+        return res.sendFile(publicUploads);
+      }
+      return res.redirect(`https://wabacloud.in${targetUrl}`);
+    }
+    if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
+      return res.status(400).json({ error: "Valid url required" });
+    }
     const fetchHeaders = {};
     if (token && (targetUrl.includes("facebook.com") || targetUrl.includes("fbsbx.com") || targetUrl.includes("whatsapp.net"))) {
       fetchHeaders["Authorization"] = `Bearer ${token}`;
@@ -10069,7 +10092,7 @@ apiApp.get("/api/meta/media-proxy", async (req, res) => {
     if (!response.ok) {
       return res.status(response.status).send(`Failed to fetch remote media: ${response.statusText}`);
     }
-    const contentType = response.headers.get("content-type") || "application/octet-stream";
+    const contentType = response.headers.get("content-type") || "image/jpeg";
     res.setHeader("Content-Type", contentType);
     res.setHeader("Cache-Control", "public, max-age=86400");
     const arrayBuffer = await response.arrayBuffer();

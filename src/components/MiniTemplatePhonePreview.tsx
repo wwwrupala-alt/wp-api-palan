@@ -89,18 +89,18 @@ export const MiniTemplatePhonePreview: React.FC<MiniTemplatePhonePreviewProps> =
     ? templateSampleUrl
     : (rawHeaderHandle || templateSampleUrl);
 
-  // If format is IMAGE and handle starts with Meta 4: or is empty, use known uploaded broadcast media asset
-  if (format === 'IMAGE' && (!rawActiveImageUrl || rawActiveImageUrl.startsWith('4:'))) {
-    rawActiveImageUrl = '/uploads/24X4_1793012982079.jpg';
-  }
-
-  // Safely route Meta CDN (lookaside / scontent) through server media-proxy so browser <img> loads without auth errors
+  // If format is IMAGE:
   let activeImageUrl = rawActiveImageUrl;
-  if (
-    typeof activeImageUrl === 'string' &&
-    (activeImageUrl.includes('lookaside.fbsbx.com') || activeImageUrl.includes('scontent.whatsapp.net'))
-  ) {
-    activeImageUrl = `/api/meta/media-proxy?url=${encodeURIComponent(activeImageUrl)}`;
+
+  if (format === 'IMAGE') {
+    const trimmed = String(rawActiveImageUrl || '').trim();
+    if (/^\d+$/.test(trimmed)) {
+      activeImageUrl = `/api/meta/media-proxy?mediaId=${encodeURIComponent(trimmed)}`;
+    } else if (!trimmed || trimmed.startsWith('4:') || /^[0-9a-f]{8}-[0-9a-f]{4}/i.test(trimmed)) {
+      activeImageUrl = '/uploads/24X4_1793012982079.jpg';
+    } else if (trimmed.includes('lookaside.fbsbx.com') || trimmed.includes('scontent.whatsapp.net')) {
+      activeImageUrl = `/api/meta/media-proxy?url=${encodeURIComponent(trimmed)}`;
+    }
   }
 
   const isValidImageUrl =
@@ -110,6 +110,7 @@ export const MiniTemplatePhonePreview: React.FC<MiniTemplatePhonePreviewProps> =
     (activeImageUrl.startsWith('http') ||
       activeImageUrl.startsWith('/uploads/') ||
       activeImageUrl.startsWith('/assets/') ||
+      activeImageUrl.startsWith('/api/') ||
       activeImageUrl.startsWith('blob:') ||
       activeImageUrl.startsWith('data:'));
 

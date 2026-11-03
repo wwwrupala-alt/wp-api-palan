@@ -1456,7 +1456,13 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
                   template={previewTemplate}
                   businessName={activeAccount?.verifiedName || 'Official Business'}
                   customVariables={previewCampaign.variableValues}
-                  customMediaUrl={previewCampaign.headerMediaUrl || previewCampaign.variableValues?.header_media_url}
+                  customMediaUrl={
+                    previewCampaign.headerMediaUrl ||
+                    previewCampaign.variableValues?.header_media_url ||
+                    previewCampaign.variableValues?.header_media_id ||
+                    previewCampaign.scheduleData?.variableValues?.header_media_url ||
+                    previewCampaign.scheduleData?.variableValues?.header_media_id
+                  }
                   messageTimestamp={previewCampaign.startedAt || previewCampaign.createdAt}
                   deliveryStatus="read"
                   size="large"
@@ -1507,46 +1513,59 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
                     </p>
                   ) : (
                     <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-                      {previewVariablesList.map((item, idx) => (
-                        <div
-                          key={idx}
-                          className="p-2 rounded-xl bg-neutral-50 dark:bg-neutral-800 flex items-center justify-between text-xs"
-                        >
-                          <div>
-                            <span className="font-mono font-bold text-purple-700 dark:text-purple-400 text-[11px] block">
-                              {item.token}
-                            </span>
-                            <span className="text-[10px] text-neutral-500">{item.label}</span>
-                          </div>
+                      {previewVariablesList.map((item, idx) => {
+                        const valTrimmed = String(item.value || '').trim();
+                        const isNumericMedia = /^\d+$/.test(valTrimmed);
+                        const mediaThumbSrc = isNumericMedia
+                          ? `/api/meta/media-proxy?mediaId=${encodeURIComponent(valTrimmed)}`
+                          : valTrimmed.startsWith('http') || valTrimmed.startsWith('/uploads/') || valTrimmed.startsWith('/assets/')
+                          ? valTrimmed
+                          : valTrimmed.includes('lookaside.fbsbx.com') || valTrimmed.includes('scontent.whatsapp.net')
+                          ? `/api/meta/media-proxy?url=${encodeURIComponent(valTrimmed)}`
+                          : '/uploads/24X4_1793012982079.jpg';
 
-                          <div className="text-right max-w-[190px]">
-                            {item.type === 'media' ? (
-                              <div className="flex items-center justify-end space-x-1.5">
-                                {(item.value.startsWith('http') || item.value.startsWith('/uploads/') || item.value.startsWith('/assets/')) && (
+                        return (
+                          <div
+                            key={idx}
+                            className="p-2 rounded-xl bg-neutral-50 dark:bg-neutral-800 flex items-center justify-between text-xs"
+                          >
+                            <div>
+                              <span className="font-mono font-bold text-purple-700 dark:text-purple-400 text-[11px] block">
+                                {item.token}
+                              </span>
+                              <span className="text-[10px] text-neutral-500">{item.label}</span>
+                            </div>
+
+                            <div className="text-right max-w-[190px]">
+                              {item.type === 'media' ? (
+                                <div className="flex items-center justify-end space-x-1.5">
                                   <img
-                                    src={item.value}
+                                    src={mediaThumbSrc}
                                     alt="Media preview"
                                     className="w-7 h-7 rounded-md object-cover border border-emerald-300 dark:border-emerald-700 shadow-2xs shrink-0"
                                     onError={(e) => {
-                                      (e.target as HTMLElement).style.display = 'none';
+                                      const target = e.currentTarget;
+                                      if (target.src !== '/uploads/24X4_1793012982079.jpg') {
+                                        target.src = '/uploads/24X4_1793012982079.jpg';
+                                      }
                                     }}
                                   />
-                                )}
-                                <span
-                                  className="font-mono text-[10px] text-emerald-700 dark:text-emerald-300 truncate block max-w-[120px]"
-                                  title={item.value}
-                                >
-                                  {item.value.split('/').pop()?.split('?')[0] || item.value}
+                                  <span
+                                    className="font-mono text-[10px] text-emerald-700 dark:text-emerald-300 truncate block max-w-[120px]"
+                                    title={item.value}
+                                  >
+                                    {item.value.split('/').pop()?.split('?')[0] || item.value}
+                                  </span>
+                                </div>
+                              ) : (
+                                <span className="font-semibold text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-800/50">
+                                  {item.value}
                                 </span>
-                              </div>
-                            ) : (
-                              <span className="font-semibold text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-800/50">
-                                {item.value}
-                              </span>
-                            )}
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
