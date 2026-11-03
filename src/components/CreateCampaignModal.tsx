@@ -413,14 +413,40 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
     }
   }, [isOpen, approvedTemplates, selectedTemplateId, initialCloneCampaign]);
 
-  const selectedTemplate =
-    approvedTemplates.find((t) => t.id === selectedTemplateId || t.metaTemplateId === selectedTemplateId) ||
-    templates.find((t) => t.id === selectedTemplateId || t.metaTemplateId === selectedTemplateId);
+  const selectedTemplate = useMemo(() => {
+    // 1. Try matching by ID, Meta Template ID, or Name in approvedTemplates
+    let match = approvedTemplates.find(
+      (t) =>
+        t.id === selectedTemplateId ||
+        t.metaTemplateId === selectedTemplateId ||
+        t.name.toLowerCase() === (selectedTemplateId || '').toLowerCase()
+    );
+    if (match) return match;
 
-  const headerComponent = selectedTemplate?.components?.find((c) => c.type === 'HEADER');
-  const bodyComponent = selectedTemplate?.components?.find((c) => c.type === 'BODY');
-  const footerComponent = selectedTemplate?.components?.find((c) => c.type === 'FOOTER');
-  const buttonsComponent = selectedTemplate?.components?.find((c) => c.type === 'BUTTONS');
+    // 2. Try matching in all templates
+    match = templates.find(
+      (t) =>
+        t.id === selectedTemplateId ||
+        t.metaTemplateId === selectedTemplateId ||
+        t.name.toLowerCase() === (selectedTemplateId || '').toLowerCase()
+    );
+    if (match) return match;
+
+    // 3. Fallback to cloned campaign template
+    if (initialCloneCampaign?.template) return initialCloneCampaign.template as Template;
+    if ((initialCloneCampaign as any)?.scheduleData?.template) return (initialCloneCampaign as any).scheduleData.template as Template;
+
+    // 4. Default to first approved template or first template
+    if (approvedTemplates.length > 0) return approvedTemplates[0];
+    if (templates.length > 0) return templates[0];
+
+    return null;
+  }, [approvedTemplates, templates, selectedTemplateId, initialCloneCampaign]);
+
+  const headerComponent = selectedTemplate?.components?.find((c) => String(c.type || '').toUpperCase() === 'HEADER');
+  const bodyComponent = selectedTemplate?.components?.find((c) => String(c.type || '').toUpperCase() === 'BODY');
+  const footerComponent = selectedTemplate?.components?.find((c) => String(c.type || '').toUpperCase() === 'FOOTER');
+  const buttonsComponent = selectedTemplate?.components?.find((c) => String(c.type || '').toUpperCase() === 'BUTTONS');
 
   const bodyText = bodyComponent?.text || '';
   const bodyMatches = bodyText.match(/\{\{(\d+)\}\}/g) || [];
@@ -941,7 +967,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
         </div>
 
         {/* Mobile Segmented Control Switcher (Setup vs Preview) */}
-        <div className="lg:hidden px-3 sm:px-4 py-2 bg-neutral-50 dark:bg-neutral-800/60 border-b border-neutral-200 dark:border-neutral-800 shrink-0">
+        <div className="md:hidden px-3 sm:px-4 py-2 bg-neutral-50 dark:bg-neutral-800/60 border-b border-neutral-200 dark:border-neutral-800 shrink-0">
           <div className="grid grid-cols-2 p-1 bg-neutral-200/80 dark:bg-neutral-900 rounded-2xl gap-1">
             <button
               type="button"
@@ -1005,10 +1031,10 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
           </div>
         )}
 
-        {/* Modal Body - Responsive: Mobile Tabs / Desktop 2 Columns Side-by-Side */}
-        <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 divide-y lg:divide-y-0 lg:divide-x divide-neutral-200 dark:border-neutral-800 min-h-0 overflow-hidden">
+        {/* Modal Body - Responsive: Mobile Tabs / Desktop & Tablet 2 Columns Side-by-Side */}
+        <div className="flex-1 grid grid-cols-1 md:grid-cols-12 divide-y md:divide-y-0 md:divide-x divide-neutral-200 dark:border-neutral-800 min-h-0 overflow-hidden">
           {/* Left Column: Form & Settings (7 cols on desktop, full-width on mobile setup tab) */}
-          <div className={`${mobileActiveTab === 'setup' ? 'block' : 'hidden'} lg:block lg:col-span-7 p-4 sm:p-5 space-y-4 overflow-y-auto`}>
+          <div className={`${mobileActiveTab === 'setup' ? 'block' : 'hidden'} md:block md:col-span-7 p-4 sm:p-5 space-y-4 overflow-y-auto`}>
             {/* Step 1: WhatsApp Sender Number & Campaign Title */}
             <div className="space-y-3.5 p-3.5 rounded-2xl bg-neutral-50/80 dark:bg-neutral-800/40 border border-neutral-200/80 dark:border-neutral-800">
               <div className="space-y-1.5">
@@ -1766,10 +1792,10 @@ Rahul: 919974428034
             </div>
           </div>
 
-          {/* Right Column: Live WhatsApp Mobile Preview (5 cols) - Shown side-by-side on desktop, or when active tab is preview on mobile */}
-          <div className={`${mobileActiveTab === 'preview' ? 'flex' : 'hidden'} lg:flex lg:col-span-5 p-4 bg-neutral-100/70 dark:bg-neutral-950/50 flex-col items-center justify-start overflow-y-auto space-y-3`}>
+          {/* Right Column: Live WhatsApp Mobile Preview (5 cols) - Shown side-by-side on desktop/tablet, or when active tab is preview on mobile */}
+          <div className={`${mobileActiveTab === 'preview' ? 'flex' : 'hidden'} md:flex md:col-span-5 p-4 bg-neutral-100/70 dark:bg-neutral-950/50 flex-col items-center justify-start overflow-y-auto space-y-3`}>
             {/* Mobile Header in Preview tab */}
-            <div className="lg:hidden w-full flex items-center justify-between pb-1 shrink-0">
+            <div className="md:hidden w-full flex items-center justify-between pb-1 shrink-0">
               <button
                 type="button"
                 onClick={() => setMobileActiveTab('setup')}
@@ -1825,20 +1851,39 @@ Rahul: 919974428034
                       {headerComponent && (
                         <div className="rounded-xl overflow-hidden bg-neutral-100 dark:bg-neutral-800/80">
                           {headerComponent.format === 'IMAGE' && (
-                            (campaignMediaPreviewUrl || campaignMediaUrl) ? (
-                              <div className="w-full rounded-xl overflow-hidden bg-neutral-900/5 dark:bg-white/5 flex items-center justify-center p-0.5">
-                                <img
-                                  src={campaignMediaPreviewUrl || campaignMediaUrl}
-                                  alt="Header preview"
-                                  className="w-full max-h-60 object-contain rounded-lg"
-                                />
-                              </div>
-                            ) : (
-                              <div className="h-24 flex flex-col items-center justify-center text-neutral-400 space-y-1">
-                                <ImageIcon className="w-6 h-6 text-emerald-500" />
-                                <span className="text-[10px] font-medium">Header Image Banner</span>
-                              </div>
-                            )
+                            (() => {
+                              const rawImgUrl =
+                                campaignMediaPreviewUrl ||
+                                campaignMediaUrl ||
+                                uploadedCampaignMedia?.url ||
+                                headerComponent.example?.header_handle?.[0] ||
+                                '';
+                              const safeImgSrc =
+                                rawImgUrl.includes('lookaside.fbsbx.com') || rawImgUrl.includes('scontent.whatsapp.net')
+                                  ? `/api/meta/media-proxy?url=${encodeURIComponent(rawImgUrl)}`
+                                  : rawImgUrl;
+
+                              return safeImgSrc ? (
+                                <div className="w-full rounded-xl overflow-hidden bg-neutral-900/5 dark:bg-white/5 flex items-center justify-center p-0.5">
+                                  <img
+                                    src={safeImgSrc}
+                                    alt="Header preview"
+                                    className="w-full max-h-64 object-contain rounded-lg shadow-2xs"
+                                    onError={(e) => {
+                                      const target = e.currentTarget;
+                                      if (target.src !== '/uploads/24X4_1793012982079.jpg') {
+                                        target.src = '/uploads/24X4_1793012982079.jpg';
+                                      }
+                                    }}
+                                  />
+                                </div>
+                              ) : (
+                                <div className="h-24 flex flex-col items-center justify-center text-neutral-400 space-y-1">
+                                  <ImageIcon className="w-6 h-6 text-emerald-500" />
+                                  <span className="text-[10px] font-medium">Header Image Banner</span>
+                                </div>
+                              );
+                            })()
                           )}
                           {headerComponent.format === 'VIDEO' && (
                             (campaignMediaPreviewUrl || campaignMediaUrl) ? (

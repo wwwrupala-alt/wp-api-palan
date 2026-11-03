@@ -609,12 +609,20 @@ export const InboxPage: React.FC = () => {
                       )}
 
                       {/* Image Preview */}
-                      {m.mediaUrl && !m.mediaFileName && (
+                      {(m.mediaUrl || m.headerMediaUrl) && !m.mediaFileName && (
                         <div className="mb-2 rounded-lg overflow-hidden border border-black/10">
                           <img
-                            src={m.mediaUrl}
+                            src={
+                              (m.mediaUrl || m.headerMediaUrl || '').includes('lookaside.fbsbx.com') ||
+                              (m.mediaUrl || m.headerMediaUrl || '').includes('scontent.whatsapp.net')
+                                ? `/api/meta/media-proxy?url=${encodeURIComponent(m.mediaUrl || m.headerMediaUrl || '')}`
+                                : (m.mediaUrl || m.headerMediaUrl)
+                            }
                             alt="Media attachment"
-                            className="max-h-48 w-full object-cover"
+                            className="max-h-56 w-full object-contain bg-black/5 rounded-lg"
+                            onError={(e) => {
+                              (e.currentTarget as HTMLElement).style.display = 'none';
+                            }}
                             onLoad={() => {
                               if (messagesContainerRef.current) {
                                 messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
