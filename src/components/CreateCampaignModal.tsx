@@ -225,11 +225,20 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
       setTemplateVariables(clonedVars);
 
       // Pre-fill media attachment (image, video, document)
+      const clonedMediaId =
+        initialCloneCampaign.variableValues?.header_media_id ||
+        initialCloneCampaign.variableValues?.media_id ||
+        initialCloneCampaign.scheduleData?.variableValues?.header_media_id ||
+        initialCloneCampaign.scheduleData?.variableValues?.media_id ||
+        (initialCloneCampaign as any).headerMediaId;
+
       const media =
         initialCloneCampaign.headerMediaUrl ||
         initialCloneCampaign.variableValues?.header_media_url ||
         initialCloneCampaign.variableValues?.headerMediaUrl ||
+        initialCloneCampaign.scheduleData?.variableValues?.header_media_url ||
         (initialCloneCampaign as any).mediaUrl ||
+        clonedMediaId ||
         matchingTpl?.components?.find((c) => c.type === 'HEADER')?.example?.header_handle?.[0] ||
         '';
 
@@ -243,6 +252,9 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
         else if (['mp4', '3gp'].includes(ext)) contentType = 'video/mp4';
         else if (['pdf'].includes(ext)) contentType = 'application/pdf';
 
+        const isNumericId = /^\d+$/.test(media);
+        const effectiveMediaId = isNumericId ? media : clonedMediaId;
+
         setCampaignMediaUrl(media);
         setCampaignMediaPreviewUrl(media);
         setUploadedCampaignMedia({
@@ -250,6 +262,8 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
           originalName: cleanName,
           url: media,
           fullUrl: media.startsWith('http') ? media : `${typeof window !== 'undefined' ? window.location.origin : ''}${media}`,
+          id: effectiveMediaId,
+          metaMediaId: effectiveMediaId,
           size: 1024 * 150,
           contentType,
         });
