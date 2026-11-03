@@ -407,3 +407,105 @@ export async function handleUpdatePricing(req: Request, res: Response): Promise<
     res.status(500).json({ error: err.message || 'Failed to update pricing.' });
   }
 }
+
+/**
+ * Reset / Reconcile Wallet Account
+ * Sets balance to 0 (or a specific new balance) and optionally resets totalRecharged and totalSpent
+ * so the user can synchronize CloudWABA balance with Meta Business Portfolio.
+ */
+export async function resetWalletAccount(params: {
+  organizationId: string;
+  userId?: string;
+  newBalance?: number;
+  reason?: string;
+  resetCounters?: boolean;
+}): Promise<{ account: WalletAccount; transaction: WalletTransaction }> {
+  const { organizationId, userId, newBalance = 0, reason, resetCounters = true } = params;
+  const current = await getWalletAccount(organizationId, userId);
+  const nowIso = new Date().toISOString();
+
+  const targetBalance = Number(Math.max(0, newBalance).toFixed(3));
+  const diff = Number((targetBalance - current.balance).toFixed(3));
+
+  const updatedAccount: WalletAccount = {
+    ...current,
+    balance: targetBalance,
+    totalRecharged: resetCounters ? targetBalance : current.totalRecharged,
+    totalSpent: resetCounters ? 0 : current.totalSpent,
+    updatedAt: nowIso,
+  };
+
+  // 1. Save updated account in Firestore
+  const accountRef = doc(serverDb, `organizations/${organizationId}/wallet`, 'account');
+  await setDoc(accountRef, cleanFirestoreData(updatedAccount), { merge: true });
+
+  // 2. Also sync connected WhatsApp Accounts prepaidBalance if present
+  try {
+    const accsSnap = await getDocs(collection(serverDb, `organizations/${organizationId}/whatsappAccounts`));
+    for (const aDoc of accsSnap.docs) {
+      await updateDoc(aDoc.ref, {
+        'prepaidBalance.amount': targetBalance,
+        'prepaidBalance.lastUpdated': nowIso,
+        'prepaidBalance.source': 'meta_synced',
+      }).catch(() => {});
+    }
+  } catch {}
+
+  // 3. Record Audit / Adjustment Transaction
+  const txId = `tx_rst_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  const transaction: WalletTransaction = {
+    id: txId,
+    organizationId,
+    userId: userId || undefined,
+    type: diff >= 0 ? 'credit' : 'debit',
+    amount: Math.abs(diff),
+    balanceAfter: targetBalance,
+    category: 'ADJUSTMENT',
+    description:
+      reason ||
+      `Wallet balance reset from ₹${current.balance.toFixed(2)} to ₹${targetBalance.toFixed(2)} (Meta Business Portfolio Reconciliation)`,
+    createdAt: nowIso,
+  };
+
+  try {
+    const txRef = doc(serverDb, `organizations/${organizationId}/wallet/account/transactions`, txId);
+    await setDoc(txRef, cleanFirestoreData(transaction));
+  } catch (err: any) {
+    console.warn('[WalletService] Could not write reset transaction doc:', err.message);
+  }
+
+  return { account: updatedAccount, transaction };
+}
+
+/**
+ * POST /api/wallet/reset
+ * Resets wallet balance to 0 (or a designated reconciled balance)
+ */
+export async function handleResetWallet(req: Request, res: Response): Promise<void> {
+  try {
+    const { organizationId, userId, newBalance, reason, resetCounters } = req.body;
+    const targetOrg = organizationId || req.headers['x-organization-id'] || 'org_master_platform';
+
+    const numBalance =
+      newBalance !== undefined && newBalance !== null && !isNaN(Number(newBalance))
+        ? Number(newBalance)
+        : 0;
+
+    const result = await resetWalletAccount({
+      organizationId: String(targetOrg),
+      userId,
+      newBalance: numBalance,
+      reason,
+      resetCounters: resetCounters !== false,
+    });
+
+    res.json({
+      success: true,
+      message: `Wallet successfully reset. Balance is now ₹${numBalance.toFixed(2)}.`,
+      account: result.account,
+      transaction: result.transaction,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to reset wallet.' });
+  }
+}

@@ -92,6 +92,7 @@ import {
   handleRechargeWallet,
   handleGetPricing,
   handleUpdatePricing,
+  handleResetWallet,
 } from './walletService.ts';
 
 // Initialize default accounts and persistent disk backups
@@ -315,6 +316,7 @@ apiApp.get('/api/wallet', handleGetWallet);
 apiApp.post('/api/wallet/recharge', handleRechargeWallet);
 apiApp.get('/api/wallet/pricing', handleGetPricing);
 apiApp.post('/api/wallet/pricing', handleUpdatePricing);
+apiApp.post('/api/wallet/reset', handleResetWallet);
 
 // Meta Cloud API Routes
 apiApp.get('/api/meta/status', handleGetMetaStatus);

@@ -2310,3 +2310,18 @@ export async function updatePricingApi(pricing: {
   return parseJsonResponse(res, 'Failed to update category pricing.');
 }
 
+export async function resetWalletApi(params: {
+  organizationId: string;
+  userId?: string;
+  newBalance?: number;
+  reason?: string;
+  resetCounters?: boolean;
+}) {
+  const res = await fetch('/api/wallet/reset', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  return parseJsonResponse(res, 'Failed to reset wallet.');
+}
+

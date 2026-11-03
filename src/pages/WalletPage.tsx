@@ -22,6 +22,7 @@ import {
   ChevronRight,
   Sparkles,
   Info,
+  RotateCcw,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useToast } from '../context/ToastContext.tsx';
@@ -29,6 +30,7 @@ import {
   fetchWalletInfo,
   rechargeWalletApi,
   updatePricingApi,
+  resetWalletApi,
 } from '../lib/services.ts';
 import { CategoryPricing, WalletAccount, WalletTransaction } from '../types/index.ts';
 
@@ -53,6 +55,14 @@ export const WalletPage: React.FC = () => {
   const [rechargeNote, setRechargeNote] = useState<string>('Meta Prepaid Recharge');
   const [paymentRef, setPaymentRef] = useState<string>('');
   const [isRecharging, setIsRecharging] = useState(false);
+
+  // Reset & Reconcile Modal State (00 Fresh State)
+  const [isResetModalOpen, setIsResetModalOpen] = useState(false);
+  const [resetMode, setResetMode] = useState<'zero' | 'custom'>('zero');
+  const [customBalanceInput, setCustomBalanceInput] = useState<string>('0');
+  const [resetReason, setResetReason] = useState<string>('Reconciliation with Meta Business Portfolio balance');
+  const [resetCounters, setResetCounters] = useState<boolean>(true);
+  const [isResetting, setIsResetting] = useState(false);
 
   // Master Admin Pricing Edit State
   const [editMarketing, setEditMarketing] = useState<string>('0.88');
@@ -121,6 +131,40 @@ export const WalletPage: React.FC = () => {
       toast.showError('Recharge Error', err?.message || 'Could not add funds to wallet.');
     } finally {
       setIsRecharging(false);
+    }
+  };
+
+  const handleResetSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const targetBalance = resetMode === 'zero' ? 0 : Number(customBalanceInput);
+    if (isNaN(targetBalance) || targetBalance < 0) {
+      toast.showWarning('Invalid Balance', 'Please enter a valid non-negative balance.');
+      return;
+    }
+
+    setIsResetting(true);
+    try {
+      const res = await resetWalletApi({
+        organizationId: currentOrgId,
+        userId: userProfile?.uid,
+        newBalance: targetBalance,
+        reason: resetReason.trim() || 'Meta Business Portfolio Balance Reconciliation',
+        resetCounters,
+      });
+
+      toast.showSuccess(
+        'Wallet Reset Completed!',
+        targetBalance === 0
+          ? 'Wallet balance has been reset to ₹0.00 fresh state.'
+          : `Wallet balance set to ₹${targetBalance.toFixed(2)} to match Meta.`
+      );
+      setIsResetModalOpen(false);
+      if (res.account) setAccount(res.account);
+      if (res.transaction) setTransactions((prev) => [res.transaction, ...prev]);
+    } catch (err: any) {
+      toast.showError('Reset Error', err?.message || 'Could not reset wallet balance.');
+    } finally {
+      setIsResetting(false);
     }
   };
 
@@ -227,6 +271,20 @@ export const WalletPage: React.FC = () => {
 
           <button
             type="button"
+            onClick={() => {
+              setResetMode('zero');
+              setCustomBalanceInput('0');
+              setIsResetModalOpen(true);
+            }}
+            className="inline-flex items-center space-x-1.5 px-3 py-2 rounded-xl border border-rose-300 dark:border-rose-800/80 bg-rose-50/70 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-xs font-bold shadow-2xs transition-colors cursor-pointer"
+            title="Reset wallet to ₹0.00 fresh to reconcile with Meta Business Portfolio"
+          >
+            <RotateCcw className="w-3.5 h-3.5 text-rose-500" />
+            <span>Reset Balance (00)</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => setIsRechargeModalOpen(true)}
             className="inline-flex items-center space-x-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer"
           >
@@ -285,9 +343,24 @@ export const WalletPage: React.FC = () => {
             <div className="text-2xl sm:text-3xl font-extrabold font-mono tracking-tight text-neutral-900 dark:text-white">
               ₹{balance.toFixed(2)}
             </div>
-            <p className="text-[11px] text-neutral-500 dark:text-neutral-400 mt-1">
-              Available for WhatsApp Broadcasts &amp; Drips
-            </p>
+            <div className="flex items-center justify-between mt-1 pt-0.5">
+              <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                Available for Broadcasts &amp; Drips
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setResetMode('zero');
+                  setCustomBalanceInput('0');
+                  setIsResetModalOpen(true);
+                }}
+                className="inline-flex items-center space-x-1 text-[11px] font-bold text-rose-600 dark:text-rose-400 hover:underline cursor-pointer ml-1 shrink-0"
+                title="Reset or reconcile with Meta Business Portfolio"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>Reset (00)</span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -835,6 +908,188 @@ export const WalletPage: React.FC = () => {
                   className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition-colors cursor-pointer disabled:opacity-50"
                 >
                   {isRecharging ? 'Crediting...' : 'Confirm Recharge'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Reset & Reconcile Modal (00 Fresh State) */}
+      {isResetModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fadeIn">
+          <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-3xl max-w-lg w-full p-6 space-y-5 shadow-2xl">
+            <div className="flex items-center space-x-3 text-rose-600 dark:text-rose-400">
+              <div className="w-10 h-10 rounded-2xl bg-rose-100 dark:bg-rose-950/60 flex items-center justify-center shrink-0">
+                <RotateCcw className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-neutral-900 dark:text-white">
+                  Reset Wallet &amp; Reconcile Meta Balance
+                </h3>
+                <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                  Sync your system balance with Meta Business Portfolio
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleResetSubmit} className="space-y-4 text-xs">
+              {/* Notice Banner explaining why */}
+              <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 text-amber-900 dark:text-amber-200 space-y-1.5 text-[11px]">
+                <div className="flex items-center space-x-1.5 font-bold">
+                  <Info className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                  <span>Kyun zaroori hai? (Reconciliation Purpose)</span>
+                </div>
+                <p>
+                  Agar Meta Business Portfolio me WhatsApp number ka balance aur CloudWABA ka balance alag dikh raha ho, toh aap yahan se balance ko <strong>₹0.00 (Fresh Zero)</strong> karke naya recharge daal sakte hain, ya directly Meta wala exact balance yahan set kar sakte hain taaki dono 100% same match ho jayein.
+                </p>
+              </div>
+
+              {/* Mode Selection */}
+              <div>
+                <label className="block text-[11px] font-bold text-neutral-700 dark:text-neutral-300 mb-2">
+                  Select Reset Action:
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setResetMode('zero')}
+                    className={`p-3 rounded-2xl border text-left cursor-pointer transition-all ${
+                      resetMode === 'zero'
+                        ? 'border-rose-500 bg-rose-50 dark:bg-rose-950/40 text-rose-900 dark:text-rose-200 ring-2 ring-rose-400/20'
+                        : 'border-neutral-200 dark:border-neutral-700 hover:bg-neutral-50 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-bold text-xs">Fresh Reset to 00</span>
+                      <span className="text-xs font-mono font-extrabold text-rose-600">₹0.00</span>
+                    </div>
+                    <p className="text-[10px] text-neutral-500 dark:text-neutral-400">
+                      Balance 0 ho jayega. Uske baad "Add Funds" se naya recharge daal kar Meta se match karein.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setResetMode('custom')}
+                    className={`p-3 rounded-2xl border text-left cursor-pointer transition-all ${
+                      resetMode === 'custom'
+                        ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 ring-2 ring-emerald-400/20'
+                        : 'border-neutral-200 dark:border-neutral-700 hover:bg-neutral-50 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-bold text-xs">Set Exact Meta Balance</span>
+                      <span className="text-xs font-mono font-bold text-emerald-600">Direct Value</span>
+                    </div>
+                    <p className="text-[10px] text-neutral-500 dark:text-neutral-400">
+                      Meta Business Portfolio me jo exact balance abhi dikh raha hai, wahi direct yahan type karein.
+                    </p>
+                  </button>
+                </div>
+              </div>
+
+              {/* Custom Balance Input if mode === 'custom' */}
+              {resetMode === 'custom' && (
+                <div className="animate-fadeIn">
+                  <label className="block text-[11px] font-bold text-neutral-700 dark:text-neutral-300 mb-1">
+                    Meta Business Portfolio Live Balance (₹) <span className="text-red-500">*</span>
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400 font-bold text-sm">
+                      ₹
+                    </span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      required
+                      value={customBalanceInput}
+                      onChange={(e) => setCustomBalanceInput(e.target.value)}
+                      placeholder="e.g. 450.50"
+                      className="w-full pl-8 pr-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-sm font-mono font-bold text-neutral-900 dark:text-white"
+                    />
+                  </div>
+                  <p className="text-[10px] text-neutral-500 mt-1">
+                    Ye balance direct aapke wallet account aur linked WhatsApp numbers par set ho jayega.
+                  </p>
+                </div>
+              )}
+
+              {/* Reset Counters Checkbox */}
+              <div className="p-3 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/40">
+                <label className="flex items-start space-x-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={resetCounters}
+                    onChange={(e) => setResetCounters(e.target.checked)}
+                    className="mt-0.5 rounded text-rose-600 focus:ring-rose-500"
+                  />
+                  <div>
+                    <span className="font-bold text-neutral-800 dark:text-neutral-200 block text-[11px]">
+                      Lifetime Recharged &amp; Spent counters reset karein (100% Fresh Start)
+                    </span>
+                    <span className="text-[10px] text-neutral-500 dark:text-neutral-400 block mt-0.5">
+                      Check rakhne par Total Spent 0 ho jayega aur Total Recharged naye balance se start hoga.
+                    </span>
+                  </div>
+                </label>
+              </div>
+
+              {/* Reason */}
+              <div>
+                <label className="block text-[11px] font-bold text-neutral-700 dark:text-neutral-300 mb-1">
+                  Reason / Audit Note
+                </label>
+                <input
+                  type="text"
+                  value={resetReason}
+                  onChange={(e) => setResetReason(e.target.value)}
+                  placeholder="e.g. Reconciliation with Meta Business Portfolio balance"
+                  className="w-full px-3.5 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs"
+                />
+              </div>
+
+              {/* Balance Transition Summary */}
+              <div className="p-3 rounded-xl bg-neutral-100 dark:bg-neutral-800 text-[11px] flex items-center justify-between font-mono">
+                <div>
+                  <span className="text-neutral-500 block text-[10px]">Current System Balance</span>
+                  <span className="font-bold text-neutral-800 dark:text-neutral-200">₹{balance.toFixed(2)}</span>
+                </div>
+                <div className="text-neutral-400">➔</div>
+                <div>
+                  <span className="text-neutral-500 block text-[10px]">New Reconciled Balance</span>
+                  <span className={`font-bold ${resetMode === 'zero' ? 'text-rose-600' : 'text-emerald-600'}`}>
+                    ₹{resetMode === 'zero' ? '0.00' : Number(customBalanceInput || 0).toFixed(2)}
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end space-x-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsResetModalOpen(false)}
+                  className="px-4 py-2 rounded-xl border border-neutral-200 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 font-semibold text-xs hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isResetting}
+                  className={`px-5 py-2 rounded-xl text-white font-bold text-xs shadow-xs transition-colors cursor-pointer disabled:opacity-50 flex items-center space-x-1.5 ${
+                    resetMode === 'zero'
+                      ? 'bg-rose-600 hover:bg-rose-700'
+                      : 'bg-emerald-600 hover:bg-emerald-700'
+                  }`}
+                >
+                  <RotateCcw className={`w-3.5 h-3.5 ${isResetting ? 'animate-spin' : ''}`} />
+                  <span>
+                    {isResetting
+                      ? 'Resetting...'
+                      : resetMode === 'zero'
+                      ? 'Confirm Reset to ₹0.00'
+                      : 'Confirm Reconcile Balance'}
+                  </span>
                 </button>
               </div>
             </form>
