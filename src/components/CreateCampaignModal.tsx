@@ -232,15 +232,24 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
         initialCloneCampaign.scheduleData?.variableValues?.media_id ||
         (initialCloneCampaign as any).headerMediaId;
 
-      const media =
+      let media =
         initialCloneCampaign.headerMediaUrl ||
         initialCloneCampaign.variableValues?.header_media_url ||
         initialCloneCampaign.variableValues?.headerMediaUrl ||
         initialCloneCampaign.scheduleData?.variableValues?.header_media_url ||
         (initialCloneCampaign as any).mediaUrl ||
-        clonedMediaId ||
-        matchingTpl?.components?.find((c) => c.type === 'HEADER')?.example?.header_handle?.[0] ||
         '';
+
+      // Ignore dead ephemeral blob URLs from past sessions
+      if (media.startsWith('blob:')) {
+        media = '';
+      }
+      if (!media && clonedMediaId) {
+        media = clonedMediaId;
+      }
+      if (!media) {
+        media = matchingTpl?.components?.find((c) => c.type === 'HEADER')?.example?.header_handle?.[0] || '';
+      }
 
       if (media) {
         const rawName = media.split('/').pop()?.split('?')[0] || 'cloned_media_attachment';
@@ -254,14 +263,17 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
 
         const isNumericId = /^\d+$/.test(media);
         const effectiveMediaId = isNumericId ? media : clonedMediaId;
+        const previewUrl = isNumericId
+          ? `/api/meta/media-proxy?mediaId=${encodeURIComponent(media)}&token=${encodeURIComponent(currentAccount?.customToken || '')}`
+          : media;
 
         setCampaignMediaUrl(media);
-        setCampaignMediaPreviewUrl(media);
+        setCampaignMediaPreviewUrl(previewUrl);
         setUploadedCampaignMedia({
           filename: cleanName,
           originalName: cleanName,
-          url: media,
-          fullUrl: media.startsWith('http') ? media : `${typeof window !== 'undefined' ? window.location.origin : ''}${media}`,
+          url: previewUrl,
+          fullUrl: previewUrl.startsWith('http') ? previewUrl : `${typeof window !== 'undefined' ? window.location.origin : ''}${previewUrl}`,
           id: effectiveMediaId,
           metaMediaId: effectiveMediaId,
           size: 1024 * 150,

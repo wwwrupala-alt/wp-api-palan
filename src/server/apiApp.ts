@@ -2,6 +2,8 @@ import express from 'express';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
+import { serverDb } from './serverDb.ts';
+import { collection, getDocs } from 'firebase/firestore';
 import { inMemoryMediaBufferCache } from './metaMediaManager.ts';
 import {
   handleGetMetaStatus,
@@ -189,7 +191,39 @@ apiApp.get('/api/meta/media-proxy', async (req, res) => {
 
   try {
     const config = getMetaConfig();
-    const token = (req.query.token as string) || (req.headers['x-meta-token'] as string) || config.systemToken;
+    let token = (req.query.token as string) || (req.headers['x-meta-token'] as string) || config.systemToken;
+
+    if (!token) {
+      try {
+        const orgId = (req.headers['x-organization-id'] as string) || (req.query.orgId as string) || 'org_7600468044';
+        const accSnap = await getDocs(collection(serverDb, `organizations/${orgId}/whatsappAccounts`));
+        for (const docSnap of accSnap.docs) {
+          const accData = docSnap.data();
+          const found = accData.customToken || accData.userAccessToken || accData.permanentToken;
+          if (found) {
+            token = found;
+            break;
+          }
+        }
+        if (!token) {
+          const allOrgs = await getDocs(collection(serverDb, 'organizations'));
+          for (const o of allOrgs.docs) {
+            const oAccs = await getDocs(collection(serverDb, `organizations/${o.id}/whatsappAccounts`));
+            for (const a of oAccs.docs) {
+              const d = a.data();
+              const found = d.customToken || d.userAccessToken || d.permanentToken;
+              if (found) {
+                token = found;
+                break;
+              }
+            }
+            if (token) break;
+          }
+        }
+      } catch (dbErr) {
+        console.warn('media-proxy token lookup notice:', dbErr);
+      }
+    }
 
     if (effectiveMediaId) {
       if (!token) {

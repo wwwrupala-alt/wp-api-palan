@@ -4,27 +4,106 @@ import path8 from "path";
 import os3 from "os";
 import fs8 from "fs";
 
-// src/server/metaMediaManager.ts
+// src/server/serverDb.ts
+import { initializeApp, getApps, getApp } from "firebase/app";
+import {
+  initializeFirestore,
+  setLogLevel,
+  memoryLocalCache,
+  doc,
+  setDoc,
+  getDoc,
+  getDocs,
+  collection,
+  query,
+  where,
+  limit,
+  updateDoc,
+  deleteDoc
+} from "firebase/firestore";
 import fs from "fs";
 import path from "path";
+import { createRequire } from "module";
+setLogLevel("error");
+var isBloomFilterMsg = (args) => args.some(
+  (a) => typeof a === "string" && (a.includes("BloomFilter") || a.includes("bloom filter")) || a instanceof Error && (a.name === "BloomFilterError" || a.message.includes("BloomFilter") || a.message.includes("Invalid hash count"))
+);
+var origWarn = console.warn;
+console.warn = (...args) => {
+  if (isBloomFilterMsg(args)) return;
+  origWarn.apply(console, args);
+};
+var origError = console.error;
+console.error = (...args) => {
+  if (isBloomFilterMsg(args)) return;
+  origError.apply(console, args);
+};
+process.on("unhandledRejection", (reason) => {
+  if (reason?.name === "BloomFilterError" || typeof reason?.message === "string" && (reason.message.includes("BloomFilter") || reason.message.includes("Invalid hash count"))) {
+    return;
+  }
+});
+var require2 = createRequire(import.meta.url);
+var EMBEDDED_FIREBASE_CONFIG = {
+  projectId: "whatsap-api-saas",
+  appId: "1:208644645020:web:4ef4757f87172b439a0d59",
+  apiKey: "AIzaSyDCkXsb4LgjdscXR3Nn6u5qxRJ8BFAG6Qk",
+  authDomain: "whatsap-api-saas.firebaseapp.com",
+  firestoreDatabaseId: "(default)",
+  storageBucket: "whatsap-api-saas.firebasestorage.app",
+  messagingSenderId: "208644645020",
+  measurementId: "G-PB602S59T4"
+};
+var firebaseConfig = { ...EMBEDDED_FIREBASE_CONFIG };
+try {
+  const dynamicConfig = require2("../../firebase-applet-config.json");
+  if (dynamicConfig && dynamicConfig.projectId) {
+    firebaseConfig = { ...firebaseConfig, ...dynamicConfig };
+  }
+} catch {
+  try {
+    const configPath = path.resolve(process.cwd(), "firebase-applet-config.json");
+    if (fs.existsSync(configPath)) {
+      firebaseConfig = { ...firebaseConfig, ...JSON.parse(fs.readFileSync(configPath, "utf8")) };
+    }
+  } catch {
+  }
+}
+var app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+var dbId = firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== "(default)" ? firebaseConfig.firestoreDatabaseId : void 0;
+var serverDb = initializeFirestore(
+  app,
+  {
+    experimentalForceLongPolling: true,
+    localCache: memoryLocalCache()
+  },
+  dbId
+);
+
+// src/server/apiApp.ts
+import { collection as collection4, getDocs as getDocs4 } from "firebase/firestore";
+
+// src/server/metaMediaManager.ts
+import fs2 from "fs";
+import path2 from "path";
 import os from "os";
 var metaMediaIdCache = /* @__PURE__ */ new Map();
 var inMemoryMediaBufferCache = /* @__PURE__ */ new Map();
 function getUploadsWritableDir() {
-  const primaryDir = path.join(process.cwd(), "public", "uploads");
+  const primaryDir = path2.join(process.cwd(), "public", "uploads");
   try {
-    if (!fs.existsSync(primaryDir)) {
-      fs.mkdirSync(primaryDir, { recursive: true });
+    if (!fs2.existsSync(primaryDir)) {
+      fs2.mkdirSync(primaryDir, { recursive: true });
     }
-    const testFile = path.join(primaryDir, `.test_${Date.now()}`);
-    fs.writeFileSync(testFile, "ok");
-    fs.unlinkSync(testFile);
+    const testFile = path2.join(primaryDir, `.test_${Date.now()}`);
+    fs2.writeFileSync(testFile, "ok");
+    fs2.unlinkSync(testFile);
     return primaryDir;
   } catch {
-    const fallbackDir = path.join(os.tmpdir(), "cloudwaba_uploads");
+    const fallbackDir = path2.join(os.tmpdir(), "cloudwaba_uploads");
     try {
-      if (!fs.existsSync(fallbackDir)) {
-        fs.mkdirSync(fallbackDir, { recursive: true });
+      if (!fs2.existsSync(fallbackDir)) {
+        fs2.mkdirSync(fallbackDir, { recursive: true });
       }
       return fallbackDir;
     } catch {
@@ -42,7 +121,7 @@ async function resolveMetaMediaObject(mediaRef, phoneNumberId, token, mediaType 
   const cacheKey = `${phoneNumberId}:${trimmed}`;
   if (metaMediaIdCache.has(cacheKey)) {
     const cachedId = metaMediaIdCache.get(cacheKey);
-    return { id: cachedId, filename: path.basename(trimmed.split("?")[0]) || void 0 };
+    return { id: cachedId, filename: path2.basename(trimmed.split("?")[0]) || void 0 };
   }
   if (trimmed.includes("scontent.whatsapp.net") || trimmed.includes("lookaside.fbsbx.com")) {
     try {
@@ -82,7 +161,7 @@ async function resolveMetaMediaObject(mediaRef, phoneNumberId, token, mediaType 
   }
   const isInternalDevHost = trimmed.startsWith("blob:") || trimmed.includes("localhost") || trimmed.includes("127.0.0.1");
   if ((trimmed.startsWith("https://") || trimmed.startsWith("http://")) && !isInternalDevHost && !trimmed.includes("scontent.whatsapp.net") && !trimmed.includes("lookaside.fbsbx.com")) {
-    const filename = path.basename(trimmed.split("?")[0]) || void 0;
+    const filename = path2.basename(trimmed.split("?")[0]) || void 0;
     return { link: trimmed, filename };
   }
   let localRelative = trimmed;
@@ -92,7 +171,7 @@ async function resolveMetaMediaObject(mediaRef, phoneNumberId, token, mediaType 
     } catch {
     }
   }
-  const baseFilename = path.basename(localRelative);
+  const baseFilename = path2.basename(localRelative);
   const memCached = inMemoryMediaBufferCache.get(baseFilename) || inMemoryMediaBufferCache.get(localRelative) || inMemoryMediaBufferCache.get(trimmed);
   let fileBuffer = null;
   let mimeType = "application/octet-stream";
@@ -104,28 +183,28 @@ async function resolveMetaMediaObject(mediaRef, phoneNumberId, token, mediaType 
   } else {
     const cleanSubPath = localRelative.replace(/^\//, "");
     const possiblePaths = [
-      path.join(process.cwd(), "public", cleanSubPath),
-      path.join(process.cwd(), cleanSubPath),
-      path.join(os.tmpdir(), "cloudwaba_uploads", baseFilename),
-      path.join(os.tmpdir(), baseFilename)
+      path2.join(process.cwd(), "public", cleanSubPath),
+      path2.join(process.cwd(), cleanSubPath),
+      path2.join(os.tmpdir(), "cloudwaba_uploads", baseFilename),
+      path2.join(os.tmpdir(), baseFilename)
     ];
     let foundPath = null;
     for (const p of possiblePaths) {
-      if (fs.existsSync(p)) {
+      if (fs2.existsSync(p)) {
         foundPath = p;
         break;
       }
     }
     if (foundPath) {
-      const ext = path.extname(foundPath).toLowerCase();
+      const ext = path2.extname(foundPath).toLowerCase();
       if (ext === ".png") mimeType = "image/png";
       else if (ext === ".jpg" || ext === ".jpeg") mimeType = "image/jpeg";
       else if (ext === ".webp") mimeType = "image/webp";
       else if (ext === ".mp4") mimeType = "video/mp4";
       else if (ext === ".3gp") mimeType = "video/3gpp";
       else if (ext === ".pdf") mimeType = "application/pdf";
-      fileBuffer = fs.readFileSync(foundPath);
-      originalFileName = path.basename(foundPath);
+      fileBuffer = fs2.readFileSync(foundPath);
+      originalFileName = path2.basename(foundPath);
     } else if (baseFilename) {
       try {
         const publicFallbackUrl = `https://wabacloud.in/uploads/${baseFilename}`;
@@ -280,82 +359,6 @@ function parseMessagingLimitTier(tier, isVerified) {
       };
   }
 }
-
-// src/server/serverDb.ts
-import { initializeApp, getApps, getApp } from "firebase/app";
-import {
-  initializeFirestore,
-  setLogLevel,
-  memoryLocalCache,
-  doc,
-  setDoc,
-  getDoc,
-  getDocs,
-  collection,
-  query,
-  where,
-  limit,
-  updateDoc,
-  deleteDoc
-} from "firebase/firestore";
-import fs2 from "fs";
-import path2 from "path";
-import { createRequire } from "module";
-setLogLevel("error");
-var isBloomFilterMsg = (args) => args.some(
-  (a) => typeof a === "string" && (a.includes("BloomFilter") || a.includes("bloom filter")) || a instanceof Error && (a.name === "BloomFilterError" || a.message.includes("BloomFilter") || a.message.includes("Invalid hash count"))
-);
-var origWarn = console.warn;
-console.warn = (...args) => {
-  if (isBloomFilterMsg(args)) return;
-  origWarn.apply(console, args);
-};
-var origError = console.error;
-console.error = (...args) => {
-  if (isBloomFilterMsg(args)) return;
-  origError.apply(console, args);
-};
-process.on("unhandledRejection", (reason) => {
-  if (reason?.name === "BloomFilterError" || typeof reason?.message === "string" && (reason.message.includes("BloomFilter") || reason.message.includes("Invalid hash count"))) {
-    return;
-  }
-});
-var require2 = createRequire(import.meta.url);
-var EMBEDDED_FIREBASE_CONFIG = {
-  projectId: "whatsap-api-saas",
-  appId: "1:208644645020:web:4ef4757f87172b439a0d59",
-  apiKey: "AIzaSyDCkXsb4LgjdscXR3Nn6u5qxRJ8BFAG6Qk",
-  authDomain: "whatsap-api-saas.firebaseapp.com",
-  firestoreDatabaseId: "(default)",
-  storageBucket: "whatsap-api-saas.firebasestorage.app",
-  messagingSenderId: "208644645020",
-  measurementId: "G-PB602S59T4"
-};
-var firebaseConfig = { ...EMBEDDED_FIREBASE_CONFIG };
-try {
-  const dynamicConfig = require2("../../firebase-applet-config.json");
-  if (dynamicConfig && dynamicConfig.projectId) {
-    firebaseConfig = { ...firebaseConfig, ...dynamicConfig };
-  }
-} catch {
-  try {
-    const configPath = path2.resolve(process.cwd(), "firebase-applet-config.json");
-    if (fs2.existsSync(configPath)) {
-      firebaseConfig = { ...firebaseConfig, ...JSON.parse(fs2.readFileSync(configPath, "utf8")) };
-    }
-  } catch {
-  }
-}
-var app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
-var dbId = firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== "(default)" ? firebaseConfig.firestoreDatabaseId : void 0;
-var serverDb = initializeFirestore(
-  app,
-  {
-    experimentalForceLongPolling: true,
-    localCache: memoryLocalCache()
-  },
-  dbId
-);
 
 // src/server/metaAccountSyncService.ts
 import { doc as doc2, getDoc as getDoc2 } from "firebase/firestore";
@@ -10059,7 +10062,38 @@ apiApp.get("/api/meta/media-proxy", async (req, res) => {
   const effectiveMediaId = mediaIdParam || (/^\d+$/.test(targetUrl.trim()) ? targetUrl.trim() : "");
   try {
     const config = getMetaConfig2();
-    const token = req.query.token || req.headers["x-meta-token"] || config.systemToken;
+    let token = req.query.token || req.headers["x-meta-token"] || config.systemToken;
+    if (!token) {
+      try {
+        const orgId = req.headers["x-organization-id"] || req.query.orgId || "org_7600468044";
+        const accSnap = await getDocs4(collection4(serverDb, `organizations/${orgId}/whatsappAccounts`));
+        for (const docSnap of accSnap.docs) {
+          const accData = docSnap.data();
+          const found = accData.customToken || accData.userAccessToken || accData.permanentToken;
+          if (found) {
+            token = found;
+            break;
+          }
+        }
+        if (!token) {
+          const allOrgs = await getDocs4(collection4(serverDb, "organizations"));
+          for (const o of allOrgs.docs) {
+            const oAccs = await getDocs4(collection4(serverDb, `organizations/${o.id}/whatsappAccounts`));
+            for (const a of oAccs.docs) {
+              const d = a.data();
+              const found = d.customToken || d.userAccessToken || d.permanentToken;
+              if (found) {
+                token = found;
+                break;
+              }
+            }
+            if (token) break;
+          }
+        }
+      } catch (dbErr) {
+        console.warn("media-proxy token lookup notice:", dbErr);
+      }
+    }
     if (effectiveMediaId) {
       if (!token) {
         return res.status(400).json({ error: "Meta token required to resolve mediaId" });
