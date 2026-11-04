@@ -24,10 +24,12 @@ import {
   Workflow,
   Phone,
   Wallet,
+  Target,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
 import { useTheme } from '../context/ThemeContext.tsx';
+import { useWhiteLabel } from '../context/WhiteLabelContext.tsx';
 import { WhatsAppPinModal } from './WhatsAppPinModal.tsx';
 import { PWAInstallButton } from './PWAInstallButton.tsx';
 
@@ -47,6 +49,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const { userProfile, signOut, organization, isMasterAdmin, isAdmin, isUser, impersonatedBy } = useAuth();
   const { activeAccount } = useWhatsAppAccounts();
   const { theme, toggleTheme } = useTheme();
+  const { branding } = useWhiteLabel();
 
   // Change Password state for logged in user (User, Admin, Master)
   const [isChangePassOpen, setIsChangePassOpen] = useState(false);
@@ -160,6 +163,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   navItems.push({ id: 'analytics', label: 'Campaign Analytics', icon: BarChart3 });
 
+  // Check permission for Campaign Leads & CRM Retargeting
+  const canAccessCrmLeads =
+    isMasterAdmin ||
+    (userProfile?.canAccessCrmLeads !== false &&
+      (userProfile?.subscription?.features as any)?.canAccessCrmLeads !== false &&
+      (userProfile?.subscription?.features as any)?.canCrmLeads !== false);
+  if (canAccessCrmLeads) {
+    navItems.push({
+      id: 'crm-leads',
+      label: 'Campaign Leads & CRM',
+      icon: Target,
+      badge: 'Hot',
+    });
+  }
+
   // Check permission for Automations (Bot & Automations)
   const canAccessAutomations =
     isMasterAdmin ||
@@ -227,11 +245,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Brand Header with Admin's Custom Logo & Identity (Flexible for Square & Rectangular Logos) */}
         <div className="h-16 px-3.5 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
           <div className="flex items-center space-x-2.5 overflow-hidden w-full">
-            {(organization?.logoUrl || userProfile?.adminLogoUrl || userProfile?.logoUrl) ? (
+            {(branding.logoUrl || organization?.logoUrl || userProfile?.adminLogoUrl || userProfile?.logoUrl) ? (
               <div className="h-11 max-w-[145px] min-w-[42px] px-1.5 py-1 rounded-xl bg-white dark:bg-neutral-800/90 border border-neutral-200/90 dark:border-neutral-700/80 flex items-center justify-center shrink-0 shadow-2xs">
                 <img
-                  src={organization?.logoUrl || userProfile?.adminLogoUrl || userProfile?.logoUrl}
-                  alt={(userProfile?.role === 'user' ? (userProfile?.adminBrandName || (organization as any)?.adminBrandName || organization?.name) : organization?.name) || 'Admin Logo'}
+                  src={branding.logoUrl || organization?.logoUrl || userProfile?.adminLogoUrl || userProfile?.logoUrl}
+                  alt={(branding.isCustomDomain ? branding.brandName : null) || (userProfile?.role === 'user' ? (userProfile?.adminBrandName || (organization as any)?.adminBrandName || organization?.name) : organization?.name) || 'Admin Logo'}
                   className="max-h-9 max-w-[135px] w-auto h-auto object-contain rounded-md"
                 />
               </div>
@@ -241,13 +259,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </div>
             )}
             <div className="truncate min-w-0 flex-1">
-              <span className="font-bold text-sm tracking-tight text-neutral-900 dark:text-white block truncate" title={(userProfile?.role === 'user' && (userProfile?.adminBrandName || (organization as any)?.adminBrandName) ? (userProfile.adminBrandName || (organization as any).adminBrandName) : (organization?.name || 'Workspace'))}>
-                {userProfile?.role === 'user' && (userProfile?.adminBrandName || (organization as any)?.adminBrandName)
-                  ? (userProfile.adminBrandName || (organization as any).adminBrandName)
-                  : (organization?.name || 'Workspace')}
+              <span className="font-bold text-sm tracking-tight text-neutral-900 dark:text-white block truncate" title={(branding.isCustomDomain ? branding.brandName : null) || (userProfile?.role === 'user' && (userProfile?.adminBrandName || (organization as any)?.adminBrandName) ? (userProfile.adminBrandName || (organization as any).adminBrandName) : (organization?.name || branding.brandName || 'Workspace'))}>
+                {(branding.isCustomDomain ? branding.brandName : null) ||
+                  (userProfile?.role === 'user' && (userProfile?.adminBrandName || (organization as any)?.adminBrandName)
+                    ? (userProfile.adminBrandName || (organization as any).adminBrandName)
+                    : (organization?.name || branding.brandName || 'Workspace'))}
               </span>
               <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold truncate">
-                {userProfile?.role === 'user'
+                {branding.isCustomDomain
+                  ? `${branding.brandName} Portal`
+                  : userProfile?.role === 'user'
                   ? 'Official Customer Portal'
                   : isMasterAdmin
                   ? 'Platform Control Center'

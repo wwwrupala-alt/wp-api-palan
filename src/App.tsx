@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ThemeProvider } from './context/ThemeContext.tsx';
 import { ToastProvider } from './context/ToastContext.tsx';
+import { WhiteLabelProvider, useWhiteLabel } from './context/WhiteLabelContext.tsx';
 import { AuthProvider, useAuth } from './context/AuthContext.tsx';
 import { WhatsAppAccountsProvider } from './context/WhatsAppAccountsContext.tsx';
 import { Sidebar } from './components/Sidebar.tsx';
@@ -23,10 +24,12 @@ import { MasterAdminPage } from './pages/MasterAdminPage.tsx';
 import { TenantUsersPage } from './pages/TenantUsersPage.tsx';
 import { LegalPage } from './pages/LegalPage.tsx';
 import { WalletPage } from './pages/WalletPage.tsx';
+import { CrmLeadsPage } from './pages/CrmLeadsPage.tsx';
 import { WhatsAppPinModal } from './components/WhatsAppPinModal.tsx';
-import { Loader2, ArrowLeft, ShieldAlert } from 'lucide-react';
+import { Loader2, ArrowLeft, ShieldAlert, Globe } from 'lucide-react';
 
 const AppContent: React.FC = () => {
+  const { isPreviewMode, activeDomain, branding, resetPreview } = useWhiteLabel();
   const {
     currentUser,
     userProfile,
@@ -83,15 +86,18 @@ const AppContent: React.FC = () => {
         if (prevTab === 'automations' && !isMasterAdmin && userProfile?.canAccessAutomations === false) return 'dashboard';
         if (prevTab === 'inbox' && !isMasterAdmin && userProfile?.canAccessInbox === false) return 'dashboard';
         if (prevTab === 'drip' && !isMasterAdmin && userProfile?.canAccessDripCampaigns === false) return 'dashboard';
+        if (prevTab === 'crm-leads' && !isMasterAdmin && userProfile?.canAccessCrmLeads === false) return 'dashboard';
       } else if (isUser) {
         const userPerms = (userProfile?.subscription?.features as any) || {};
         const userCanAuto = userProfile?.canAccessAutomations !== false && userPerms.canAutomations !== false;
         const userCanInbox = userProfile?.canAccessInbox !== false && userPerms.canInbox !== false;
         const userCanDrip = userProfile?.canAccessDripCampaigns !== false && userPerms.canDripCampaigns !== false;
+        const userCanCrm = userProfile?.canAccessCrmLeads !== false && userPerms.canAccessCrmLeads !== false && userPerms.canCrmLeads !== false;
         if (['master', 'users', 'admin'].includes(prevTab)) return 'dashboard';
         if (prevTab === 'automations' && !userCanAuto) return 'dashboard';
         if (prevTab === 'inbox' && !userCanInbox) return 'dashboard';
         if (prevTab === 'drip' && !userCanDrip) return 'dashboard';
+        if (prevTab === 'crm-leads' && !userCanCrm) return 'dashboard';
       }
       return prevTab;
     });
@@ -104,6 +110,7 @@ const AppContent: React.FC = () => {
     userProfile?.canAccessAutomations,
     userProfile?.canAccessInbox,
     userProfile?.canAccessDripCampaigns,
+    userProfile?.canAccessCrmLeads,
   ]);
 
   // Re-lock WhatsApp tab on navigating to another menu unless master 1646 PIN was used
@@ -159,6 +166,24 @@ const AppContent: React.FC = () => {
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col lg:pl-64 min-w-0">
+        {/* White-Label Custom Domain Test Preview Banner */}
+        {isPreviewMode && (
+          <div className="bg-indigo-600 text-white px-4 py-2 text-xs font-semibold flex items-center justify-between shadow-md z-50">
+            <div className="flex items-center space-x-2 truncate mr-3">
+              <Globe className="w-4 h-4 shrink-0 text-indigo-200" />
+              <span className="truncate">
+                White-Label Preview: Testing domain <code className="bg-indigo-700/80 px-1.5 py-0.5 rounded text-[11px] font-mono">{activeDomain}</code> (Brand: <strong>{branding.brandName}</strong>)
+              </span>
+            </div>
+            <button
+              onClick={resetPreview}
+              className="px-2.5 py-1 rounded-md bg-white hover:bg-indigo-50 text-indigo-700 text-[11px] font-bold cursor-pointer transition-colors shrink-0 shadow-2xs"
+            >
+              Exit Preview
+            </button>
+          </div>
+        )}
+
         {/* Support Impersonation Mode Banner */}
         {impersonatedBy && (
           <div className="bg-linear-to-r from-amber-500 via-amber-600 to-amber-500 text-neutral-950 px-4 py-2.5 text-xs font-semibold flex items-center justify-between shadow-md z-40 border-b border-amber-600">
@@ -253,6 +278,20 @@ const AppContent: React.FC = () => {
               onNavigateToDrip={() => setCurrentTab('drip')}
             />
           )}
+          {currentTab === 'crm-leads' &&
+            (isMasterAdmin ||
+              (userProfile?.canAccessCrmLeads !== false &&
+                (userProfile?.subscription?.features as any)?.canAccessCrmLeads !== false &&
+                (userProfile?.subscription?.features as any)?.canCrmLeads !== false)) && (
+              <CrmLeadsPage
+                onNavigateToCampaigns={(audience) => {
+                  setCurrentTab('campaigns');
+                }}
+                onNavigateToInbox={() => {
+                  setCurrentTab('inbox');
+                }}
+              />
+            )}
           {currentTab === 'automations' &&
             (isMasterAdmin ||
               (userProfile?.canAccessAutomations !== false &&
@@ -285,11 +324,13 @@ export default function App() {
   return (
     <ThemeProvider>
       <ToastProvider>
-        <AuthProvider>
-          <WhatsAppAccountsProvider>
-            <AppContent />
-          </WhatsAppAccountsProvider>
-        </AuthProvider>
+        <WhiteLabelProvider>
+          <AuthProvider>
+            <WhatsAppAccountsProvider>
+              <AppContent />
+            </WhatsAppAccountsProvider>
+          </AuthProvider>
+        </WhiteLabelProvider>
       </ToastProvider>
     </ThemeProvider>
   );

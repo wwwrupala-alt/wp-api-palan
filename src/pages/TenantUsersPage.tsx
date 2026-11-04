@@ -31,6 +31,7 @@ import {
   Bot,
   Lock,
   Wallet,
+  Target,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useToast } from '../context/ToastContext.tsx';
@@ -67,6 +68,7 @@ export const TenantUsersPage: React.FC = () => {
     canTemplates: true,
     canAutomations: true,
     canAccessWallet: true,
+    canAccessCrmLeads: true,
   });
   const [creatingUser, setCreatingUser] = useState(false);
 
@@ -89,6 +91,7 @@ export const TenantUsersPage: React.FC = () => {
     canTemplates: true,
     canAutomations: true,
     canAccessWallet: true,
+    canAccessCrmLeads: true,
   });
   const [savingEdit, setSavingEdit] = useState(false);
 
@@ -256,6 +259,7 @@ export const TenantUsersPage: React.FC = () => {
         canTemplates: true,
         canAutomations: true,
         canAccessWallet: true,
+        canAccessCrmLeads: true,
       });
       await loadTenantUsers();
     } catch (err: any) {
@@ -763,6 +767,7 @@ export const TenantUsersPage: React.FC = () => {
                                 canTemplates: perms.canTemplates !== false,
                                 canAutomations: u.canAccessAutomations !== false && perms.canAutomations !== false,
                                 canAccessWallet: u.canAccessWallet !== false && perms.canAccessWallet !== false,
+                                canAccessCrmLeads: u.canAccessCrmLeads !== false && perms.canAccessCrmLeads !== false,
                               });
                             }}
                             title="Edit User & Extend Validity"
@@ -1137,6 +1142,24 @@ export const TenantUsersPage: React.FC = () => {
                       <div className="flex items-center space-x-1.5">
                         <Wallet className="w-3.5 h-3.5 text-emerald-600" />
                         <span className="font-semibold text-neutral-900 dark:text-white">Prepaid Wallet</span>
+                      </div>
+                    </label>
+
+                    <label className="flex items-center space-x-2 p-2 rounded-xl border border-neutral-200 dark:border-neutral-800 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={newUserPermissions.canAccessCrmLeads}
+                        onChange={(e) =>
+                          setNewUserPermissions({
+                            ...newUserPermissions,
+                            canAccessCrmLeads: e.target.checked,
+                          })
+                        }
+                        className="rounded text-indigo-600"
+                      />
+                      <div className="flex items-center space-x-1.5">
+                        <Target className="w-3.5 h-3.5 text-indigo-600" />
+                        <span className="font-semibold text-neutral-900 dark:text-white">Campaign Leads &amp; CRM</span>
                       </div>
                     </label>
                   </div>
@@ -1573,6 +1596,24 @@ export const TenantUsersPage: React.FC = () => {
                       <div className="flex items-center space-x-1.5">
                         <Wallet className="w-3.5 h-3.5 text-emerald-600" />
                         <span className="font-semibold text-neutral-900 dark:text-white">Prepaid Wallet</span>
+                      </div>
+                    </label>
+
+                    <label className="flex items-center space-x-2 p-2 rounded-xl border border-neutral-200 dark:border-neutral-800 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={editPermissions.canAccessCrmLeads}
+                        onChange={(e) =>
+                          setEditPermissions({
+                            ...editPermissions,
+                            canAccessCrmLeads: e.target.checked,
+                          })
+                        }
+                        className="rounded text-indigo-600"
+                      />
+                      <div className="flex items-center space-x-1.5">
+                        <Target className="w-3.5 h-3.5 text-indigo-600" />
+                        <span className="font-semibold text-neutral-900 dark:text-white">Campaign Leads &amp; CRM</span>
                       </div>
                     </label>
                   </div>

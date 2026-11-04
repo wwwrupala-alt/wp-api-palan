@@ -22,6 +22,12 @@ import {
   HardDrive,
   Clock,
   Sparkles,
+  ExternalLink,
+  Phone,
+  Mail,
+  Upload,
+  HelpCircle,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -40,10 +46,67 @@ export const AdminPage: React.FC = () => {
   const { refreshMetaStatus } = useWhatsAppAccounts();
   const toast = useToast();
 
-  const [activeTab, setActiveTab] = useState<'meta_app' | 'health' | 'logs' | 'storage'>('meta_app');
+  const [activeTab, setActiveTab] = useState<'meta_app' | 'whitelabel' | 'health' | 'logs' | 'storage'>('meta_app');
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [copiedToken, setCopiedToken] = useState(false);
   const [copiedRedirect, setCopiedRedirect] = useState(false);
+
+  // White-Label Custom Domain & Identity State
+  const customDomain = (organization as any)?.customDomain || (organization as any)?.domain || '';
+  const [wlBrandName, setWlBrandName] = useState(
+    organization?.adminBrandName || (organization as any)?.customBrandName || organization?.name || ''
+  );
+  const [wlLogoUrl, setWlLogoUrl] = useState(
+    organization?.logoUrl || (organization as any)?.customLogoUrl || ''
+  );
+  const [wlSupportPhone, setWlSupportPhone] = useState(
+    organization?.contactPhone || (organization as any)?.supportPhone || ''
+  );
+  const [wlSupportEmail, setWlSupportEmail] = useState(
+    (organization as any)?.supportEmail || ''
+  );
+  const [verifyingDns, setVerifyingDns] = useState(false);
+  const [dnsVerifyResult, setDnsVerifyResult] = useState<any>(null);
+  const [savingBranding, setSavingBranding] = useState(false);
+
+  // Logo upload from PC helper for Admin
+  const handleLogoUpload = (file: File | undefined) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      toast.showError('Invalid Image', 'Please choose a valid image file (PNG, JPG, SVG, WebP).');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const rawDataUrl = e.target?.result as string;
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_WIDTH = 450;
+        const MAX_HEIGHT = 200;
+        let width = img.width;
+        let height = img.height;
+        if (width > MAX_WIDTH || height > MAX_HEIGHT) {
+          const ratio = Math.min(MAX_WIDTH / width, MAX_HEIGHT / height);
+          width = Math.round(width * ratio);
+          height = Math.round(height * ratio);
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          setWlLogoUrl(canvas.toDataURL('image/png'));
+          toast.showSuccess('Logo Selected', 'Logo loaded and optimized from PC.');
+        } else {
+          setWlLogoUrl(rawDataUrl);
+        }
+      };
+      img.onerror = () => setWlLogoUrl(rawDataUrl);
+      img.src = rawDataUrl;
+    };
+    reader.readAsDataURL(file);
+  };
 
   // Storage & Data Retention State
   const [storageMetrics, setStorageMetrics] = useState<{
@@ -374,6 +437,69 @@ export const AdminPage: React.FC = () => {
     }
   }, [activeTab]);
 
+  const handleVerifyDns = async (domainToTest: string) => {
+    if (!domainToTest) {
+      toast.showWarning('No Domain', 'No custom domain is linked yet.');
+      return;
+    }
+    setVerifyingDns(true);
+    setDnsVerifyResult(null);
+    try {
+      const res = await fetch('/api/whitelabel/verify-dns', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          domain: domainToTest,
+          targetCname: 'wabacloud.in',
+          organizationId: organization?.id,
+          adminId: currentUser?.uid,
+        }),
+      });
+      const data = await res.json();
+      setDnsVerifyResult(data);
+      if (data.verified) {
+        toast.showSuccess('CNAME Verified!', `Domain ${data.domain} is successfully pointing to wabacloud.in.`);
+      } else {
+        toast.showWarning('CNAME Pending', data.message || 'DNS CNAME not detected yet.');
+      }
+    } catch (err: any) {
+      toast.showError('Verification Error', err.message);
+    } finally {
+      setVerifyingDns(false);
+    }
+  };
+
+  const handleSaveBranding = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingBranding(true);
+    try {
+      const res = await fetch('/api/admin/branding', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-organization-id': organization?.id || '',
+          'x-user-id': currentUser?.uid || '',
+        },
+        body: JSON.stringify({
+          customBrandName: wlBrandName.trim(),
+          logoUrl: wlLogoUrl,
+          supportPhone: wlSupportPhone.trim(),
+          supportEmail: wlSupportEmail.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to save branding.');
+      }
+      toast.showSuccess('Branding Saved!', 'Your custom logo, brand name, and support contact details have been updated.');
+      if (refreshProfile) await refreshProfile().catch(() => {});
+    } catch (err: any) {
+      toast.showError('Save Failed', err.message);
+    } finally {
+      setSavingBranding(false);
+    }
+  };
+
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-7xl mx-auto animate-fadeIn">
       {/* Header */}
@@ -432,6 +558,23 @@ export const AdminPage: React.FC = () => {
         >
           <Lock className="w-4 h-4" />
           <span>Meta App &amp; Embedded Signup Setup</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('whitelabel')}
+          className={`pb-3 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer shrink-0 ${
+            activeTab === 'whitelabel'
+              ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400 font-semibold'
+              : 'border-transparent text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-300'
+          }`}
+        >
+          <Globe className="w-4 h-4 text-indigo-500" />
+          <span>White-Label &amp; Custom Domain</span>
+          {customDomain && (
+            <span className="px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-800">
+              Active
+            </span>
+          )}
         </button>
 
         <button
@@ -975,6 +1118,347 @@ export const AdminPage: React.FC = () => {
               </div>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* TAB: WHITE-LABEL & CUSTOM DOMAIN MANAGEMENT */}
+      {activeTab === 'whitelabel' && (
+        <div className="space-y-6 animate-fadeIn">
+          {/* Top Banner: Status Overview */}
+          <div className="p-5 rounded-3xl bg-gradient-to-r from-indigo-900 via-indigo-800 to-purple-900 text-white shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+            <div className="flex items-center space-x-3.5">
+              <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-xs flex items-center justify-center font-bold text-white shrink-0 shadow-md">
+                <Globe className="w-6 h-6" />
+              </div>
+              <div>
+                <div className="flex items-center space-x-2 flex-wrap">
+                  <h3 className="text-lg font-bold tracking-tight">White-Label &amp; Dedicated Custom Domain</h3>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                    customDomain ? 'bg-emerald-500/30 text-emerald-200 border border-emerald-400/50' : 'bg-amber-500/30 text-amber-200 border border-amber-400/50'
+                  }`}>
+                    {customDomain ? 'Custom Domain Configured' : 'Default Platform Domain'}
+                  </span>
+                </div>
+                <p className="text-xs text-indigo-200 mt-0.5">
+                  Your custom brand identity, dedicated portal URL, and DNS CNAME settings.
+                </p>
+              </div>
+            </div>
+
+            {customDomain && (
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  disabled={verifyingDns}
+                  onClick={() => handleVerifyDns(customDomain)}
+                  className="px-3.5 py-2 rounded-xl bg-white/15 hover:bg-white/25 text-white text-xs font-semibold backdrop-blur-xs transition-colors cursor-pointer flex items-center space-x-1.5"
+                >
+                  {verifyingDns ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                  <span>Verify CNAME</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    window.open(`/?preview_domain=${encodeURIComponent(customDomain)}`, '_blank');
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-white text-indigo-900 hover:bg-indigo-50 text-xs font-bold transition-all shadow-md cursor-pointer flex items-center space-x-1.5"
+                >
+                  <ExternalLink className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>Preview Portal</span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* COLUMN 1: DOMAIN & DNS CNAME INSTRUCTIONS */}
+            <div className="space-y-6">
+              {/* Domain Status Box */}
+              <div className="p-6 rounded-3xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 shadow-xs space-y-4">
+                <div className="flex items-center justify-between border-b border-neutral-100 dark:border-neutral-800 pb-3">
+                  <h4 className="font-bold text-sm text-neutral-900 dark:text-white flex items-center space-x-2">
+                    <Globe className="w-4 h-4 text-indigo-600" />
+                    <span>Domain Connection Status</span>
+                  </h4>
+                  <span className="text-[11px] text-neutral-400">DNS CNAME</span>
+                </div>
+
+                {customDomain ? (
+                  <div className="space-y-3">
+                    <div className="p-4 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] text-neutral-500 dark:text-neutral-400">Your Connected Domain:</span>
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300">
+                          Active
+                        </span>
+                      </div>
+                      <p className="font-mono text-base font-bold text-indigo-900 dark:text-indigo-200 mt-1 select-all">
+                        {customDomain}
+                      </p>
+                      <p className="text-[11px] text-neutral-600 dark:text-neutral-400 mt-1 leading-relaxed">
+                        Aap aur aapke sabhi team users is custom domain se sign in kar sakte hain. Unhe sirf aapka logo aur brand dikhega.
+                      </p>
+                    </div>
+
+                    {/* Live CNAME Feedback */}
+                    {dnsVerifyResult && (
+                      <div className={`p-3 rounded-2xl text-xs flex items-start space-x-2 border ${
+                        dnsVerifyResult.verified
+                          ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300'
+                          : 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300'
+                      }`}>
+                        {dnsVerifyResult.verified ? (
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                        ) : (
+                          <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                        )}
+                        <div className="flex-1 text-[11px] leading-relaxed">
+                          <p className="font-bold">
+                            {dnsVerifyResult.verified ? '✅ CNAME Record Verified & Active' : '⏳ CNAME Record Pending'}
+                          </p>
+                          <p className="mt-0.5 text-neutral-600 dark:text-neutral-300">{dnsVerifyResult.message}</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/50 space-y-2 text-xs">
+                    <div className="flex items-center space-x-2 text-amber-900 dark:text-amber-200 font-bold">
+                      <HelpCircle className="w-4 h-4 text-amber-600" />
+                      <span>Dedicated Domain Not Yet Attached</span>
+                    </div>
+                    <p className="text-neutral-600 dark:text-neutral-400 leading-relaxed text-[11px]">
+                      Aapka account abhi default platform URL se chal raha hai. Agar aapko apna khud ka custom domain (e.g. <code>portal.yourcompany.com</code>) lagwana hai, toh Master Admin se contact karein. Master Admin aapke account me custom domain assign kar denge.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* DNS CNAME Configuration Instructions Card */}
+              <div className="p-6 rounded-3xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 shadow-xs space-y-4">
+                <div className="flex items-center justify-between border-b border-neutral-100 dark:border-neutral-800 pb-3">
+                  <h4 className="font-bold text-sm text-neutral-900 dark:text-white flex items-center space-x-2">
+                    <Terminal className="w-4 h-4 text-indigo-600" />
+                    <span>DNS CNAME Setup Instructions</span>
+                  </h4>
+                  <span className="text-[10px] text-neutral-400">Cloudflare / GoDaddy</span>
+                </div>
+
+                <p className="text-xs text-neutral-600 dark:text-neutral-400 leading-relaxed">
+                  Apne domain DNS manager (Cloudflare, GoDaddy, Namecheap, Hostinger, etc.) me jakar niche diye gaye details ka <strong>CNAME Record</strong> add karein:
+                </p>
+
+                <div className="space-y-2.5 font-mono text-xs">
+                  <div className="flex items-center justify-between p-2.5 rounded-xl bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700">
+                    <div>
+                      <span className="text-[10px] text-neutral-400 block font-sans">Type</span>
+                      <strong className="text-emerald-600">CNAME</strong>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText('CNAME');
+                        toast.showSuccess('Copied', 'CNAME copied.');
+                      }}
+                      className="p-1 text-neutral-400 hover:text-neutral-700 cursor-pointer"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between p-2.5 rounded-xl bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700">
+                    <div className="truncate mr-2">
+                      <span className="text-[10px] text-neutral-400 block font-sans">Name / Host</span>
+                      <strong className="text-neutral-900 dark:text-white truncate">
+                        {customDomain ? customDomain.split('.')[0] : 'portal'}
+                      </strong>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(customDomain ? customDomain.split('.')[0] : 'portal');
+                        toast.showSuccess('Copied', 'Host copied.');
+                      }}
+                      className="p-1 text-neutral-400 hover:text-neutral-700 cursor-pointer"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between p-2.5 rounded-xl bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700">
+                    <div className="truncate mr-2">
+                      <span className="text-[10px] text-neutral-400 block font-sans">Points to / Target Value</span>
+                      <strong className="text-indigo-600 truncate">wabacloud.in</strong>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText('wabacloud.in');
+                        toast.showSuccess('Copied', 'Target wabacloud.in copied.');
+                      }}
+                      className="p-1 text-neutral-400 hover:text-neutral-700 cursor-pointer"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between p-2.5 rounded-xl bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700">
+                    <div>
+                      <span className="text-[10px] text-neutral-400 block font-sans">TTL</span>
+                      <strong className="text-neutral-700 dark:text-neutral-300">Auto / 3600 Seconds</strong>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 text-[11px] text-emerald-900 dark:text-emerald-300 leading-relaxed space-y-1">
+                  <p className="font-bold flex items-center space-x-1">
+                    <span>✨ System Updates &amp; Feature Rollouts:</span>
+                  </p>
+                  <p>
+                    Jab bhi platform me koi <strong>new feature, WhatsApp automation, drip upgrade ya bugfix</strong> aayega, wo aapke custom domain se chalu rehne ke bawajood <strong>automatically milta rahega</strong>. Aapko kabhi koi manual upgrade ya re-configuration nahi karna padega.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* COLUMN 2: CUSTOM BRAND IDENTITY & SUPPORT DESK FORM */}
+            <div className="p-6 rounded-3xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 shadow-xs space-y-5">
+              <div className="border-b border-neutral-100 dark:border-neutral-800 pb-3">
+                <h4 className="font-bold text-sm text-neutral-900 dark:text-white flex items-center space-x-2">
+                  <ImageIcon className="w-4 h-4 text-indigo-600" />
+                  <span>Portal Brand Identity &amp; Support Helpline</span>
+                </h4>
+                <p className="text-xs text-neutral-500 mt-0.5">
+                  Ye details aapke portal ke Header, Sidebar, Login Page aur Support Desk me show hongi.
+                </p>
+              </div>
+
+              <form onSubmit={handleSaveBranding} className="space-y-4 text-xs">
+                {/* Brand Name */}
+                <div>
+                  <label className="font-semibold text-neutral-800 dark:text-neutral-200 mb-1 block">
+                    Brand / Agency Name <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Acme Marketing Platform"
+                    value={wlBrandName}
+                    onChange={(e) => setWlBrandName(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-850 text-neutral-900 dark:text-white font-medium"
+                  />
+                  <p className="text-[10px] text-neutral-400 mt-1">
+                    Login page aur sidebar par aapka ye brand name dikhega.
+                  </p>
+                </div>
+
+                {/* Logo Upload from PC */}
+                <div>
+                  <label className="font-semibold text-neutral-800 dark:text-neutral-200 mb-1.5 flex items-center justify-between text-xs">
+                    <span>Portal Logo (Upload from Computer)</span>
+                    <span className="text-[10px] text-neutral-400 font-normal">PNG, JPG, SVG, WebP</span>
+                  </label>
+
+                  {wlLogoUrl ? (
+                    <div className="flex items-center space-x-3 p-3 rounded-2xl bg-neutral-50 dark:bg-neutral-800/60 border border-neutral-200 dark:border-neutral-700">
+                      <div className="w-14 h-14 rounded-xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 flex items-center justify-center p-1.5 overflow-hidden shrink-0 shadow-2xs">
+                        <img src={wlLogoUrl} alt="Portal Logo Preview" className="w-full h-full object-contain" />
+                      </div>
+                      <div className="flex-1 truncate">
+                        <p className="font-bold text-xs text-neutral-900 dark:text-white flex items-center space-x-1">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Active Logo Ready</span>
+                        </p>
+                        <p className="text-[10px] text-neutral-500 truncate">Shows on user sidebar header &amp; login portal</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setWlLogoUrl('')}
+                        className="px-2.5 py-1.5 rounded-lg border border-rose-200 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 text-[11px] font-semibold hover:bg-rose-100 transition-colors cursor-pointer"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="flex flex-col items-center justify-center p-5 rounded-2xl border-2 border-dashed border-indigo-300 dark:border-indigo-700/70 hover:border-indigo-500 bg-indigo-50/30 dark:bg-neutral-850 hover:bg-indigo-50/60 transition-all cursor-pointer group">
+                      <div className="flex items-center space-x-2 text-indigo-700 dark:text-indigo-400">
+                        <Upload className="w-4 h-4 group-hover:scale-110 transition-transform" />
+                        <span className="font-bold text-xs">Choose Logo Image from PC</span>
+                      </div>
+                      <span className="text-[10px] text-neutral-400 mt-1">Click to select new image</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handleLogoUpload(e.target.files?.[0])}
+                        className="hidden"
+                      />
+                    </label>
+                  )}
+                </div>
+
+                {/* Support Helpline Phone */}
+                <div>
+                  <label className="font-semibold text-neutral-800 dark:text-neutral-200 mb-1 block">
+                    Support Helpline Phone
+                  </label>
+                  <div className="relative">
+                    <Phone className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400" />
+                    <input
+                      type="text"
+                      placeholder="e.g. +91 98765 43210"
+                      value={wlSupportPhone}
+                      onChange={(e) => setWlSupportPhone(e.target.value)}
+                      className="w-full pl-9 pr-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-850 text-neutral-900 dark:text-white font-mono text-xs"
+                    />
+                  </div>
+                  <p className="text-[10px] text-neutral-400 mt-1">
+                    Aapke team users ko portal ke helpline desk me ye number contact ke liye dikhega.
+                  </p>
+                </div>
+
+                {/* Support Email */}
+                <div>
+                  <label className="font-semibold text-neutral-800 dark:text-neutral-200 mb-1 block">
+                    Support Email Address
+                  </label>
+                  <div className="relative">
+                    <Mail className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400" />
+                    <input
+                      type="email"
+                      placeholder="e.g. support@yourcompany.com"
+                      value={wlSupportEmail}
+                      onChange={(e) => setWlSupportEmail(e.target.value)}
+                      className="w-full pl-9 pr-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-850 text-neutral-900 dark:text-white text-xs"
+                    />
+                  </div>
+                  <p className="text-[10px] text-neutral-400 mt-1">
+                    Email helpline queries ke liye show hoga.
+                  </p>
+                </div>
+
+                {/* Submit Button */}
+                <div className="pt-2">
+                  <button
+                    type="submit"
+                    disabled={savingBranding}
+                    className="w-full py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs flex items-center justify-center space-x-2 transition-all shadow-md cursor-pointer disabled:opacity-50"
+                  >
+                    {savingBranding ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Saving Branding Changes...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Save className="w-4 h-4" />
+                        <span>Save Brand Settings</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
         </div>
       )}
 

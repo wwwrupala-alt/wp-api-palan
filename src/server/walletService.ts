@@ -9,6 +9,7 @@ import {
   getDocs,
   query,
   limit as fsLimit,
+  deleteDoc,
 } from './serverDb.ts';
 import { CategoryPricing, WalletAccount, WalletTransaction } from '../types/index.ts';
 
@@ -103,7 +104,12 @@ export async function getWalletAccount(organizationId: string, userId?: string):
   try {
     const snap = await getDoc(docRef);
     if (snap.exists()) {
-      return snap.data() as WalletAccount;
+      const data = snap.data() as WalletAccount;
+      return {
+        ...data,
+        autoDeleteDays: typeof data.autoDeleteDays === 'number' ? data.autoDeleteDays : 30,
+        autoDeleteEnabled: data.autoDeleteEnabled !== false,
+      };
     }
   } catch {}
 
@@ -117,6 +123,9 @@ export async function getWalletAccount(organizationId: string, userId?: string):
     totalSpent: 0,
     currency: 'INR',
     lowBalanceThreshold: 100,
+    autoDeleteDays: 30,
+    autoDeleteEnabled: true,
+    lastAutoCleanedAt: nowIso,
     updatedAt: nowIso,
     createdAt: nowIso,
   };
@@ -279,11 +288,113 @@ export async function deductWalletForCampaign(params: {
 }
 
 /**
- * Fetch wallet transactions for an organization
+ * Automatically purge transactions older than designated days
  */
-export async function getWalletTransactions(organizationId: string, limitCount = 50): Promise<WalletTransaction[]> {
+export async function purgeOldTransactions(organizationId: string, days: number): Promise<number> {
+  if (!days || days <= 0) return 0;
+  const targetOrg = organizationId || 'org_master_platform';
+  const cutoffTime = Date.now() - days * 24 * 60 * 60 * 1000;
+  let deletedCount = 0;
+
+  try {
+    const txCol = collection(serverDb, `organizations/${targetOrg}/wallet/account/transactions`);
+    const snap = await getDocs(txCol);
+    for (const docSnap of snap.docs) {
+      const data = docSnap.data();
+      const createdTime = data.createdAt ? new Date(data.createdAt).getTime() : 0;
+      if (createdTime > 0 && createdTime < cutoffTime) {
+        await deleteDoc(docSnap.ref).catch(() => {});
+        deletedCount++;
+      }
+    }
+    if (deletedCount > 0) {
+      console.log(`[WalletAutoDelete] Cleaned ${deletedCount} transaction records older than ${days} days for org ${targetOrg}`);
+    }
+  } catch (err: any) {
+    console.warn('[WalletService] Error purging old transactions:', err.message);
+  }
+  return deletedCount;
+}
+
+/**
+ * Clear/delete ALL transaction entries for an organization
+ */
+export async function clearAllWalletTransactions(organizationId: string): Promise<number> {
+  const targetOrg = organizationId || 'org_master_platform';
+  let clearedCount = 0;
+  try {
+    const txCol = collection(serverDb, `organizations/${targetOrg}/wallet/account/transactions`);
+    const snap = await getDocs(txCol);
+    for (const docSnap of snap.docs) {
+      await deleteDoc(docSnap.ref).catch(() => {});
+      clearedCount++;
+    }
+    console.log(`[WalletService] Cleared all ${clearedCount} transaction records for org ${targetOrg}`);
+  } catch (err: any) {
+    console.warn('[WalletService] Error clearing transactions:', err.message);
+  }
+  return clearedCount;
+}
+
+/**
+ * Delete a single transaction entry by ID
+ */
+export async function deleteSingleTransaction(organizationId: string, transactionId: string): Promise<boolean> {
   const targetOrg = organizationId || 'org_master_platform';
   try {
+    const txRef = doc(serverDb, `organizations/${targetOrg}/wallet/account/transactions`, transactionId);
+    await deleteDoc(txRef);
+    return true;
+  } catch (err: any) {
+    console.warn('[WalletService] Error deleting transaction:', err.message);
+    return false;
+  }
+}
+
+/**
+ * Update Auto-Delete retention policy settings
+ */
+export async function updateAutoDeleteConfig(params: {
+  organizationId: string;
+  autoDeleteDays: number;
+  autoDeleteEnabled: boolean;
+}): Promise<WalletAccount> {
+  const { organizationId, autoDeleteDays, autoDeleteEnabled } = params;
+  const targetOrg = organizationId || 'org_master_platform';
+  const current = await getWalletAccount(targetOrg);
+  const nowIso = new Date().toISOString();
+
+  const updated: WalletAccount = {
+    ...current,
+    autoDeleteDays: typeof autoDeleteDays === 'number' ? Math.max(0, autoDeleteDays) : 30,
+    autoDeleteEnabled: autoDeleteEnabled !== false,
+    lastAutoCleanedAt: nowIso,
+    updatedAt: nowIso,
+  };
+
+  const accountRef = doc(serverDb, `organizations/${targetOrg}/wallet`, 'account');
+  await setDoc(accountRef, cleanFirestoreData(updated), { merge: true });
+
+  if (updated.autoDeleteEnabled && updated.autoDeleteDays && updated.autoDeleteDays > 0) {
+    await purgeOldTransactions(targetOrg, updated.autoDeleteDays);
+  }
+
+  return updated;
+}
+
+/**
+ * Fetch wallet transactions for an organization
+ * (Automatically purges records older than autoDeleteDays if autoDeleteEnabled)
+ */
+export async function getWalletTransactions(organizationId: string, limitCount = 100): Promise<WalletTransaction[]> {
+  const targetOrg = organizationId || 'org_master_platform';
+  try {
+    // Check auto-delete policy
+    const account = await getWalletAccount(targetOrg);
+    if (account.autoDeleteEnabled !== false && account.autoDeleteDays && account.autoDeleteDays > 0) {
+      await purgeOldTransactions(targetOrg, account.autoDeleteDays);
+    }
+
     const txCol = collection(serverDb, `organizations/${targetOrg}/wallet/account/transactions`);
     const q = query(txCol, fsLimit(limitCount));
     const snap = await getDocs(q);
@@ -410,8 +521,8 @@ export async function handleUpdatePricing(req: Request, res: Response): Promise<
 
 /**
  * Reset / Reconcile Wallet Account
- * Sets balance to 0 (or a specific new balance) and optionally resets totalRecharged and totalSpent
- * so the user can synchronize CloudWABA balance with Meta Business Portfolio.
+ * Sets balance to 0 (or a specific new balance) and optionally resets totalRecharged and totalSpent,
+ * and clears existing transaction entries below so the user starts 100% fresh!
  */
 export async function resetWalletAccount(params: {
   organizationId: string;
@@ -419,8 +530,9 @@ export async function resetWalletAccount(params: {
   newBalance?: number;
   reason?: string;
   resetCounters?: boolean;
-}): Promise<{ account: WalletAccount; transaction: WalletTransaction }> {
-  const { organizationId, userId, newBalance = 0, reason, resetCounters = true } = params;
+  clearHistory?: boolean;
+}): Promise<{ account: WalletAccount; transaction?: WalletTransaction; clearedCount: number }> {
+  const { organizationId, userId, newBalance = 0, reason, resetCounters = true, clearHistory = true } = params;
   const current = await getWalletAccount(organizationId, userId);
   const nowIso = new Date().toISOString();
 
@@ -451,39 +563,50 @@ export async function resetWalletAccount(params: {
     }
   } catch {}
 
-  // 3. Record Audit / Adjustment Transaction
-  const txId = `tx_rst_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-  const transaction: WalletTransaction = {
-    id: txId,
-    organizationId,
-    userId: userId || undefined,
-    type: diff >= 0 ? 'credit' : 'debit',
-    amount: Math.abs(diff),
-    balanceAfter: targetBalance,
-    category: 'ADJUSTMENT',
-    description:
-      reason ||
-      `Wallet balance reset from ₹${current.balance.toFixed(2)} to ₹${targetBalance.toFixed(2)} (Meta Business Portfolio Reconciliation)`,
-    createdAt: nowIso,
-  };
-
-  try {
-    const txRef = doc(serverDb, `organizations/${organizationId}/wallet/account/transactions`, txId);
-    await setDoc(txRef, cleanFirestoreData(transaction));
-  } catch (err: any) {
-    console.warn('[WalletService] Could not write reset transaction doc:', err.message);
+  // 3. Clear existing transaction entries if clearHistory is true
+  let clearedCount = 0;
+  if (clearHistory) {
+    clearedCount = await clearAllWalletTransactions(organizationId);
   }
 
-  return { account: updatedAccount, transaction };
+  // 4. Record Audit / Opening Balance transaction if targetBalance > 0 or clearHistory was false
+  let transaction: WalletTransaction | undefined;
+  if (targetBalance > 0 || !clearHistory) {
+    const txId = `tx_rst_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    transaction = {
+      id: txId,
+      organizationId,
+      userId: userId || undefined,
+      type: diff >= 0 ? 'credit' : 'debit',
+      amount: Math.abs(diff),
+      balanceAfter: targetBalance,
+      category: 'ADJUSTMENT',
+      description:
+        reason ||
+        (targetBalance === 0
+          ? 'Wallet balance reset to ₹0.00'
+          : `Reconciled balance to ₹${targetBalance.toFixed(2)} (Meta Business Portfolio Reconciliation)`),
+      createdAt: nowIso,
+    };
+
+    try {
+      const txRef = doc(serverDb, `organizations/${organizationId}/wallet/account/transactions`, txId);
+      await setDoc(txRef, cleanFirestoreData(transaction));
+    } catch (err: any) {
+      console.warn('[WalletService] Could not write reset transaction doc:', err.message);
+    }
+  }
+
+  return { account: updatedAccount, transaction, clearedCount };
 }
 
 /**
  * POST /api/wallet/reset
- * Resets wallet balance to 0 (or a designated reconciled balance)
+ * Resets wallet balance to 0 (or designated balance) and resets transaction entries below
  */
 export async function handleResetWallet(req: Request, res: Response): Promise<void> {
   try {
-    const { organizationId, userId, newBalance, reason, resetCounters } = req.body;
+    const { organizationId, userId, newBalance, reason, resetCounters, clearHistory } = req.body;
     const targetOrg = organizationId || req.headers['x-organization-id'] || 'org_master_platform';
 
     const numBalance =
@@ -497,15 +620,102 @@ export async function handleResetWallet(req: Request, res: Response): Promise<vo
       newBalance: numBalance,
       reason,
       resetCounters: resetCounters !== false,
+      clearHistory: clearHistory !== false, // default: true
     });
 
     res.json({
       success: true,
-      message: `Wallet successfully reset. Balance is now ₹${numBalance.toFixed(2)}.`,
+      message:
+        numBalance === 0
+          ? `Wallet balance reset to ₹0.00 and ${result.clearedCount} transaction entries cleared.`
+          : `Wallet successfully reset. Balance is now ₹${numBalance.toFixed(2)}.`,
       account: result.account,
       transaction: result.transaction,
+      clearedCount: result.clearedCount,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to reset wallet.' });
+  }
+}
+
+/**
+ * POST /api/wallet/clear-transactions
+ * Clears all transaction history entries without changing current balance
+ */
+export async function handleClearWalletTransactions(req: Request, res: Response): Promise<void> {
+  try {
+    const { organizationId } = req.body;
+    const targetOrg = String(organizationId || req.headers['x-organization-id'] || 'org_master_platform');
+    const clearedCount = await clearAllWalletTransactions(targetOrg);
+    res.json({
+      success: true,
+      message: `${clearedCount} transaction entries cleared successfully.`,
+      clearedCount,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to clear wallet transactions.' });
+  }
+}
+
+/**
+ * DELETE /api/wallet/transactions/:id
+ * Deletes a single transaction entry
+ */
+export async function handleDeleteWalletTransaction(req: Request, res: Response): Promise<void> {
+  try {
+    const txId = req.params.id;
+    const targetOrg = String(req.query.organizationId || req.headers['x-organization-id'] || 'org_master_platform');
+    if (!txId) {
+      res.status(400).json({ error: 'Transaction ID is required.' });
+      return;
+    }
+    const success = await deleteSingleTransaction(targetOrg, txId);
+    res.json({ success, message: 'Transaction entry deleted.' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to delete transaction.' });
+  }
+}
+
+/**
+ * POST /api/wallet/auto-delete-settings
+ * Configures auto-delete retention period (e.g. 7, 15, 30, 60, 90 days, or 0)
+ */
+export async function handleUpdateAutoDelete(req: Request, res: Response): Promise<void> {
+  try {
+    const { organizationId, autoDeleteDays, autoDeleteEnabled } = req.body;
+    const targetOrg = String(organizationId || req.headers['x-organization-id'] || 'org_master_platform');
+    const updatedAccount = await updateAutoDeleteConfig({
+      organizationId: targetOrg,
+      autoDeleteDays: Number(autoDeleteDays) || 30,
+      autoDeleteEnabled: autoDeleteEnabled !== false,
+    });
+    res.json({
+      success: true,
+      message: `Auto-delete retention policy updated to ${updatedAccount.autoDeleteDays} days.`,
+      account: updatedAccount,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to update auto-delete settings.' });
+  }
+}
+
+/**
+ * POST /api/wallet/purge-now
+ * Runs immediate auto-delete purge based on configured retention policy
+ */
+export async function handlePurgeOldTransactions(req: Request, res: Response): Promise<void> {
+  try {
+    const { organizationId, days } = req.body;
+    const targetOrg = String(organizationId || req.headers['x-organization-id'] || 'org_master_platform');
+    const account = await getWalletAccount(targetOrg);
+    const retentionDays = days !== undefined ? Number(days) : (account.autoDeleteDays || 30);
+    const deletedCount = await purgeOldTransactions(targetOrg, retentionDays);
+    res.json({
+      success: true,
+      message: `Cleaned ${deletedCount} transaction records older than ${retentionDays} days.`,
+      deletedCount,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to run purge.' });
   }
 }

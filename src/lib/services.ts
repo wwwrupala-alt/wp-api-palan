@@ -2316,6 +2316,7 @@ export async function resetWalletApi(params: {
   newBalance?: number;
   reason?: string;
   resetCounters?: boolean;
+  clearHistory?: boolean;
 }) {
   const res = await fetch('/api/wallet/reset', {
     method: 'POST',
@@ -2323,5 +2324,44 @@ export async function resetWalletApi(params: {
     body: JSON.stringify(params),
   });
   return parseJsonResponse(res, 'Failed to reset wallet.');
+}
+
+export async function clearWalletTransactionsApi(organizationId: string) {
+  const res = await fetch('/api/wallet/clear-transactions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ organizationId }),
+  });
+  return parseJsonResponse(res, 'Failed to clear wallet transaction entries.');
+}
+
+export async function deleteWalletTransactionApi(organizationId: string, transactionId: string) {
+  const q = new URLSearchParams({ organizationId });
+  const res = await fetch(`/api/wallet/transactions/${transactionId}?${q.toString()}`, {
+    method: 'DELETE',
+  });
+  return parseJsonResponse(res, 'Failed to delete transaction entry.');
+}
+
+export async function updateWalletAutoDeleteApi(params: {
+  organizationId: string;
+  autoDeleteDays: number;
+  autoDeleteEnabled: boolean;
+}) {
+  const res = await fetch('/api/wallet/auto-delete-settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  return parseJsonResponse(res, 'Failed to update auto-delete settings.');
+}
+
+export async function purgeWalletOldTransactionsApi(organizationId: string, days?: number) {
+  const res = await fetch('/api/wallet/purge-now', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ organizationId, days }),
+  });
+  return parseJsonResponse(res, 'Failed to run auto-delete cleanup.');
 }
 

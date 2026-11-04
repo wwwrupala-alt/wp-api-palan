@@ -46,6 +46,10 @@ import {
   Image as ImageIcon,
   Phone,
   Wallet,
+  Globe,
+  ExternalLink,
+  HelpCircle,
+  Target,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useToast } from '../context/ToastContext.tsx';
@@ -69,6 +73,7 @@ interface AdminTenantItem {
   canWatchWorkspaceLive?: boolean;
   canAccessInbox?: boolean;
   canAccessDripCampaigns?: boolean;
+  canAccessCrmLeads?: boolean;
   subscription?: {
     planId?: string;
     planName?: string;
@@ -81,6 +86,11 @@ interface AdminTenantItem {
   usersCount?: number;
   whatsAppCount?: number;
   campaignsCount?: number;
+  customDomain?: string;
+  customBrandName?: string;
+  customLogoUrl?: string;
+  supportEmail?: string;
+  cnameVerified?: boolean;
   createdAt: string;
 }
 
@@ -150,8 +160,12 @@ export const MasterAdminPage: React.FC = () => {
   const [newCanAccessInbox, setNewCanAccessInbox] = useState(true);
   const [newCanAccessDripCampaigns, setNewCanAccessDripCampaigns] = useState(true);
   const [newCanAccessWallet, setNewCanAccessWallet] = useState(true);
+  const [newCanAccessCrmLeads, setNewCanAccessCrmLeads] = useState(true);
   const [newAdminLogoUrl, setNewAdminLogoUrl] = useState('');
   const [newAdminContactPhone, setNewAdminContactPhone] = useState('');
+  const [newCustomDomain, setNewCustomDomain] = useState('');
+  const [newCustomBrandName, setNewCustomBrandName] = useState('');
+  const [newSupportEmail, setNewSupportEmail] = useState('');
 
   // Logo upload from PC helper with auto-optimization for both rectangular & square shapes
   const handleLogoUpload = (file: File | undefined, mode: 'new' | 'edit') => {
@@ -238,12 +252,19 @@ export const MasterAdminPage: React.FC = () => {
   const [editBusinessName, setEditBusinessName] = useState('');
   const [editAdminLogoUrl, setEditAdminLogoUrl] = useState('');
   const [editAdminContactPhone, setEditAdminContactPhone] = useState('');
+  const [editCustomDomain, setEditCustomDomain] = useState('');
+  const [editCustomBrandName, setEditCustomBrandName] = useState('');
+  const [editSupportEmail, setEditSupportEmail] = useState('');
+  const [verifyingDns, setVerifyingDns] = useState(false);
+  const [dnsVerifyResult, setDnsVerifyResult] = useState<{ verified: boolean; domain?: string; targetCname?: string; message?: string; records?: string[] } | null>(null);
+  const [dnsGuideModalDomain, setDnsGuideModalDomain] = useState<string | null>(null);
   const [editCanAccessSettings, setEditCanAccessSettings] = useState(true);
   const [editCanAccessAutomations, setEditCanAccessAutomations] = useState(true);
   const [editCanWatchWorkspaceLive, setEditCanWatchWorkspaceLive] = useState(true);
   const [editCanAccessInbox, setEditCanAccessInbox] = useState(true);
   const [editCanAccessDripCampaigns, setEditCanAccessDripCampaigns] = useState(true);
   const [editCanAccessWallet, setEditCanAccessWallet] = useState(true);
+  const [editCanAccessCrmLeads, setEditCanAccessCrmLeads] = useState(true);
   const [savingEdit, setSavingEdit] = useState(false);
 
   // Modal: Reset Password
@@ -458,8 +479,14 @@ export const MasterAdminPage: React.FC = () => {
           canAccessInbox: newCanAccessInbox,
           canAccessDripCampaigns: newCanAccessDripCampaigns,
           canAccessWallet: newCanAccessWallet,
+          canAccessCrmLeads: newCanAccessCrmLeads,
           logoUrl: newAdminLogoUrl,
           contactPhone: newAdminContactPhone.trim() || newAdminPhone.trim(),
+          customDomain: newCustomDomain.trim().toLowerCase(),
+          customBrandName: newCustomBrandName.trim() || newBusinessName.trim() || newAdminName.trim(),
+          customLogoUrl: newAdminLogoUrl,
+          supportPhone: newAdminContactPhone.trim() || newAdminPhone.trim(),
+          supportEmail: newSupportEmail.trim() || newAdminEmail.trim(),
         }),
       });
 
@@ -484,6 +511,8 @@ export const MasterAdminPage: React.FC = () => {
         validityDays: data.admin?.validityDays || Number(newValidityDays) || 30,
         logoUrl: data.admin?.logoUrl || newAdminLogoUrl,
         contactPhone: data.admin?.contactPhone || newAdminContactPhone.trim() || newAdminPhone.trim(),
+        customDomain: data.admin?.customDomain || newCustomDomain.trim().toLowerCase(),
+        customBrandName: data.admin?.customBrandName || newCustomBrandName.trim(),
       };
 
       setCreatedAdminSuccess(createdInfo);
@@ -494,6 +523,9 @@ export const MasterAdminPage: React.FC = () => {
       setNewAdminPhone('');
       setNewAdminContactPhone('');
       setNewAdminLogoUrl('');
+      setNewCustomDomain('');
+      setNewCustomBrandName('');
+      setNewSupportEmail('');
       setNewAdminPassword('Admin@12345');
       setNewMaxWhatsApp(1);
       setNewValidityDays(30);
@@ -503,6 +535,7 @@ export const MasterAdminPage: React.FC = () => {
       setNewCanAccessInbox(true);
       setNewCanAccessDripCampaigns(true);
       setNewCanAccessWallet(true);
+      setNewCanAccessCrmLeads(true);
       await loadMasterData();
     } catch (err: any) {
       toast.showError('Creation Error', err.message || 'Could not create Admin.');
@@ -545,9 +578,42 @@ export const MasterAdminPage: React.FC = () => {
     setEditCanAccessInbox(adm.canAccessInbox !== false);
     setEditCanAccessDripCampaigns(adm.canAccessDripCampaigns !== false);
     setEditCanAccessWallet(adm.canAccessWallet !== false);
+    setEditCanAccessCrmLeads(adm.canAccessCrmLeads !== false);
     setEditBusinessName(adm.businessName || '');
-    setEditAdminLogoUrl(adm.logoUrl || '');
+    setEditAdminLogoUrl(adm.logoUrl || adm.customLogoUrl || '');
     setEditAdminContactPhone(adm.contactPhone || adm.phone || '');
+    setEditCustomDomain(adm.customDomain || '');
+    setEditCustomBrandName(adm.customBrandName || adm.businessName || '');
+    setEditSupportEmail(adm.supportEmail || adm.email || '');
+    setDnsVerifyResult(adm.cnameVerified ? { verified: true, domain: adm.customDomain, targetCname: 'wabacloud.in', message: 'CNAME verified pointing to wabacloud.in' } : null);
+  };
+
+  // Live CNAME verification helper for Master Admin
+  const handleVerifyDns = async (domainToVerify: string) => {
+    if (!domainToVerify || !domainToVerify.trim()) {
+      toast.showWarning('Domain Missing', 'Please enter a custom domain first to verify CNAME.');
+      return;
+    }
+    setVerifyingDns(true);
+    setDnsVerifyResult(null);
+    try {
+      const res = await fetch('/api/whitelabel/verify-dns', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domain: domainToVerify.trim().toLowerCase(), targetCname: 'wabacloud.in' }),
+      });
+      const data = await res.json();
+      setDnsVerifyResult(data);
+      if (data.verified) {
+        toast.showSuccess('CNAME Verified!', `Domain ${data.domain} is successfully pointing to ${data.targetCname}.`);
+      } else {
+        toast.showWarning('CNAME Pending', data.message || 'DNS CNAME not yet detected. DNS changes can take up to 30 mins to propagate.');
+      }
+    } catch (err: any) {
+      toast.showError('Verification Error', err.message || 'DNS check failed.');
+    } finally {
+      setVerifyingDns(false);
+    }
   };
 
   // Handle Edit Admin / Renew / Reduce Validity
@@ -563,6 +629,12 @@ export const MasterAdminPage: React.FC = () => {
         businessName: editBusinessName.trim(),
         logoUrl: editAdminLogoUrl,
         contactPhone: editAdminContactPhone.trim(),
+        customDomain: editCustomDomain.trim().toLowerCase(),
+        customBrandName: editCustomBrandName.trim() || editBusinessName.trim() || editingAdmin.displayName,
+        customLogoUrl: editAdminLogoUrl,
+        supportPhone: editAdminContactPhone.trim(),
+        supportEmail: editSupportEmail.trim(),
+        cnameVerified: Boolean(dnsVerifyResult?.verified),
         maxWhatsAppNumbers: Number(editMaxWhatsApp),
         maxUsers: Number(editMaxUsers),
         canAccessSettingsMetaApi: editCanAccessSettings,
@@ -571,6 +643,7 @@ export const MasterAdminPage: React.FC = () => {
         canAccessInbox: editCanAccessInbox,
         canAccessDripCampaigns: editCanAccessDripCampaigns,
         canAccessWallet: editCanAccessWallet,
+        canAccessCrmLeads: editCanAccessCrmLeads,
       };
 
       if (validityMode === 'pick_date' && customDateInput) {
@@ -1300,6 +1373,45 @@ export const MasterAdminPage: React.FC = () => {
                                   )}
                                 </p>
                                 <p className="text-[10px] font-mono text-neutral-400 truncate">Org: {adm.organizationId}</p>
+                                {adm.customDomain ? (
+                                  <div className="mt-1 flex items-center space-x-1.5 flex-wrap">
+                                    <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                                      <Globe className="w-2.5 h-2.5 text-indigo-600 dark:text-indigo-400" />
+                                      <span>{adm.customDomain}</span>
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        window.open(`/?preview_domain=${encodeURIComponent(adm.customDomain!)}`, '_blank');
+                                      }}
+                                      title="Open portal preview with this domain branding"
+                                      className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-white dark:bg-neutral-800 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-50 cursor-pointer shadow-2xs"
+                                    >
+                                      <span>Preview</span>
+                                      <ExternalLink className="w-2.5 h-2.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setDnsGuideModalDomain(adm.customDomain!)}
+                                      title="View DNS CNAME Configuration Guide"
+                                      className="inline-flex items-center space-x-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 cursor-pointer border border-neutral-200 dark:border-neutral-700"
+                                    >
+                                      <HelpCircle className="w-2.5 h-2.5" />
+                                      <span>DNS</span>
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <div className="mt-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenEditAdmin(adm)}
+                                      className="text-[10px] text-indigo-600 dark:text-indigo-400 hover:underline inline-flex items-center space-x-1 cursor-pointer font-medium"
+                                    >
+                                      <Globe className="w-2.5 h-2.5" />
+                                      <span>+ Attach Custom Domain</span>
+                                    </button>
+                                  </div>
+                                )}
                                 {adm.contactPhone && (
                                   <p className="text-[10px] text-emerald-600 dark:text-emerald-400 flex items-center space-x-1 mt-0.5 font-mono">
                                     <Phone className="w-2.5 h-2.5 shrink-0" />
@@ -1752,27 +1864,86 @@ export const MasterAdminPage: React.FC = () => {
                 />
               </div>
 
-              {/* ADMIN WHITE-LABEL BRANDING: PC LOGO UPLOAD & CONTACT NUMBER */}
-              <div className="p-3.5 rounded-2xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-800/60 space-y-3">
+              {/* ADMIN WHITE-LABEL BRANDING & DEDICATED DOMAIN */}
+              <div className="p-3.5 rounded-2xl bg-gradient-to-br from-indigo-50/70 via-purple-50/40 to-amber-50/50 dark:from-indigo-950/40 dark:via-purple-950/20 dark:to-amber-950/30 border border-indigo-200/80 dark:border-indigo-800/60 space-y-3.5">
                 <div className="flex items-center space-x-2">
-                  <div className="w-6 h-6 rounded-lg bg-amber-600 text-white flex items-center justify-center shrink-0">
-                    <ImageIcon className="w-3.5 h-3.5" />
+                  <div className="w-7 h-7 rounded-lg bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
+                    <Globe className="w-4 h-4" />
                   </div>
                   <div>
-                    <h4 className="font-bold text-xs text-amber-950 dark:text-amber-200">
-                      Admin Custom Logo &amp; Support Contact (White-Label)
+                    <h4 className="font-bold text-xs text-indigo-950 dark:text-indigo-200">
+                      White-Label Reseller &amp; Custom Domain Setup
                     </h4>
-                    <p className="text-[10px] text-amber-700/80 dark:text-amber-400">
-                      Logo PC se upload karein aur contact number dalein jo is admin ke users ke panel me show hoga.
+                    <p className="text-[10px] text-indigo-700/80 dark:text-indigo-300">
+                      Is admin ka khud ka domain set karein taki unka panel aur unke users ka portal unhi ke domain se open ho.
                     </p>
+                  </div>
+                </div>
+
+                {/* Custom Subdomain / Domain Input */}
+                <div>
+                  <label className="font-semibold text-neutral-800 dark:text-neutral-200 mb-1 flex items-center justify-between text-xs">
+                    <span className="flex items-center space-x-1.5">
+                      <Globe className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>Dedicated Custom Domain / Subdomain</span>
+                    </span>
+                    <span className="text-[10px] text-neutral-400 font-normal">Optional (Whitelabel)</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. portal.apexagency.com or waba.clientdomain.in"
+                    value={newCustomDomain}
+                    onChange={(e) => setNewCustomDomain(e.target.value.toLowerCase().trim())}
+                    className="w-full px-3.5 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white font-mono text-xs"
+                  />
+                  <div className="mt-1.5 p-2 rounded-xl bg-white/80 dark:bg-neutral-900/80 border border-indigo-100 dark:border-indigo-900/60 text-[10px] text-neutral-600 dark:text-neutral-300 space-y-1">
+                    <div className="font-semibold text-indigo-900 dark:text-indigo-300 flex items-center space-x-1">
+                      <span>📌 DNS CNAME Setup Instructions:</span>
+                    </div>
+                    <p>
+                      Admin ko apne DNS provider (GoDaddy / Cloudflare) me ye record add karna hoga:
+                    </p>
+                    <div className="grid grid-cols-2 gap-2 font-mono bg-neutral-100 dark:bg-neutral-800 p-1.5 rounded-lg text-[10px]">
+                      <div>Type: <strong className="text-emerald-600">CNAME</strong></div>
+                      <div>Points To: <strong className="text-indigo-600">wabacloud.in</strong></div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Custom Brand Name */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="font-semibold text-neutral-800 dark:text-neutral-200 mb-1 block text-xs">
+                      Custom Brand / Portal Name
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Apex WABA Platform"
+                      value={newCustomBrandName}
+                      onChange={(e) => setNewCustomBrandName(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white text-xs"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="font-semibold text-neutral-800 dark:text-neutral-200 mb-1 block text-xs">
+                      Support Email (Shown to Users)
+                    </label>
+                    <input
+                      type="email"
+                      placeholder="support@apexagency.com"
+                      value={newSupportEmail}
+                      onChange={(e) => setNewSupportEmail(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white text-xs"
+                    />
                   </div>
                 </div>
 
                 {/* PC Logo Upload */}
                 <div>
                   <label className="font-semibold text-neutral-800 dark:text-neutral-200 mb-1.5 flex items-center justify-between text-xs">
-                    <span>Admin Panel Logo (Upload from PC)</span>
-                    <span className="text-[10px] text-neutral-400 font-normal">PNG, JPG, SVG, WebP (Max 2MB)</span>
+                    <span>Admin Panel Custom Logo (PC Upload)</span>
+                    <span className="text-[10px] text-neutral-400 font-normal">PNG, JPG, SVG, WebP</span>
                   </label>
 
                   {newAdminLogoUrl ? (
@@ -1785,7 +1956,7 @@ export const MasterAdminPage: React.FC = () => {
                           <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
                           <span>Logo Uploaded &amp; Ready</span>
                         </p>
-                        <p className="text-[10px] text-neutral-500 truncate">Will appear on sidebar header of Admin&apos;s user panel</p>
+                        <p className="text-[10px] text-neutral-500 truncate">Will appear on Login and Sidebar for this Admin and Users</p>
                       </div>
                       <button
                         type="button"
@@ -1796,8 +1967,8 @@ export const MasterAdminPage: React.FC = () => {
                       </button>
                     </div>
                   ) : (
-                    <label className="flex flex-col items-center justify-center p-4 rounded-xl border-2 border-dashed border-amber-300 dark:border-amber-700/70 hover:border-amber-500 bg-white/70 dark:bg-neutral-850 hover:bg-amber-50/50 dark:hover:bg-amber-950/20 transition-all cursor-pointer group">
-                      <div className="flex items-center space-x-2 text-amber-700 dark:text-amber-400">
+                    <label className="flex flex-col items-center justify-center p-4 rounded-xl border-2 border-dashed border-indigo-300 dark:border-indigo-700/70 hover:border-indigo-500 bg-white/70 dark:bg-neutral-850 hover:bg-indigo-50/50 dark:hover:bg-indigo-950/20 transition-all cursor-pointer group">
+                      <div className="flex items-center space-x-2 text-indigo-700 dark:text-indigo-400">
                         <Upload className="w-4 h-4 group-hover:scale-110 transition-transform" />
                         <span className="font-bold text-xs">Choose Logo Image from PC</span>
                       </div>
@@ -1828,7 +1999,7 @@ export const MasterAdminPage: React.FC = () => {
                     />
                   </div>
                   <p className="text-[10px] text-neutral-500 dark:text-neutral-400 mt-1">
-                    💡 Yeh contact number admin ke sabhi users ke panel me Support Desk &amp; Helpline me dikhega taki unhe lage ye panel is admin ka hai.
+                    💡 Yeh contact number aur brand name admin ke sabhi users ke panel me Support Desk &amp; Helpline me dikhega.
                   </p>
                 </div>
               </div>
@@ -2249,6 +2420,53 @@ export const MasterAdminPage: React.FC = () => {
                 </div>
               </div>
 
+              {/* 5. Campaign Leads & CRM Retargeting Permission Control */}
+              <div className="p-3.5 rounded-2xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/40 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2.5">
+                    <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${
+                      newCanAccessCrmLeads
+                        ? 'bg-indigo-600 text-white shadow-xs'
+                        : 'bg-neutral-200 dark:bg-neutral-700 text-neutral-500 dark:text-neutral-400'
+                    }`}>
+                      <Target className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <p className="font-bold text-xs text-neutral-900 dark:text-white">
+                        Campaign Leads &amp; CRM Retargeting Permission
+                      </p>
+                      <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                        Admin ko &ldquo;Campaign Leads &amp; CRM&rdquo; (Replies, Button Clicks tracking &amp; 1-Click Re-broadcast) allow karna hai ya hide rakhna hai
+                      </p>
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={newCanAccessCrmLeads}
+                      onChange={(e) => setNewCanAccessCrmLeads(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-neutral-300 peer-focus:outline-hidden rounded-full peer dark:bg-neutral-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-neutral-600 peer-checked:bg-indigo-600"></div>
+                  </label>
+                </div>
+
+                <div className={`p-2 rounded-xl text-[11px] flex items-center justify-between ${
+                  newCanAccessCrmLeads
+                    ? 'bg-indigo-100/70 text-indigo-900 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800'
+                    : 'bg-rose-100/70 text-rose-900 dark:bg-rose-950/60 dark:text-rose-300 border border-rose-200 dark:border-rose-800'
+                }`}>
+                  <span className="font-medium">
+                    {newCanAccessCrmLeads
+                      ? '✅ Ha, option show hoga (Admin sees Campaign Leads & CRM in sidebar).'
+                      : '🚫 Nahi, option hide rahega (Admin cannot see or access Campaign Leads & CRM).'}
+                  </span>
+                  <span className="font-bold uppercase text-[10px] px-2 py-0.5 rounded bg-white/70 dark:bg-black/30">
+                    {newCanAccessCrmLeads ? 'Allowed' : 'Not Allowed'}
+                  </span>
+                </div>
+              </div>
+
               <div className="pt-3 border-t border-neutral-200 dark:border-neutral-800 flex justify-end space-x-2">
                 <button
                   type="button"
@@ -2422,33 +2640,130 @@ export const MasterAdminPage: React.FC = () => {
                 </select>
               </div>
 
-              {/* ADMIN WHITE-LABEL BRANDING: PC LOGO & CONTACT NUMBER */}
-              <div className="p-3.5 rounded-2xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-800/60 space-y-3">
+              {/* ADMIN WHITE-LABEL BRANDING & DEDICATED DOMAIN */}
+              <div className="p-3.5 rounded-2xl bg-gradient-to-br from-indigo-50/70 via-purple-50/40 to-amber-50/50 dark:from-indigo-950/40 dark:via-purple-950/20 dark:to-amber-950/30 border border-indigo-200/80 dark:border-indigo-800/60 space-y-3.5">
                 <div className="flex items-center space-x-2">
-                  <div className="w-6 h-6 rounded-lg bg-amber-600 text-white flex items-center justify-center shrink-0">
-                    <ImageIcon className="w-3.5 h-3.5" />
+                  <div className="w-7 h-7 rounded-lg bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
+                    <Globe className="w-4 h-4" />
                   </div>
                   <div>
-                    <h4 className="font-bold text-xs text-amber-950 dark:text-amber-200">
-                      Admin Custom Logo &amp; Support Contact (White-Label)
+                    <h4 className="font-bold text-xs text-indigo-950 dark:text-indigo-200">
+                      White-Label Reseller &amp; Custom Domain Management
                     </h4>
-                    <p className="text-[10px] text-amber-700/80 dark:text-amber-400">
-                      Update custom logo and contact number shown to this admin&apos;s team users.
+                    <p className="text-[10px] text-indigo-700/80 dark:text-indigo-300">
+                      Dedicated domain, custom branding and DNS CNAME verification.
                     </p>
                   </div>
                 </div>
 
+                {/* Custom Subdomain / Domain Input & Live CNAME Verify */}
                 <div>
-                  <label className="font-semibold text-neutral-800 dark:text-neutral-200 mb-1 block text-xs">
-                    Business / Brand Name
+                  <label className="font-semibold text-neutral-800 dark:text-neutral-200 mb-1 flex items-center justify-between text-xs">
+                    <span className="flex items-center space-x-1.5">
+                      <Globe className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>Dedicated Custom Domain</span>
+                    </span>
+                    <span className="text-[10px] text-neutral-400 font-normal">e.g. portal.clientdomain.com</span>
                   </label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Apex Marketing Agency"
-                    value={editBusinessName}
-                    onChange={(e) => setEditBusinessName(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white text-xs"
-                  />
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="text"
+                      placeholder="e.g. portal.apexagency.com"
+                      value={editCustomDomain}
+                      onChange={(e) => setEditCustomDomain(e.target.value.toLowerCase().trim())}
+                      className="flex-1 px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white font-mono text-xs"
+                    />
+                    <button
+                      type="button"
+                      disabled={verifyingDns || !editCustomDomain.trim()}
+                      onClick={() => handleVerifyDns(editCustomDomain)}
+                      className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs shrink-0 cursor-pointer flex items-center space-x-1.5 shadow-2xs"
+                    >
+                      {verifyingDns ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Checking...</span>
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span>Verify CNAME</span>
+                        </>
+                      )}
+                    </button>
+                    {editCustomDomain.trim() && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          window.open(`/?preview_domain=${encodeURIComponent(editCustomDomain.trim())}`, '_blank');
+                        }}
+                        title="Preview Portal with this domain branding"
+                        className="px-2.5 py-2 rounded-xl bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 text-xs font-semibold hover:bg-neutral-50 dark:hover:bg-neutral-750 shrink-0 cursor-pointer flex items-center space-x-1"
+                      >
+                        <ExternalLink className="w-3 h-3 text-indigo-500" />
+                        <span>Preview</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* DNS Verification Status Feedback */}
+                  {dnsVerifyResult && (
+                    <div className={`mt-2 p-2.5 rounded-xl text-xs flex items-start space-x-2 border ${
+                      dnsVerifyResult.verified
+                        ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300'
+                        : 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300'
+                    }`}>
+                      {dnsVerifyResult.verified ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                      ) : (
+                        <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                      )}
+                      <div className="flex-1 text-[11px] leading-relaxed">
+                        <p className="font-bold">
+                          {dnsVerifyResult.verified
+                            ? '✅ CNAME DNS Record Successfully Verified!'
+                            : '⏳ CNAME DNS Record Pending or Inactive'}
+                        </p>
+                        <p className="mt-0.5 text-neutral-600 dark:text-neutral-300">
+                          {dnsVerifyResult.message}
+                        </p>
+                        {!dnsVerifyResult.verified && (
+                          <div className="mt-1 font-mono text-[10px] bg-white/70 dark:bg-neutral-900/70 p-1.5 rounded-lg border border-amber-300 dark:border-amber-700">
+                            Host: <strong className="text-neutral-900 dark:text-white">{editCustomDomain.split('.')[0]}</strong> &bull; Points to: <strong className="text-indigo-600">wabacloud.in</strong>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Custom Brand Name & Support Email */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="font-semibold text-neutral-800 dark:text-neutral-200 mb-1 block text-xs">
+                      Custom Brand / Portal Name
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Apex Marketing Agency"
+                      value={editCustomBrandName}
+                      onChange={(e) => setEditCustomBrandName(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white text-xs"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="font-semibold text-neutral-800 dark:text-neutral-200 mb-1 block text-xs">
+                      Support Email (Shown to Users)
+                    </label>
+                    <input
+                      type="email"
+                      placeholder="support@apexagency.com"
+                      value={editSupportEmail}
+                      onChange={(e) => setEditSupportEmail(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white text-xs"
+                    />
+                  </div>
                 </div>
 
                 {/* PC Logo Upload */}
@@ -2468,7 +2783,7 @@ export const MasterAdminPage: React.FC = () => {
                           <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
                           <span>Active Logo Configured</span>
                         </p>
-                        <p className="text-[10px] text-neutral-500 truncate">Shows on user sidebar header</p>
+                        <p className="text-[10px] text-neutral-500 truncate">Shows on user sidebar header &amp; login portal</p>
                       </div>
                       <button
                         type="button"
@@ -3124,6 +3439,53 @@ export const MasterAdminPage: React.FC = () => {
                 </div>
               </div>
 
+              {/* 5. Campaign Leads & CRM Retargeting Permission Control */}
+              <div className="p-3.5 rounded-2xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/40 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2.5">
+                    <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${
+                      editCanAccessCrmLeads
+                        ? 'bg-indigo-600 text-white shadow-xs'
+                        : 'bg-neutral-200 dark:bg-neutral-700 text-neutral-500 dark:text-neutral-400'
+                    }`}>
+                      <Target className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <p className="font-bold text-xs text-neutral-900 dark:text-white">
+                        Campaign Leads &amp; CRM Retargeting Permission
+                      </p>
+                      <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                        Is admin ko &ldquo;Campaign Leads &amp; CRM&rdquo; (Replies, Button Clicks tracking &amp; 1-Click Re-broadcast) ka option dena hai ya nahi
+                      </p>
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={editCanAccessCrmLeads}
+                      onChange={(e) => setEditCanAccessCrmLeads(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-neutral-300 peer-focus:outline-hidden rounded-full peer dark:bg-neutral-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-neutral-600 peer-checked:bg-indigo-600"></div>
+                  </label>
+                </div>
+
+                <div className={`p-2 rounded-xl text-[11px] flex items-center justify-between ${
+                  editCanAccessCrmLeads
+                    ? 'bg-indigo-100/70 text-indigo-900 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800'
+                    : 'bg-rose-100/70 text-rose-900 dark:bg-rose-950/60 dark:text-rose-300 border border-rose-200 dark:border-rose-800'
+                }`}>
+                  <span className="font-medium">
+                    {editCanAccessCrmLeads
+                      ? '✅ Permission Allowed (Admin sees Campaign Leads & CRM in sidebar).'
+                      : '🚫 Permission Denied (Admin will NOT see Campaign Leads & CRM).'}
+                  </span>
+                  <span className="font-bold uppercase text-[10px] px-2 py-0.5 rounded bg-white/70 dark:bg-black/30">
+                    {editCanAccessCrmLeads ? 'Allowed' : 'Hidden'}
+                  </span>
+                </div>
+              </div>
+
               <div className="sticky -bottom-6 -mb-6 pb-6 pt-3 bg-white dark:bg-neutral-900 border-t border-neutral-200 dark:border-neutral-800 flex justify-end space-x-2 z-20">
                 <button
                   type="button"
@@ -3612,6 +3974,146 @@ export const MasterAdminPage: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* MODAL: DNS CNAME CONFIGURATION GUIDE & VERIFIER */}
+      {dnsGuideModalDomain && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fadeIn">
+          <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-3xl w-full max-w-lg shadow-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-neutral-200 dark:border-neutral-800 pb-3">
+              <div className="flex items-center space-x-2 text-indigo-600 font-bold text-base">
+                <Globe className="w-5 h-5" />
+                <span>White-Label Custom Domain Setup Guide</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDnsGuideModalDomain(null)}
+                className="text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-3 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200/80 dark:border-indigo-800/60 text-xs text-indigo-950 dark:text-indigo-200 space-y-1">
+              <p className="font-bold flex items-center space-x-1.5">
+                <span>Target Domain:</span>
+                <code className="bg-white dark:bg-black/40 px-2 py-0.5 rounded font-mono text-indigo-700 dark:text-indigo-300 font-bold">{dnsGuideModalDomain}</code>
+              </p>
+              <p className="text-[11px] text-neutral-600 dark:text-neutral-400 leading-relaxed">
+                Admin apne domain registrar (Cloudflare, GoDaddy, Namecheap, Hostinger etc.) ke DNS Settings me jakar ye <strong>CNAME Record</strong> add karega:
+              </p>
+            </div>
+
+            {/* DNS Records Table */}
+            <div className="rounded-2xl border border-neutral-200 dark:border-neutral-800 overflow-hidden text-xs">
+              <div className="bg-neutral-50 dark:bg-neutral-800/60 px-4 py-2 font-bold text-neutral-700 dark:text-neutral-300 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
+                <span>DNS Record Details</span>
+                <span className="text-[10px] text-neutral-400 font-normal">CNAME Configuration</span>
+              </div>
+              <div className="p-4 space-y-3 bg-white dark:bg-neutral-900 font-mono text-xs">
+                <div className="flex items-center justify-between p-2 rounded-xl bg-neutral-50 dark:bg-neutral-800">
+                  <div>
+                    <span className="text-[10px] text-neutral-400 block font-sans">Type</span>
+                    <strong className="text-emerald-600">CNAME</strong>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText('CNAME');
+                      toast.showSuccess('Copied', 'CNAME copied.');
+                    }}
+                    className="p-1 text-neutral-400 hover:text-neutral-700 cursor-pointer"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between p-2 rounded-xl bg-neutral-50 dark:bg-neutral-800">
+                  <div className="truncate mr-2">
+                    <span className="text-[10px] text-neutral-400 block font-sans">Name / Host</span>
+                    <strong className="text-neutral-900 dark:text-white truncate">{dnsGuideModalDomain.split('.')[0]}</strong>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(dnsGuideModalDomain.split('.')[0]);
+                      toast.showSuccess('Copied', 'Host copied.');
+                    }}
+                    className="p-1 text-neutral-400 hover:text-neutral-700 cursor-pointer"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between p-2 rounded-xl bg-neutral-50 dark:bg-neutral-800">
+                  <div className="truncate mr-2">
+                    <span className="text-[10px] text-neutral-400 block font-sans">Points to / Target</span>
+                    <strong className="text-indigo-600 truncate">wabacloud.in</strong>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText('wabacloud.in');
+                      toast.showSuccess('Copied', 'Target wabacloud.in copied.');
+                    }}
+                    className="p-1 text-neutral-400 hover:text-neutral-700 cursor-pointer"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between p-2 rounded-xl bg-neutral-50 dark:bg-neutral-800">
+                  <div>
+                    <span className="text-[10px] text-neutral-400 block font-sans">TTL</span>
+                    <strong className="text-neutral-700 dark:text-neutral-300">Auto / 3600</strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Platform Answers to User Questions */}
+            <div className="space-y-2 text-[11px] text-neutral-600 dark:text-neutral-300">
+              <div className="p-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 space-y-1">
+                <p className="font-bold text-emerald-900 dark:text-emerald-300">
+                  ✨ Automatic Updates to All White-Label Resellers:
+                </p>
+                <p className="leading-relaxed">
+                  Jab bhi aap Master Admin se application me koi <strong>new feature</strong>, template, bot automation ya updates deploy karenge, wo automatically <strong>sabhi white-label domains ko instantly mil jayega</strong> bina kisi manual DNS change ke!
+                </p>
+              </div>
+
+              <div className="p-3 rounded-2xl bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800 space-y-1">
+                <p className="font-bold text-purple-900 dark:text-purple-300">
+                  🔒 100% Brand Privacy for Admin &amp; Users:
+                </p>
+                <p className="leading-relaxed">
+                  Admin aur unke users jab is domain se login karenge to Login page, header, sidebar aur SMS/email alerts par sirf unka brand name aur contact phone dikhega.
+                </p>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="pt-3 border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => {
+                  window.open(`/?preview_domain=${encodeURIComponent(dnsGuideModalDomain)}`, '_blank');
+                }}
+                className="inline-flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 text-xs font-semibold cursor-pointer border border-indigo-200 dark:border-indigo-800"
+              >
+                <Globe className="w-3.5 h-3.5" />
+                <span>Test Live Preview</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setDnsGuideModalDomain(null)}
+                className="px-5 py-2 rounded-xl bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 font-bold text-xs cursor-pointer shadow-md"
+              >
+                Done
+              </button>
+            </div>
           </div>
         </div>
       )}

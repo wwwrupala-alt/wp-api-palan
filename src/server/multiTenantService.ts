@@ -15,6 +15,7 @@ import {
   deleteDoc,
 } from './serverDb.ts';
 import type { UserProfile, Organization, SaaSPlan, AuditLog } from '../types/index.ts';
+import { invalidateWhiteLabelCache } from './whiteLabelService.ts';
 
 // -------------------------------------------------------------
 // SECURE PASSWORD HASHING (Salt + SHA-256)
@@ -1602,11 +1603,19 @@ export async function handleGetMasterAdmins(req: Request, res: Response): Promis
     const allUsers: UserProfile[] = [];
     usersSnap.forEach((d) => allUsers.push({ ...(d.data() as UserProfile) }));
 
+    const orgsSnap = await getDocs(collection(serverDb, 'organizations')).catch(() => ({ docs: [] as any[] }));
+    const orgMap = new Map<string, any>();
+    if (orgsSnap && 'docs' in orgsSnap) {
+      orgsSnap.docs.forEach((od: any) => orgMap.set(od.id, od.data()));
+    }
+
     const admins: any[] = [];
 
     for (const u of allUsers) {
       if (u.role === 'admin' || u.role === 'owner') {
         const orgId = u.organizationId;
+        const orgData = orgMap.get(orgId) || {};
+
         // In-memory user count (Zero reads!)
         const usersCount = allUsers.filter(
           (d) => d.organizationId === orgId && d.role === 'user'
@@ -1615,6 +1624,13 @@ export async function handleGetMasterAdmins(req: Request, res: Response): Promis
         const { loginPassword, ...safeAdmin } = u as any;
         admins.push({
           ...safeAdmin,
+          customDomain: orgData.customDomain || (u as any).customDomain || '',
+          customBrandName: orgData.customBrandName || (u as any).customBrandName || orgData.adminBrandName || '',
+          customLogoUrl: orgData.customLogoUrl || (u as any).customLogoUrl || orgData.logoUrl || u.logoUrl || '',
+          supportPhone: orgData.supportPhone || (u as any).supportPhone || orgData.contactPhone || u.contactPhone || '',
+          supportEmail: orgData.supportEmail || (u as any).supportEmail || '',
+          cnameVerified: Boolean(orgData.cnameVerified || (u as any).cnameVerified),
+          cnameCheckedAt: orgData.cnameCheckedAt || (u as any).cnameCheckedAt || '',
           usersCount,
           whatsAppCount: 1,
           campaignsCount: 3,
@@ -1676,8 +1692,14 @@ export async function handleCreateMasterAdmin(req: Request, res: Response): Prom
       canAccessInbox,
       canAccessDripCampaigns,
       canAccessWallet,
+      canAccessCrmLeads,
       logoUrl,
       contactPhone,
+      customDomain,
+      customBrandName,
+      customLogoUrl,
+      supportPhone,
+      supportEmail,
     } = req.body;
 
     if (!adminName || !password || (!email && !phone)) {
@@ -1688,6 +1710,8 @@ export async function handleCreateMasterAdmin(req: Request, res: Response): Prom
     const cleanPhone = String(phone || '').trim().replace(/[^0-9]/g, '');
     const cleanEmail = String(email || '').trim().toLowerCase();
     const cleanContactPhone = String(contactPhone || cleanPhone || '').trim();
+    const cleanCustomDomain = String(customDomain || '').trim().toLowerCase().replace(/^https?:\/\//, '').split('/')[0];
+    const effectiveBrandName = String(customBrandName || businessName || `${adminName}'s Workspace`).trim();
     const uniqueSuffix = cleanPhone || `${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const adminUid = `admin_${uniqueSuffix}`;
 
@@ -1709,12 +1733,18 @@ export async function handleCreateMasterAdmin(req: Request, res: Response): Prom
     // 1. Create Brand New Organization document (EMPTY subcollections = FRESH 0 DATA)
     await setDoc(doc(serverDb, 'organizations', newOrgId), {
       id: newOrgId,
-      name: businessName || `${adminName}'s Workspace`,
+      name: effectiveBrandName,
       ownerId: adminUid,
       status: 'active',
-      logoUrl: logoUrl || '',
+      logoUrl: customLogoUrl || logoUrl || '',
       contactPhone: cleanContactPhone,
-      adminBrandName: businessName || `${adminName}'s Workspace`,
+      adminBrandName: effectiveBrandName,
+      customDomain: cleanCustomDomain,
+      customBrandName: effectiveBrandName,
+      customLogoUrl: customLogoUrl || logoUrl || '',
+      supportPhone: supportPhone || cleanContactPhone,
+      supportEmail: supportEmail || cleanEmail,
+      cnameVerified: false,
       subscription: {
         planId: planId || 'plan_pro',
         planName,
@@ -1738,10 +1768,12 @@ export async function handleCreateMasterAdmin(req: Request, res: Response): Prom
       email: cleanEmail || `${cleanPhone || uniqueSuffix}@cloudwaba.internal`,
       phone: cleanPhone,
       contactPhone: cleanContactPhone,
-      logoUrl: logoUrl || '',
-      adminLogoUrl: logoUrl || '',
+      logoUrl: customLogoUrl || logoUrl || '',
+      adminLogoUrl: customLogoUrl || logoUrl || '',
       adminContactPhone: cleanContactPhone,
-      adminBrandName: businessName || `${adminName}'s Workspace`,
+      adminBrandName: effectiveBrandName,
+      customDomain: cleanCustomDomain,
+      supportEmail: supportEmail || cleanEmail,
       role: 'admin',
       organizationId: newOrgId,
       loginPassword: hashPassword(password),
@@ -1752,6 +1784,7 @@ export async function handleCreateMasterAdmin(req: Request, res: Response): Prom
       canAccessInbox: canAccessInbox !== false,
       canAccessDripCampaigns: canAccessDripCampaigns !== false,
       canAccessWallet: canAccessWallet !== false,
+      canAccessCrmLeads: canAccessCrmLeads !== false,
       subscription: {
         planId: planId || 'plan_pro',
         planName,
@@ -1783,6 +1816,7 @@ export async function handleCreateMasterAdmin(req: Request, res: Response): Prom
 
     // Invalidate master admin caches immediately so new tenant displays live!
     invalidateMasterAdminCache();
+    invalidateWhiteLabelCache();
 
     res.json({
       success: true,
@@ -1826,6 +1860,13 @@ export async function handleUpdateMasterAdmin(req: Request, res: Response): Prom
       canAccessInbox,
       canAccessDripCampaigns,
       canAccessWallet,
+      canAccessCrmLeads,
+      customDomain,
+      customBrandName,
+      customLogoUrl,
+      supportPhone,
+      supportEmail,
+      cnameVerified,
     } = req.body;
 
     const userRef = doc(serverDb, 'users', adminId);
@@ -1881,6 +1922,28 @@ export async function handleUpdateMasterAdmin(req: Request, res: Response): Prom
     if (businessName) {
       updates.adminBrandName = businessName;
     }
+    if (customDomain !== undefined) {
+      updates.customDomain = String(customDomain).trim().toLowerCase().replace(/^https?:\/\//, '').split('/')[0];
+    }
+    if (customBrandName !== undefined) {
+      updates.customBrandName = String(customBrandName).trim();
+      updates.adminBrandName = String(customBrandName).trim();
+    }
+    if (customLogoUrl !== undefined) {
+      updates.customLogoUrl = customLogoUrl;
+      updates.logoUrl = customLogoUrl;
+      updates.adminLogoUrl = customLogoUrl;
+    }
+    if (supportPhone !== undefined) {
+      updates.supportPhone = supportPhone;
+      updates.adminContactPhone = supportPhone;
+    }
+    if (supportEmail !== undefined) {
+      updates.supportEmail = supportEmail;
+    }
+    if (cnameVerified !== undefined) {
+      updates.cnameVerified = Boolean(cnameVerified);
+    }
     if (canAccessSettingsMetaApi !== undefined) {
       updates.canAccessSettingsMetaApi = Boolean(canAccessSettingsMetaApi);
     }
@@ -1898,6 +1961,9 @@ export async function handleUpdateMasterAdmin(req: Request, res: Response): Prom
     }
     if (canAccessWallet !== undefined) {
       updates.canAccessWallet = Boolean(canAccessWallet);
+    }
+    if (canAccessCrmLeads !== undefined) {
+      updates.canAccessCrmLeads = Boolean(canAccessCrmLeads);
     }
     if (newPassword && String(newPassword).trim().length >= 6) {
       const cleanP = String(newPassword).trim();
@@ -1921,6 +1987,12 @@ export async function handleUpdateMasterAdmin(req: Request, res: Response): Prom
         ...(logoUrl !== undefined ? { logoUrl } : {}),
         ...(contactPhone !== undefined ? { contactPhone } : {}),
         ...(businessName ? { name: businessName, adminBrandName: businessName } : {}),
+        ...(customDomain !== undefined ? { customDomain: String(customDomain).trim().toLowerCase().replace(/^https?:\/\//, '').split('/')[0] } : {}),
+        ...(customBrandName !== undefined ? { customBrandName: String(customBrandName).trim(), adminBrandName: String(customBrandName).trim() } : {}),
+        ...(customLogoUrl !== undefined ? { customLogoUrl, logoUrl: customLogoUrl } : {}),
+        ...(supportPhone !== undefined ? { supportPhone, contactPhone: supportPhone } : {}),
+        ...(supportEmail !== undefined ? { supportEmail } : {}),
+        ...(cnameVerified !== undefined ? { cnameVerified: Boolean(cnameVerified) } : {}),
         updatedAt: new Date().toISOString(),
       }, { merge: true });
     }
@@ -1974,6 +2046,7 @@ export async function handleUpdateMasterAdmin(req: Request, res: Response): Prom
     });
 
     invalidateMasterAdminCache();
+    invalidateWhiteLabelCache();
     res.json({ success: true, message: `Admin ${currentData.displayName} updated successfully.` });
   } catch (err: any) {
     console.error('[UpdateAdmin] Error:', err);
@@ -2546,6 +2619,7 @@ export async function handleCreateAdminUser(req: Request, res: Response): Promis
       displayPassword: password,
       canAccessAutomations: permissions?.canAutomations !== false,
       canAccessWallet: permissions?.canAccessWallet !== false,
+      canAccessCrmLeads: permissions?.canAccessCrmLeads !== false,
       subscription: {
         planName: designation || 'Team Member',
         status: status || 'active',
@@ -2660,6 +2734,9 @@ export async function handleUpdateAdminUser(req: Request, res: Response): Promis
     }
     if (permissions && permissions.canAccessWallet !== undefined) {
       updates.canAccessWallet = Boolean(permissions.canAccessWallet);
+    }
+    if (permissions && permissions.canAccessCrmLeads !== undefined) {
+      updates.canAccessCrmLeads = Boolean(permissions.canAccessCrmLeads);
     }
     if (phone !== undefined) updates.phone = String(phone).replace(/[^0-9]/g, '');
     if (email !== undefined) updates.email = String(email).trim().toLowerCase();

@@ -31,6 +31,7 @@ import {
   processIncomingCustomerReply,
 } from './campaignAnalyticsService.ts';
 import { deductWalletForCampaign } from './walletService.ts';
+import { recordCrmLeadFromInteraction } from './crmLeadsService.ts';
 import type { CampaignRecipient, UserProfile, Organization } from '../types/index.ts';
 import { parseMessagingLimitTier } from '../lib/metaLimits.ts';
 
@@ -3130,6 +3131,19 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
         organizationId: targetOrgId,
       }).catch((err) => {
         console.warn('[Webhook] processIncomingCustomerReply error:', err);
+      });
+
+      // Automatically capture & update in CRM Leads & Retargeting Funnel
+      recordCrmLeadFromInteraction({
+        organizationId: targetOrgId,
+        phone: `+${cleanPhone}`,
+        customerName: senderName,
+        interactionType: (msg.type === 'button' || msg.type === 'interactive') ? 'button_click' : 'text_reply',
+        buttonText: (msg.type === 'button' || msg.type === 'interactive') ? textBody : undefined,
+        buttonPayload: interactiveButtonId || undefined,
+        replyText: (msg.type !== 'button' && msg.type !== 'interactive') ? textBody : undefined,
+      }).catch((err) => {
+        console.warn('[Webhook] recordCrmLeadFromInteraction error:', err);
       });
 
       // CHATBOT ENGINE: Collect active bot flows for this incoming message

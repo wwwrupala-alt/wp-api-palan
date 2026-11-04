@@ -23,6 +23,10 @@ import {
   Sparkles,
   Info,
   RotateCcw,
+  Trash2,
+  Clock,
+  Settings2,
+  Check,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useToast } from '../context/ToastContext.tsx';
@@ -31,6 +35,10 @@ import {
   rechargeWalletApi,
   updatePricingApi,
   resetWalletApi,
+  clearWalletTransactionsApi,
+  deleteWalletTransactionApi,
+  updateWalletAutoDeleteApi,
+  purgeWalletOldTransactionsApi,
 } from '../lib/services.ts';
 import { CategoryPricing, WalletAccount, WalletTransaction } from '../types/index.ts';
 
@@ -62,7 +70,22 @@ export const WalletPage: React.FC = () => {
   const [customBalanceInput, setCustomBalanceInput] = useState<string>('0');
   const [resetReason, setResetReason] = useState<string>('Reconciliation with Meta Business Portfolio balance');
   const [resetCounters, setResetCounters] = useState<boolean>(true);
+  const [resetClearHistory, setResetClearHistory] = useState<boolean>(true); // Reset entries below
   const [isResetting, setIsResetting] = useState(false);
+
+  // Auto-Delete Feature State (Auto-Delete older than X days)
+  const [isAutoDeleteModalOpen, setIsAutoDeleteModalOpen] = useState(false);
+  const [autoDeleteDays, setAutoDeleteDays] = useState<number>(30);
+  const [autoDeleteEnabled, setAutoDeleteEnabled] = useState<boolean>(true);
+  const [isSavingAutoDelete, setIsSavingAutoDelete] = useState(false);
+  const [isPurgingNow, setIsPurgingNow] = useState(false);
+
+  // Clear History Modal State
+  const [isClearHistoryModalOpen, setIsClearHistoryModalOpen] = useState(false);
+  const [isClearingHistory, setIsClearingHistory] = useState(false);
+
+  // Single transaction delete
+  const [deletingTxId, setDeletingTxId] = useState<string | null>(null);
 
   // Master Admin Pricing Edit State
   const [editMarketing, setEditMarketing] = useState<string>('0.88');
@@ -84,7 +107,11 @@ export const WalletPage: React.FC = () => {
     setLoading(true);
     try {
       const data = await fetchWalletInfo(currentOrgId, userProfile?.uid);
-      if (data.account) setAccount(data.account);
+      if (data.account) {
+        setAccount(data.account);
+        setAutoDeleteDays(typeof data.account.autoDeleteDays === 'number' ? data.account.autoDeleteDays : 30);
+        setAutoDeleteEnabled(data.account.autoDeleteEnabled !== false);
+      }
       if (data.pricing) {
         setPricing(data.pricing);
         setEditMarketing(String(data.pricing.marketingRate ?? 0.88));
@@ -150,21 +177,91 @@ export const WalletPage: React.FC = () => {
         newBalance: targetBalance,
         reason: resetReason.trim() || 'Meta Business Portfolio Balance Reconciliation',
         resetCounters,
+        clearHistory: resetClearHistory,
       });
 
       toast.showSuccess(
         'Wallet Reset Completed!',
         targetBalance === 0
-          ? 'Wallet balance has been reset to ₹0.00 fresh state.'
-          : `Wallet balance set to ₹${targetBalance.toFixed(2)} to match Meta.`
+          ? `Wallet balance ₹0.00 reset ho gaya hai${resetClearHistory ? ' aur niche ki sabhi entries clear kar di gayi hain.' : '.'}`
+          : `Wallet balance ₹${targetBalance.toFixed(2)} set kiya gaya.`
       );
       setIsResetModalOpen(false);
       if (res.account) setAccount(res.account);
-      if (res.transaction) setTransactions((prev) => [res.transaction, ...prev]);
+      if (resetClearHistory) {
+        setTransactions(res.transaction ? [res.transaction] : []);
+      } else if (res.transaction) {
+        setTransactions((prev) => [res.transaction, ...prev]);
+      }
     } catch (err: any) {
       toast.showError('Reset Error', err?.message || 'Could not reset wallet balance.');
     } finally {
       setIsResetting(false);
+    }
+  };
+
+  const handleClearAllHistory = async () => {
+    setIsClearingHistory(true);
+    try {
+      const res = await clearWalletTransactionsApi(currentOrgId);
+      toast.showSuccess('Entries Cleared', `${res.clearedCount || 0} transaction records clear ho gayi hain.`);
+      setTransactions([]);
+      setIsClearHistoryModalOpen(false);
+    } catch (err: any) {
+      toast.showError('Clear Error', err?.message || 'Could not clear transaction entries.');
+    } finally {
+      setIsClearingHistory(false);
+    }
+  };
+
+  const handleDeleteSingleTx = async (txId: string) => {
+    setDeletingTxId(txId);
+    try {
+      await deleteWalletTransactionApi(currentOrgId, txId);
+      setTransactions((prev) => prev.filter((t) => t.id !== txId));
+      toast.showSuccess('Deleted', 'Transaction entry delete ho gayi.');
+    } catch (err: any) {
+      toast.showError('Delete Error', err?.message || 'Could not delete transaction entry.');
+    } finally {
+      setDeletingTxId(null);
+    }
+  };
+
+  const handleSaveAutoDelete = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingAutoDelete(true);
+    try {
+      const res = await updateWalletAutoDeleteApi({
+        organizationId: currentOrgId,
+        autoDeleteDays: Number(autoDeleteDays),
+        autoDeleteEnabled,
+      });
+      if (res.account) setAccount(res.account);
+      toast.showSuccess(
+        'Auto-Delete Settings Saved',
+        autoDeleteEnabled
+          ? `Entries ab ${autoDeleteDays} days purani hone par automatically delete hongi.`
+          : 'Auto-delete feature disable ho gaya.'
+      );
+      setIsAutoDeleteModalOpen(false);
+      loadWalletData();
+    } catch (err: any) {
+      toast.showError('Settings Error', err?.message || 'Could not update auto-delete settings.');
+    } finally {
+      setIsSavingAutoDelete(false);
+    }
+  };
+
+  const handlePurgeNow = async () => {
+    setIsPurgingNow(true);
+    try {
+      const res = await purgeWalletOldTransactionsApi(currentOrgId, autoDeleteDays);
+      toast.showSuccess('Auto-Clean Done', `${res.deletedCount || 0} purani entries delete kar di gayi hain.`);
+      loadWalletData();
+    } catch (err: any) {
+      toast.showError('Clean Error', err?.message || 'Could not purge old records.');
+    } finally {
+      setIsPurgingNow(false);
     }
   };
 
@@ -570,6 +667,32 @@ export const WalletPage: React.FC = () => {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {/* Auto-Delete Settings Badge & Button */}
+            <button
+              type="button"
+              onClick={() => setIsAutoDeleteModalOpen(true)}
+              className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border border-blue-200 dark:border-blue-800/80 bg-blue-50/70 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 text-xs font-bold hover:bg-blue-100 dark:hover:bg-blue-900/60 transition-colors cursor-pointer shadow-2xs"
+              title="Configure Auto-Delete Retention Settings for Transaction Entries"
+            >
+              <Clock className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+              <span>
+                Auto-Delete: {account?.autoDeleteEnabled !== false ? `${account?.autoDeleteDays || 30} Days` : 'Off'}
+              </span>
+              <Settings2 className="w-3 h-3 text-blue-500 ml-0.5" />
+            </button>
+
+            {/* Clear All Entries / Reset History Button */}
+            <button
+              type="button"
+              onClick={() => setIsClearHistoryModalOpen(true)}
+              disabled={transactions.length === 0}
+              className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border border-rose-200 dark:border-rose-800/80 bg-rose-50/70 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 text-xs font-bold hover:bg-rose-100 dark:hover:bg-rose-900/60 transition-colors cursor-pointer shadow-2xs disabled:opacity-40"
+              title="Clear all transaction entries from audit log"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-rose-500" />
+              <span>Clear History</span>
+            </button>
+
             {/* Filter buttons */}
             <div className="inline-flex p-1 rounded-xl bg-neutral-100 dark:bg-neutral-800 text-xs">
               <button
@@ -644,12 +767,13 @@ export const WalletPage: React.FC = () => {
                 <th className="py-3 px-4 text-center">Msg Count &amp; Rate</th>
                 <th className="py-3 px-4 text-right">Amount (₹)</th>
                 <th className="py-3 px-4 text-right">Balance After</th>
+                <th className="py-3 px-4 text-center">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800">
               {paginatedTransactions.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-8 text-center text-neutral-400">
+                  <td colSpan={7} className="py-8 text-center text-neutral-400">
                     <div className="space-y-1">
                       <Wallet className="w-8 h-8 text-neutral-300 dark:text-neutral-700 mx-auto" />
                       <p className="font-semibold text-xs text-neutral-600 dark:text-neutral-400">
@@ -738,6 +862,18 @@ export const WalletPage: React.FC = () => {
 
                       <td className="py-3 px-4 text-right whitespace-nowrap font-mono font-semibold text-xs text-neutral-700 dark:text-neutral-300">
                         ₹{tx.balanceAfter.toFixed(2)}
+                      </td>
+
+                      <td className="py-3 px-4 text-center whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteSingleTx(tx.id)}
+                          disabled={deletingTxId === tx.id}
+                          className="p-1.5 rounded-lg text-neutral-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer disabled:opacity-40"
+                          title="Delete this entry"
+                        >
+                          <Trash2 className={`w-3.5 h-3.5 ${deletingTxId === tx.id ? 'animate-spin' : ''}`} />
+                        </button>
                       </td>
                     </tr>
                   );
@@ -1036,6 +1172,29 @@ export const WalletPage: React.FC = () => {
                 </label>
               </div>
 
+              {/* Reset Entries / Deductions Checkbox (Recommended) */}
+              <div className="p-3 rounded-xl border border-rose-300 dark:border-rose-900/80 bg-rose-50/70 dark:bg-rose-950/40">
+                <label className="flex items-start space-x-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={resetClearHistory}
+                    onChange={(e) => setResetClearHistory(e.target.checked)}
+                    className="mt-0.5 rounded text-rose-600 focus:ring-rose-500 cursor-pointer"
+                  />
+                  <div>
+                    <span className="font-bold text-rose-900 dark:text-rose-200 block text-[11px] flex items-center space-x-1.5">
+                      <span>Niche ki sabhi Transaction Entries bhi reset/clear karein</span>
+                      <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-rose-200 dark:bg-rose-900 text-rose-900 dark:text-rose-200 font-extrabold uppercase">
+                        Recommended
+                      </span>
+                    </span>
+                    <span className="text-[10px] text-rose-700 dark:text-rose-300 block mt-0.5">
+                      Purani reconciliation aur campaign deduction entries table se hat jayengi aur list 100% fresh 00 ho jayegi.
+                    </span>
+                  </div>
+                </label>
+              </div>
+
               {/* Reason */}
               <div>
                 <label className="block text-[11px] font-bold text-neutral-700 dark:text-neutral-300 mb-1">
@@ -1093,6 +1252,186 @@ export const WalletPage: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Auto-Delete Retention Settings Modal */}
+      {isAutoDeleteModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fadeIn">
+          <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-3xl max-w-md w-full p-6 space-y-5 shadow-2xl">
+            <div className="flex items-center space-x-3 text-blue-600 dark:text-blue-400">
+              <div className="w-10 h-10 rounded-2xl bg-blue-100 dark:bg-blue-950/60 flex items-center justify-center shrink-0">
+                <Clock className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-neutral-900 dark:text-white">
+                  Auto-Delete Retention Settings
+                </h3>
+                <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                  Transactions &amp; Deductions Auto-Cleanup Policy
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleSaveAutoDelete} className="space-y-4 text-xs">
+              {/* Info Notice */}
+              <div className="p-3.5 rounded-2xl bg-blue-50/70 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800/60 text-blue-900 dark:text-blue-200 space-y-1 text-[11px]">
+                <div className="flex items-center space-x-1.5 font-bold">
+                  <Sparkles className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                  <span>Auto-Delete Kaise Kaam Karta Hai?</span>
+                </div>
+                <p>
+                  Jab aap broadcasts send karte hain, toh har message ka audit record yahan banta hai. Auto-delete enable hone par puraani entries automatically background me delete ho jaati hain bina aapka Live Balance affect kiye.
+                </p>
+              </div>
+
+              {/* Enable Toggle */}
+              <div className="p-3.5 rounded-2xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50/70 dark:bg-neutral-800/40 flex items-center justify-between">
+                <div>
+                  <span className="font-bold text-neutral-900 dark:text-white block text-xs">
+                    Enable Automatic Cleanup
+                  </span>
+                  <span className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                    Purani entries ko automatically schedule par delete karein
+                  </span>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={autoDeleteEnabled}
+                    onChange={(e) => setAutoDeleteEnabled(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-neutral-200 peer-focus:outline-hidden rounded-full peer dark:bg-neutral-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                </label>
+              </div>
+
+              {/* Retention Duration Selector */}
+              {autoDeleteEnabled && (
+                <div className="space-y-2 animate-fadeIn">
+                  <label className="block text-[11px] font-bold text-neutral-700 dark:text-neutral-300">
+                    Auto-Delete Retention Period (Kitne din purani entries delete karein):
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {[
+                      { days: 7, label: '7 Days', desc: 'Ultra Lean' },
+                      { days: 15, label: '15 Days', desc: 'Fast cleanup' },
+                      { days: 30, label: '30 Days', desc: 'Default / Rec.' },
+                      { days: 60, label: '60 Days', desc: '2 Months' },
+                      { days: 90, label: '90 Days', desc: 'Quarterly' },
+                      { days: 180, label: '180 Days', desc: 'Half-yearly' },
+                    ].map((opt) => (
+                      <button
+                        key={opt.days}
+                        type="button"
+                        onClick={() => setAutoDeleteDays(opt.days)}
+                        className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                          autoDeleteDays === opt.days
+                            ? 'border-blue-600 bg-blue-50 dark:bg-blue-950/50 text-blue-900 dark:text-blue-200 ring-2 ring-blue-500/20 font-bold'
+                            : 'border-neutral-200 dark:border-neutral-700 hover:bg-neutral-50 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-300'
+                        }`}
+                      >
+                        <div className="font-bold text-xs">{opt.label}</div>
+                        <div className="text-[10px] text-neutral-400 mt-0.5">{opt.desc}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Manual Purge Now Trigger */}
+              <div className="p-3 rounded-2xl bg-neutral-100 dark:bg-neutral-800 flex items-center justify-between text-xs">
+                <div>
+                  <span className="font-bold text-neutral-800 dark:text-neutral-200 block text-[11px]">
+                    Instant Cleanup
+                  </span>
+                  <span className="text-[10px] text-neutral-500">
+                    {autoDeleteDays} days se purani entries ko abhi delete karein
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handlePurgeNow}
+                  disabled={isPurgingNow}
+                  className="px-3 py-1.5 rounded-xl bg-neutral-200 dark:bg-neutral-700 hover:bg-neutral-300 dark:hover:bg-neutral-600 text-neutral-800 dark:text-neutral-200 font-bold text-xs transition-colors cursor-pointer disabled:opacity-50 flex items-center space-x-1"
+                >
+                  <Trash2 className={`w-3.5 h-3.5 ${isPurgingNow ? 'animate-spin' : ''}`} />
+                  <span>{isPurgingNow ? 'Cleaning...' : 'Clean Now'}</span>
+                </button>
+              </div>
+
+              <div className="flex items-center justify-end space-x-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsAutoDeleteModalOpen(false)}
+                  className="px-4 py-2 rounded-xl border border-neutral-200 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 font-semibold text-xs hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingAutoDelete}
+                  className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-xs transition-colors cursor-pointer disabled:opacity-50 flex items-center space-x-1.5"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  <span>{isSavingAutoDelete ? 'Saving...' : 'Save Auto-Delete Policy'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Clear All History Modal */}
+      {isClearHistoryModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fadeIn">
+          <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-3xl max-w-md w-full p-6 space-y-5 shadow-2xl">
+            <div className="flex items-center space-x-3 text-rose-600 dark:text-rose-400">
+              <div className="w-10 h-10 rounded-2xl bg-rose-100 dark:bg-rose-950/60 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-neutral-900 dark:text-white">
+                  Clear All Transaction Entries?
+                </h3>
+                <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                  Reset only audit log history ({transactions.length} entries)
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/60 text-rose-900 dark:text-rose-200 text-[11px] space-y-1">
+                <p className="font-bold">Dhyan dein:</p>
+                <p>
+                  Niche dikh rahi sabhi <strong>{transactions.length} entries</strong> permanently delete ho jayengi.
+                </p>
+                <p className="text-neutral-600 dark:text-neutral-300 mt-1">
+                  Aapka Live Balance (<strong>₹{balance.toFixed(2)}</strong>) bilkul safe rahega aur change nahi hoga.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-end space-x-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsClearHistoryModalOpen(false)}
+                  disabled={isClearingHistory}
+                  className="px-4 py-2 rounded-xl border border-neutral-200 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 font-semibold text-xs hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleClearAllHistory}
+                  disabled={isClearingHistory}
+                  className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shadow-xs transition-colors cursor-pointer disabled:opacity-50 flex items-center space-x-1.5"
+                >
+                  <Trash2 className={`w-3.5 h-3.5 ${isClearingHistory ? 'animate-spin' : ''}`} />
+                  <span>{isClearingHistory ? 'Clearing...' : 'Yes, Clear All Entries'}</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

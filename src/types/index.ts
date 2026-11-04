@@ -87,6 +87,8 @@ export interface UserProfile {
   adminLogoUrl?: string;
   adminContactPhone?: string;
   adminBrandName?: string;
+  customDomain?: string;
+  supportEmail?: string;
   loginPassword?: string;
   displayPassword?: string;
   managedByAdminId?: string;
@@ -98,6 +100,7 @@ export interface UserProfile {
   canAccessInbox?: boolean;
   canAccessDripCampaigns?: boolean;
   canAccessWallet?: boolean;
+  canAccessCrmLeads?: boolean;
   organizationId: string;
   createdAt: string;
   updatedAt: string;
@@ -112,6 +115,9 @@ export interface WalletAccount {
   totalSpent: number;
   currency: string;
   lowBalanceThreshold: number;
+  autoDeleteDays?: number;
+  autoDeleteEnabled?: boolean;
+  lastAutoCleanedAt?: string;
   updatedAt: string;
   createdAt: string;
 }
@@ -146,6 +152,20 @@ export interface CategoryPricing {
   updatedBy?: string;
 }
 
+export interface WhiteLabelBranding {
+  isCustomDomain: boolean;
+  domain?: string;
+  brandName: string;
+  logoUrl?: string;
+  faviconUrl?: string;
+  supportPhone?: string;
+  supportEmail?: string;
+  themeColor?: string;
+  organizationId?: string;
+  cnameVerified?: boolean;
+  targetCname: string;
+}
+
 export interface Organization {
   id: string;
   name: string;
@@ -156,6 +176,15 @@ export interface Organization {
   logoUrl?: string;
   contactPhone?: string;
   adminBrandName?: string;
+  customDomain?: string;
+  customBrandName?: string;
+  customLogoUrl?: string;
+  customFaviconUrl?: string;
+  supportPhone?: string;
+  supportEmail?: string;
+  themeColor?: string;
+  cnameVerified?: boolean;
+  cnameCheckedAt?: string;
   metaAppConfig?: OrganizationMetaConfig;
   subscription?: UserSubscription;
   createdAt: string;
@@ -623,4 +652,47 @@ export interface MetaConfigStatus {
   webhookUrl: string;
   webhookVerifyToken?: string;
   graphVersion: string;
+}
+
+export type LeadPipelineStage = 'new' | 'contacted' | 'qualified' | 'proposal' | 'won' | 'lost';
+export type LeadInteractionType = 'button_click' | 'text_reply' | 'inbound_chat';
+
+export interface CrmLeadNote {
+  id: string;
+  text: string;
+  authorName: string;
+  createdAt: string;
+}
+
+export interface CrmLead {
+  id: string;
+  organizationId: string;
+  customerName: string;
+  phone: string;
+  cleanPhone: string;
+  email?: string;
+  campaignId?: string;
+  campaignName?: string;
+  templateName?: string;
+  interactionType: LeadInteractionType;
+  buttonText?: string;
+  buttonPayload?: string;
+  replyText?: string;
+  stage: LeadPipelineStage;
+  dealValue?: number;
+  notes?: CrmLeadNote[];
+  assignedAgentId?: string;
+  assignedAgentName?: string;
+  lastInteractedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CrmLeadsSummary {
+  totalLeads: number;
+  buttonClicksCount: number;
+  textRepliesCount: number;
+  wonCount: number;
+  totalPipelineValue: number;
+  campaignsCount: number;
 }

@@ -17,8 +17,12 @@ import {
   X,
   Shield,
   FileText,
+  Globe,
+  Phone,
+  Mail,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
+import { useWhiteLabel } from '../context/WhiteLabelContext.tsx';
 import type { UserRole } from '../types/index.ts';
 import { CaptchaBox, generateCaptchaCode } from './CaptchaBox.tsx';
 import { PWAInstallButton } from './PWAInstallButton.tsx';
@@ -30,6 +34,7 @@ interface LoginPageProps {
 
 export const LoginPage: React.FC<LoginPageProps> = ({ onOpenLegal }) => {
   const { signInWithCredentials, dbConnected } = useAuth();
+  const { branding, isPreviewMode, activeDomain, resetPreview } = useWhiteLabel();
 
   const handleOpenLegal = (doc: 'privacy' | 'terms') => {
     if (onOpenLegal) {
@@ -253,23 +258,58 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onOpenLegal }) => {
       {/* Dynamic Animated Vector Background */}
       <LoginVectorBackground />
 
+      {/* White-Label Domain Test Preview Bar */}
+      {isPreviewMode && (
+        <div className="fixed top-0 left-0 right-0 z-50 bg-indigo-600 text-white px-4 py-2 text-xs font-semibold flex items-center justify-between shadow-lg">
+          <div className="flex items-center space-x-2 truncate mr-3">
+            <Globe className="w-4 h-4 shrink-0 text-indigo-200" />
+            <span className="truncate">
+              White-Label Preview: Domain <code className="bg-indigo-700/80 px-1.5 py-0.5 rounded text-[11px] font-mono">{activeDomain}</code> (Brand: <strong>{branding.brandName}</strong>)
+            </span>
+          </div>
+          <button
+            onClick={resetPreview}
+            className="px-2.5 py-1 rounded-md bg-white hover:bg-indigo-50 text-indigo-700 text-[11px] font-bold cursor-pointer transition-colors shrink-0 shadow-2xs"
+          >
+            Exit Preview
+          </button>
+        </div>
+      )}
+
       <div className="relative z-10 sm:mx-auto sm:w-full sm:max-w-md text-center space-y-3">
         <div className="w-16 h-16 rounded-2xl bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 p-2 mx-auto shadow-md flex items-center justify-center">
-          <img
-            src="/uploads/logo_org_9099268034.png"
-            alt="WABACLOUD Logo"
-            className="w-full h-full object-contain"
-            onError={(e) => {
-              (e.currentTarget as HTMLElement).style.display = 'none';
-            }}
-          />
+          {branding.logoUrl ? (
+            <img
+              src={branding.logoUrl}
+              alt={`${branding.brandName} Logo`}
+              className="w-full h-full object-contain"
+              onError={(e) => {
+                (e.currentTarget as HTMLElement).style.display = 'none';
+              }}
+            />
+          ) : (
+            <div className="w-full h-full rounded-xl bg-emerald-600 flex items-center justify-center text-white font-black text-xl">
+              {branding.brandName.charAt(0).toUpperCase()}
+            </div>
+          )}
         </div>
-        <h2 className="text-2xl font-bold tracking-tight text-neutral-900 dark:text-white">
-          WABACLOUD Portal
-        </h2>
-        <p className="text-xs text-neutral-500 dark:text-neutral-400">
-          Complete WhatsApp Business API Platform
-        </p>
+        <div>
+          <h2 className="text-2xl font-bold tracking-tight text-neutral-900 dark:text-white">
+            {branding.brandName} Portal
+          </h2>
+          <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-1">
+            {branding.isCustomDomain
+              ? `${branding.brandName} - WhatsApp Business Platform`
+              : 'Complete WhatsApp Business API Platform'}
+          </p>
+        </div>
+
+        {branding.isCustomDomain && (
+          <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-[11px] font-medium shadow-2xs">
+            <Globe className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+            <span>Dedicated Domain: <strong className="font-mono">{branding.domain || activeDomain}</strong></span>
+          </div>
+        )}
       </div>
 
       <div className="relative z-10 mt-8 sm:mx-auto sm:w-full sm:max-w-md">
@@ -513,6 +553,30 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onOpenLegal }) => {
 
         {/* Security assurance & Direct URLs */}
         <div className="mt-5 text-center space-y-2">
+          {(branding.supportPhone || branding.supportEmail) && (
+            <div className="flex items-center justify-center flex-wrap gap-x-3 gap-y-1 text-[11px] text-neutral-500 dark:text-neutral-400 pb-1">
+              <span>Admin Support:</span>
+              {branding.supportPhone && (
+                <a
+                  href={`tel:${branding.supportPhone}`}
+                  className="text-emerald-600 dark:text-emerald-400 font-semibold hover:underline inline-flex items-center space-x-1"
+                >
+                  <Phone className="w-3 h-3" />
+                  <span>{branding.supportPhone}</span>
+                </a>
+              )}
+              {branding.supportEmail && (
+                <a
+                  href={`mailto:${branding.supportEmail}`}
+                  className="text-emerald-600 dark:text-emerald-400 font-semibold hover:underline inline-flex items-center space-x-1"
+                >
+                  <Mail className="w-3 h-3" />
+                  <span>{branding.supportEmail}</span>
+                </a>
+              )}
+            </div>
+          )}
+
           <div className="text-xs text-neutral-500 dark:text-neutral-400 flex items-center justify-center space-x-2">
             <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
             <span>Meta Official API WhatsApp Marketing</span>

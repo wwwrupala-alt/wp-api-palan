@@ -93,7 +93,24 @@ import {
   handleGetPricing,
   handleUpdatePricing,
   handleResetWallet,
+  handleClearWalletTransactions,
+  handleDeleteWalletTransaction,
+  handleUpdateAutoDelete,
+  handlePurgeOldTransactions,
 } from './walletService.ts';
+import {
+  handleResolveWhiteLabel,
+  handleVerifyDnsCname,
+  handleUpdateAdminBranding,
+} from './whiteLabelService.ts';
+import {
+  handleGetCrmLeads,
+  handleUpdateCrmLead,
+  handleAddCrmLeadNote,
+  handleBulkUpdateStage,
+  handleDeleteCrmLead,
+  handleResetCrmLeads,
+} from './crmLeadsService.ts';
 
 // Initialize default accounts and persistent disk backups
 ensureDefaultAccounts().catch((err) => {
@@ -275,6 +292,9 @@ apiApp.get('/api/meta/media-proxy', async (req, res) => {
 });
 
 // Multi-Tenant Authentication & Master/Admin Routes
+apiApp.get('/api/whitelabel/resolve', handleResolveWhiteLabel);
+apiApp.post('/api/whitelabel/verify-dns', handleVerifyDnsCname);
+
 apiApp.get('/api/server-time', (req, res) => {
   res.json({ serverTime: new Date().toISOString(), timestamp: Date.now() });
 });
@@ -310,6 +330,7 @@ apiApp.put('/api/admin/users/:userId', handleUpdateAdminUser);
 apiApp.post('/api/admin/users/:userId/reset-password', handleResetAdminUserPassword);
 apiApp.delete('/api/admin/users/:userId', handleDeleteAdminUser);
 apiApp.post('/api/admin/impersonate', handleAdminImpersonate);
+apiApp.post('/api/admin/branding', handleUpdateAdminBranding);
 
 // Multi-Tenant Prepaid Wallet & Pricing Endpoints
 apiApp.get('/api/wallet', handleGetWallet);
@@ -317,6 +338,10 @@ apiApp.post('/api/wallet/recharge', handleRechargeWallet);
 apiApp.get('/api/wallet/pricing', handleGetPricing);
 apiApp.post('/api/wallet/pricing', handleUpdatePricing);
 apiApp.post('/api/wallet/reset', handleResetWallet);
+apiApp.post('/api/wallet/clear-transactions', handleClearWalletTransactions);
+apiApp.delete('/api/wallet/transactions/:id', handleDeleteWalletTransaction);
+apiApp.post('/api/wallet/auto-delete-settings', handleUpdateAutoDelete);
+apiApp.post('/api/wallet/purge-now', handlePurgeOldTransactions);
 
 // Meta Cloud API Routes
 apiApp.get('/api/meta/status', handleGetMetaStatus);
@@ -440,6 +465,15 @@ apiApp.post('/api/meta/accounts/:accountId/cascade-delete', async (req, res) => 
     res.status(500).json({ error: err.message || 'Error executing cascade account deletion' });
   }
 });
+
+// CRM Leads & Campaign Interactive Clicks / Replies Funnel
+apiApp.get('/api/crm/leads', handleGetCrmLeads);
+apiApp.post('/api/crm/leads/reset', handleResetCrmLeads);
+apiApp.delete('/api/crm/leads/reset', handleResetCrmLeads);
+apiApp.put('/api/crm/leads/:id', handleUpdateCrmLead);
+apiApp.post('/api/crm/leads/:id/notes', handleAddCrmLeadNote);
+apiApp.post('/api/crm/leads/bulk-stage', handleBulkUpdateStage);
+apiApp.delete('/api/crm/leads/:id', handleDeleteCrmLead);
 
 // Global Error Handler: Always return structured JSON instead of default HTML 500
 apiApp.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
