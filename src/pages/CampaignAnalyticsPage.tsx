@@ -2628,11 +2628,45 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
                               </span>
                             </div>
                             <p className="text-[11px] text-neutral-500">{event.description}</p>
-                            {event.details && (
-                              <pre className="text-[10px] font-mono p-2 rounded-xl bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300 overflow-x-auto">
-                                {event.details}
-                              </pre>
-                            )}
+                            {event.details && (() => {
+                              let parsedObj: any = null;
+                              try {
+                                parsedObj = typeof event.details === 'string' ? JSON.parse(event.details) : event.details;
+                              } catch {}
+
+                              const rawText = typeof event.details === 'string' ? event.details : JSON.stringify(event.details);
+                              const match = rawText.match(/["']?fbtrace_id["']?\s*[:=]\s*["']?([a-zA-Z0-9_-]+)["']?/i);
+                              const fbTraceId = parsedObj?.fbtrace_id || (match ? match[1] : null);
+
+                              return (
+                                <div className="space-y-1.5 mt-1.5">
+                                  {fbTraceId && (
+                                    <div className="flex items-center justify-between p-2 rounded-xl bg-rose-100 dark:bg-rose-950/70 border border-rose-300 dark:border-rose-800 text-[11px] text-rose-900 dark:text-rose-200">
+                                      <div className="flex items-center space-x-1.5 overflow-hidden">
+                                        <span className="font-bold text-[10px] uppercase tracking-wider bg-rose-200 dark:bg-rose-900 px-1.5 py-0.5 rounded text-rose-900 dark:text-rose-100 shrink-0">
+                                          Meta fbtrace_id
+                                        </span>
+                                        <span className="font-mono font-bold select-all truncate text-rose-800 dark:text-rose-200">
+                                          {fbTraceId}
+                                        </span>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() => copyToClipboard(fbTraceId, `fbtrace_${idx}`)}
+                                        className="px-2 py-1 rounded-lg bg-white dark:bg-neutral-800 border border-rose-200 dark:border-rose-700 hover:bg-neutral-50 dark:hover:bg-neutral-700 text-[10px] font-bold text-rose-700 dark:text-rose-300 flex items-center space-x-1 cursor-pointer shrink-0 shadow-2xs"
+                                        title="Copy Meta fbtrace_id for Meta Developer Support Ticket"
+                                      >
+                                        <Copy className="w-3 h-3" />
+                                        <span>{copiedId === `fbtrace_${idx}` ? 'Copied!' : 'Copy Trace ID'}</span>
+                                      </button>
+                                    </div>
+                                  )}
+                                  <pre className="text-[10px] font-mono p-2.5 rounded-xl bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 whitespace-pre-wrap break-all border border-neutral-200 dark:border-neutral-700/80 leading-relaxed overflow-x-auto">
+                                    {parsedObj ? JSON.stringify(parsedObj, null, 2) : event.details}
+                                  </pre>
+                                </div>
+                              );
+                            })()}
                           </div>
                         ))
                       ) : (
@@ -2644,7 +2678,14 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
                   </div>
 
                   {/* Failure Error Info with Actionable Diagnostics */}
-                  {selectedRecipientForModal.failureReason && (
+                  {selectedRecipientForModal.failureReason && (() => {
+                    const combinedErrorText = `${selectedRecipientForModal.failureReason || ''} ${
+                      selectedRecipientForModal.timeline?.map((t) => t.details || '').join(' ') || ''
+                    }`;
+                    const fbMatch = combinedErrorText.match(/["']?fbtrace_id["']?\s*[:=]\s*["']?([a-zA-Z0-9_-]+)["']?/i);
+                    const modalFbTrace = fbMatch ? fbMatch[1] : null;
+
+                    return (
                     <div className="p-4 rounded-2xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 text-xs text-red-900 dark:text-red-200 space-y-2.5">
                       <div className="flex items-center justify-between">
                         <p className="font-bold flex items-center space-x-1.5 text-red-700 dark:text-red-300">
@@ -2658,7 +2699,29 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
                         )}
                       </div>
 
-                      <div className="p-2.5 rounded-xl bg-white dark:bg-neutral-900 border border-red-200/70 dark:border-red-900/40 text-[11px] font-mono text-red-700 dark:text-red-300">
+                      {/* Prominent Meta fbtrace_id Banner */}
+                      {modalFbTrace && (
+                        <div className="flex items-center justify-between p-2.5 rounded-xl bg-red-100/80 dark:bg-red-950/80 border border-red-300 dark:border-red-800 text-[11px]">
+                          <div>
+                            <span className="font-bold text-[10px] uppercase text-red-800 dark:text-red-300 block">
+                              Meta Developer Trace ID (fbtrace_id)
+                            </span>
+                            <span className="font-mono font-bold text-red-900 dark:text-red-100 select-all break-all">
+                              {modalFbTrace}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => copyToClipboard(modalFbTrace, 'modal_fbtrace')}
+                            className="ml-2 px-2.5 py-1 rounded-lg bg-white dark:bg-neutral-800 border border-red-300 dark:border-red-700 hover:bg-neutral-50 text-[11px] font-bold text-red-700 dark:text-red-300 flex items-center space-x-1 cursor-pointer shrink-0 shadow-2xs"
+                          >
+                            <Copy className="w-3 h-3" />
+                            <span>{copiedId === 'modal_fbtrace' ? 'Copied!' : 'Copy fbtrace_id'}</span>
+                          </button>
+                        </div>
+                      )}
+
+                      <div className="p-2.5 rounded-xl bg-white dark:bg-neutral-900 border border-red-200/70 dark:border-red-900/40 text-[11px] font-mono text-red-700 dark:text-red-300 whitespace-pre-wrap break-all">
                         {selectedRecipientForModal.failureCode ? `[${selectedRecipientForModal.failureCode}] ` : ''}
                         {selectedRecipientForModal.failureReason}
                       </div>
@@ -2698,7 +2761,8 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
                         </div>
                       )}
                     </div>
-                  )}
+                  );
+                })()}
                 </div>
               )}
             </div>
