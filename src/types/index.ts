@@ -346,6 +346,7 @@ export interface CampaignRecipient {
   phoneNumber: string;
   phone?: string;
   whatsappMessageId?: string; // wamid
+  fbTraceId?: string; // Meta x-fb-trace-id / fbtrace_id
   messageType?: 'template' | 'text' | 'image' | 'video' | 'document' | 'interactive';
   templateName?: string;
   currentStatus: MessageStatus;

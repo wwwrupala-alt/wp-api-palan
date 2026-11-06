@@ -1802,6 +1802,8 @@ export async function executeCampaignDispatchCore(params: {
         } catch {}
       }
 
+      const traceId = resMeta.headers?.get('x-fb-trace-id') || resMeta.headers?.get('x-fb-rev') || dataMeta?.error?.fbtrace_id || '';
+
       if (resMeta.ok && !dataMeta.error) {
         sentCount++;
         const wamid = dataMeta.messages?.[0]?.id || `wamid_${Date.now()}_${cleanPhone}`;
@@ -1814,6 +1816,7 @@ export async function executeCampaignDispatchCore(params: {
           phoneNumber: `+${cleanPhone}`,
           customerName,
           whatsappMessageId: wamid,
+          fbTraceId: traceId || undefined,
           currentStatus: 'sent',
           sentAt: nowIso,
           timeline: [
@@ -1826,7 +1829,7 @@ export async function executeCampaignDispatchCore(params: {
               status: 'sent',
               timestamp: nowIso,
               description: 'Dispatched via Meta WhatsApp Cloud API',
-              details: `WAMID: ${wamid}`,
+              details: traceId ? `WAMID: ${wamid} | x-fb-trace-id: ${traceId}` : `WAMID: ${wamid}`,
             },
           ],
           createdAt: nowIso,
@@ -1852,6 +1855,7 @@ export async function executeCampaignDispatchCore(params: {
                 phoneNumber: cleanPhone,
                 customerName,
                 status: 'sent',
+                fbTraceId: traceId || undefined,
                 updatedAt: nowIso,
               },
               { merge: true }
@@ -1873,6 +1877,7 @@ export async function executeCampaignDispatchCore(params: {
           phoneNumber: `+${cleanPhone}`,
           customerName,
           currentStatus: 'failed',
+          fbTraceId: traceId || undefined,
           failedAt: nowIso,
           failureReason: errorMsg,
           failureCode: dataMeta.error?.code ? String(dataMeta.error.code) : undefined,
@@ -1881,6 +1886,7 @@ export async function executeCampaignDispatchCore(params: {
               status: 'failed',
               timestamp: nowIso,
               description: `Failed to deliver: ${errorMsg}`,
+              details: traceId ? `x-fb-trace-id: ${traceId}` : undefined,
             },
           ],
           createdAt: nowIso,

@@ -2719,8 +2719,9 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
                     const combinedErrorText = `${selectedRecipientForModal.failureReason || ''} ${
                       selectedRecipientForModal.timeline?.map((t) => t.details || '').join(' ') || ''
                     }`;
-                    const fbMatch = combinedErrorText.match(/["']?fbtrace_id["']?\s*[:=]\s*["']?([a-zA-Z0-9_-]+)["']?/i);
-                    const modalFbTrace = fbMatch ? fbMatch[1] : null;
+                    const fbMatch = combinedErrorText.match(/["']?fbtrace_id["']?\s*[:=]\s*["']?([a-zA-Z0-9_-]+)["']?/i) ||
+                                    combinedErrorText.match(/x-fb-trace-id\s*[:=]\s*([a-zA-Z0-9_-]+)/i);
+                    const modalFbTrace = selectedRecipientForModal.fbTraceId || (fbMatch ? fbMatch[1] : null);
 
                     return (
                     <div className="p-4 rounded-2xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 text-xs text-red-900 dark:text-red-200 space-y-2.5">
@@ -2736,12 +2737,12 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
                         )}
                       </div>
 
-                      {/* Prominent Meta fbtrace_id Banner */}
-                      {modalFbTrace && (
+                      {/* Prominent Meta fbtrace_id / x-fb-trace-id Banner */}
+                      {modalFbTrace ? (
                         <div className="flex items-center justify-between p-2.5 rounded-xl bg-red-100/80 dark:bg-red-950/80 border border-red-300 dark:border-red-800 text-[11px]">
                           <div>
                             <span className="font-bold text-[10px] uppercase text-red-800 dark:text-red-300 block">
-                              Meta Developer Trace ID (fbtrace_id)
+                              Meta Developer Trace ID (fbtrace_id / x-fb-trace-id)
                             </span>
                             <span className="font-mono font-bold text-red-900 dark:text-red-100 select-all break-all">
                               {modalFbTrace}
@@ -2755,6 +2756,32 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
                             <Copy className="w-3 h-3" />
                             <span>{copiedId === 'modal_fbtrace' ? 'Copied!' : 'Copy fbtrace_id'}</span>
                           </button>
+                        </div>
+                      ) : (
+                        /* Clear explanation when fbtrace_id is not included by Meta in asynchronous webhook callbacks */
+                        <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300/80 dark:border-amber-800 text-[11px] text-amber-900 dark:text-amber-200 space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-[10px] uppercase tracking-wider text-amber-800 dark:text-amber-300 flex items-center space-x-1">
+                              <span>Meta Webhook Reference (WAMID as Primary Trace Token)</span>
+                            </span>
+                            {selectedRecipientForModal.whatsappMessageId && (
+                              <button
+                                type="button"
+                                onClick={() => copyToClipboard(selectedRecipientForModal.whatsappMessageId!, 'modal_wamid_trace')}
+                                className="px-2 py-0.5 rounded-lg bg-white dark:bg-neutral-800 border border-amber-300 dark:border-amber-700 text-[10px] font-bold text-amber-800 dark:text-amber-300 flex items-center space-x-1 cursor-pointer shadow-2xs"
+                                title="Copy WAMID for Meta Support"
+                              >
+                                <Copy className="w-3 h-3" />
+                                <span>{copiedId === 'modal_wamid_trace' ? 'Copied!' : 'Copy WAMID'}</span>
+                              </button>
+                            )}
+                          </div>
+                          <p className="text-[10px] text-amber-800/90 dark:text-amber-300/90 leading-relaxed">
+                            Meta ke asynchronous delivery webhooks me raw <code className="font-mono bg-amber-100 dark:bg-amber-900/60 px-1 rounded">fbtrace_id</code> nahi aata, balki official <strong>WAMID</strong> hi Meta support ke liye primary root trace token hota hai.
+                          </p>
+                          <span className="font-mono font-bold text-[10px] text-amber-950 dark:text-amber-100 select-all break-all block bg-white/70 dark:bg-black/30 p-1.5 rounded-lg border border-amber-200 dark:border-amber-800/60">
+                            {selectedRecipientForModal.whatsappMessageId || 'Pending Assignment'}
+                          </span>
                         </div>
                       )}
 
