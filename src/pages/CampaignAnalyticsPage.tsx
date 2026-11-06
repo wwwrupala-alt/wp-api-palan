@@ -135,7 +135,7 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
   const [templates, setTemplates] = useState<Template[]>([]);
   const [previewRecipientId, setPreviewRecipientId] = useState<string>('default');
   const [highlightVariables, setHighlightVariables] = useState<boolean>(true);
-  const [isPreviewSectionCollapsed, setIsPreviewSectionCollapsed] = useState<boolean>(true);
+  const [isPreviewSectionCollapsed, setIsPreviewSectionCollapsed] = useState<boolean>(false);
   const [isFunnelSectionCollapsed, setIsFunnelSectionCollapsed] = useState<boolean>(true);
 
   // Load Templates in real-time
@@ -212,54 +212,91 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
     return match;
   }, [currentCampaign, templates]);
 
-  // Guaranteed fallback template structure so the preview is never empty
-  const effectiveTemplate = useMemo<Template>(() => {
-    if (campaignTemplate && campaignTemplate.components && campaignTemplate.components.length > 0) {
-      return campaignTemplate;
-    }
-    return {
-      id: currentCampaign?.templateId || 'tpl_auto',
-      name: currentCampaign?.templateName || 'WhatsApp Broadcast',
-      language: 'en_US',
-      category: (currentCampaign?.templateCategory as any) || 'MARKETING',
-      status: 'APPROVED',
-      whatsAppAccountId: currentCampaign?.whatsAppAccountId || '',
-      components: [
-        ...(currentCampaign?.headerMediaUrl
-          ? [
-              {
-                type: 'HEADER' as const,
-                format: 'IMAGE' as const,
-                example: { header_handle: [currentCampaign.headerMediaUrl] },
-              },
-            ]
-          : []),
-        {
-          type: 'BODY' as const,
-          text: 'Hello {{1}},\nThank you for choosing us!',
-          example: { body_text: [['Customer', 'Details']] },
-        },
-      ],
-      createdAt: currentCampaign?.createdAt || new Date().toISOString(),
-      updatedAt: currentCampaign?.createdAt || new Date().toISOString(),
-    };
-  }, [campaignTemplate, currentCampaign]);
-
-  // Selected recipient for preview
-  const activePreviewRecipient = useMemo(() => {
-    if (previewRecipientId === 'default') return null;
-    return recipients.find((r) => r.id === previewRecipientId) || null;
-  }, [previewRecipientId, recipients]);
-
   // Effective Media URL for Header
   const effectiveHeaderMediaUrl = useMemo(() => {
     return (
       currentCampaign?.headerMediaUrl ||
       currentCampaign?.variableValues?.header_media_url ||
       currentCampaign?.variableValues?.headerMediaUrl ||
+      currentCampaign?.variableValues?.media_url ||
+      currentCampaign?.scheduleData?.variableValues?.header_media_url ||
+      (currentCampaign?.template as any)?.headerMediaUrl ||
       ''
     );
   }, [currentCampaign]);
+
+  // Guaranteed fallback template structure so the preview is never empty
+  const effectiveTemplate = useMemo<Template>(() => {
+    const rawMedia = effectiveHeaderMediaUrl;
+
+    if (campaignTemplate && campaignTemplate.components && campaignTemplate.components.length > 0) {
+      // If template is found, check if it already has a HEADER component
+      const hasHeader = campaignTemplate.components.some((c) => c.type === 'HEADER');
+      if (!hasHeader && rawMedia) {
+        return {
+          ...campaignTemplate,
+          components: [
+            {
+              type: 'HEADER' as const,
+              format: 'IMAGE' as const,
+              example: { header_handle: [rawMedia] },
+            },
+            ...campaignTemplate.components,
+          ],
+        };
+      }
+      return campaignTemplate;
+    }
+
+    const fallbackBodyText =
+      (currentCampaign as any)?.messageBody ||
+      (currentCampaign as any)?.bodyText ||
+      (currentCampaign as any)?.templateBody ||
+      (currentCampaign as any)?.message ||
+      (currentCampaign?.name
+        ? `Hello {{1}},\nThank you for choosing us! This is an update regarding ${currentCampaign.name}. Let us know if you need any assistance.`
+        : 'Hello {{1}},\nThank you for choosing us! We are here to assist you with the best services.');
+
+    return {
+      id: currentCampaign?.templateId || 'tpl_auto',
+      name: currentCampaign?.templateName || currentCampaign?.name || 'WhatsApp Broadcast',
+      language: 'en_US',
+      category: (currentCampaign?.templateCategory as any) || 'MARKETING',
+      status: 'APPROVED',
+      whatsAppAccountId: currentCampaign?.whatsAppAccountId || '',
+      components: [
+        ...(rawMedia
+          ? [
+              {
+                type: 'HEADER' as const,
+                format: 'IMAGE' as const,
+                example: { header_handle: [rawMedia] },
+              },
+            ]
+          : []),
+        {
+          type: 'BODY' as const,
+          text: fallbackBodyText,
+          example: { body_text: [['Customer', 'Details']] },
+        },
+        {
+          type: 'BUTTONS' as const,
+          buttons: [
+            { type: 'QUICK_REPLY', text: 'Confirm / Reply' },
+            { type: 'URL', text: 'Visit Website', url: 'https://wabacloud.in' },
+          ],
+        },
+      ],
+      createdAt: currentCampaign?.createdAt || new Date().toISOString(),
+      updatedAt: currentCampaign?.createdAt || new Date().toISOString(),
+    };
+  }, [campaignTemplate, currentCampaign, effectiveHeaderMediaUrl]);
+
+  // Selected recipient for preview
+  const activePreviewRecipient = useMemo(() => {
+    if (previewRecipientId === 'default') return null;
+    return recipients.find((r) => r.id === previewRecipientId) || null;
+  }, [previewRecipientId, recipients]);
 
   // Effective Variables for Main Dashboard Preview (merging campaign & recipient variables)
   const effectivePreviewVariables = useMemo(() => {

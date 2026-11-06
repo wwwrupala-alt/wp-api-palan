@@ -294,7 +294,29 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
   // Resolved template for the campaign preview modal
   const previewTemplate = useMemo<Template | null>(() => {
     if (!previewCampaign) return null;
+    const mediaUrl =
+      previewCampaign.headerMediaUrl ||
+      previewCampaign.variableValues?.header_media_url ||
+      previewCampaign.variableValues?.headerMediaUrl ||
+      previewCampaign.variableValues?.media_url ||
+      previewCampaign.scheduleData?.variableValues?.header_media_url ||
+      '';
+
     if (previewCampaign.template && previewCampaign.template.components && previewCampaign.template.components.length > 0) {
+      const hasHeader = previewCampaign.template.components.some((c) => c.type === 'HEADER');
+      if (!hasHeader && mediaUrl) {
+        return {
+          ...previewCampaign.template,
+          components: [
+            {
+              type: 'HEADER' as const,
+              format: 'IMAGE' as const,
+              example: { header_handle: [mediaUrl] },
+            },
+            ...previewCampaign.template.components,
+          ],
+        };
+      }
       return previewCampaign.template;
     }
     const match = templates.find(
@@ -303,29 +325,45 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
         t.metaTemplateId === previewCampaign.templateId ||
         t.name.toLowerCase() === (previewCampaign.templateName || '').toLowerCase()
     );
-    if (match) return match;
+    if (match) {
+      const hasHeader = match.components?.some((c) => c.type === 'HEADER');
+      if (!hasHeader && mediaUrl) {
+        return {
+          ...match,
+          components: [
+            {
+              type: 'HEADER' as const,
+              format: 'IMAGE' as const,
+              example: { header_handle: [mediaUrl] },
+            },
+            ...(match.components || []),
+          ],
+        };
+      }
+      return match;
+    }
 
     // Fallback template
     return {
       id: previewCampaign.templateId || 'tpl_auto',
-      name: previewCampaign.templateName || 'WhatsApp Message',
+      name: previewCampaign.templateName || previewCampaign.name || 'WhatsApp Message',
       language: 'en_US',
       category: (previewCampaign.templateCategory as any) || 'MARKETING',
       status: 'APPROVED',
       whatsAppAccountId: previewCampaign.whatsAppAccountId || '',
       components: [
-        ...(previewCampaign.headerMediaUrl
+        ...(mediaUrl
           ? [
               {
                 type: 'HEADER' as const,
                 format: 'IMAGE' as const,
-                example: { header_handle: [previewCampaign.headerMediaUrl] },
+                example: { header_handle: [mediaUrl] },
               },
             ]
           : []),
         {
           type: 'BODY' as const,
-          text: 'Hello {{1}},\nThank you for choosing us!',
+          text: 'Hello {{1}},\nThank you for choosing us! We are here to provide you with the best experience.',
           example: { body_text: [['Customer', 'Details']] },
         },
       ],

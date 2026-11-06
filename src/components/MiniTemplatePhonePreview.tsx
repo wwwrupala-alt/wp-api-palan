@@ -20,8 +20,8 @@ import {
 } from 'lucide-react';
 import type { Template } from '../types/index.ts';
 
-interface MiniTemplatePhonePreviewProps {
-  template: Template;
+export interface MiniTemplatePhonePreviewProps {
+  template?: Template | null;
   businessName?: string;
   className?: string;
   compact?: boolean;
@@ -51,13 +51,54 @@ export const MiniTemplatePhonePreview: React.FC<MiniTemplatePhonePreviewProps> =
   const isLarge = effectiveSize === 'large';
   const isCompact = effectiveSize === 'compact';
 
-  const headerComp = template.components?.find((c) => c.type === 'HEADER');
-  const bodyComp = template.components?.find((c) => c.type === 'BODY');
-  const footerComp = template.components?.find((c) => c.type === 'FOOTER');
-  const buttonsComp = template.components?.find((c) => c.type === 'BUTTONS');
+  // Fallback safe business name
+  const safeBusinessName =
+    typeof businessName === 'string' && businessName.trim()
+      ? businessName.trim()
+      : 'CloudWABA Official';
 
-  // Format header media preview URL
-  const format = (headerComp?.format || 'TEXT').toUpperCase();
+  // Safe fallback template structure if template is null/undefined
+  const safeTemplate: Template = React.useMemo(() => {
+    if (template && typeof template === 'object') {
+      return template;
+    }
+    return {
+      id: 'tpl_auto_preview',
+      name: 'WhatsApp Broadcast',
+      language: 'en_US',
+      category: 'MARKETING',
+      status: 'APPROVED',
+      whatsAppAccountId: '',
+      components: [
+        {
+          type: 'BODY',
+          text: 'Hello {{1}},\nThank you for choosing us! We are here to assist you with the best services.',
+          example: { body_text: [['Valued Customer', 'WhatsApp Service']] },
+        },
+      ],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+  }, [template]);
+
+  const componentsList = Array.isArray(safeTemplate.components)
+    ? safeTemplate.components
+    : [];
+
+  // Extract components safely
+  let headerComp = componentsList.find((c) => c && c.type === 'HEADER');
+  let bodyComp = componentsList.find((c) => c && c.type === 'BODY');
+  const footerComp = componentsList.find((c) => c && c.type === 'FOOTER');
+  let buttonsComp = componentsList.find((c) => c && c.type === 'BUTTONS');
+
+  // Handle template-level buttons fallback if not inside a BUTTONS component
+  const rawTemplateButtons = (safeTemplate as any)?.buttons;
+  const effectiveButtons =
+    buttonsComp?.buttons && buttonsComp.buttons.length > 0
+      ? buttonsComp.buttons
+      : Array.isArray(rawTemplateButtons) && rawTemplateButtons.length > 0
+      ? rawTemplateButtons
+      : [];
 
   const [imageLoadError, setImageLoadError] = React.useState(false);
   const [useTemplateFallback, setUseTemplateFallback] = React.useState(false);
@@ -65,15 +106,17 @@ export const MiniTemplatePhonePreview: React.FC<MiniTemplatePhonePreviewProps> =
   React.useEffect(() => {
     setImageLoadError(false);
     setUseTemplateFallback(false);
-  }, [customMediaUrl, template?.id, template?.name]);
+  }, [customMediaUrl, safeTemplate?.id, safeTemplate?.name]);
 
+  // Resolve raw header handle or media URL
   const rawHeaderHandle =
     customMediaUrl ||
     customVariables?.header_media_url ||
     customVariables?.headerMediaUrl ||
     customVariables?.media_url ||
-    (template as any)?.headerMediaUrl ||
-    (template as any)?.mediaSampleUrl ||
+    customVariables?.mediaUrl ||
+    (safeTemplate as any)?.headerMediaUrl ||
+    (safeTemplate as any)?.mediaSampleUrl ||
     headerComp?.example?.header_handle?.[0] ||
     (headerComp as any)?.mediaSampleUrl ||
     (headerComp as any)?.exampleUrl ||
@@ -85,21 +128,27 @@ export const MiniTemplatePhonePreview: React.FC<MiniTemplatePhonePreviewProps> =
     (headerComp as any)?.exampleUrl ||
     '';
 
-  let rawActiveImageUrl = useTemplateFallback
-    ? templateSampleUrl
-    : (rawHeaderHandle || templateSampleUrl);
+  // Synthesize headerComp if missing but media URL or header text exists
+  const hasMediaUrl = Boolean(rawHeaderHandle && String(rawHeaderHandle).trim() !== '');
+
+  // Format header media preview URL
+  const format = (headerComp?.format || (hasMediaUrl ? 'IMAGE' : 'TEXT')).toUpperCase();
+
+  const rawActiveImageUrl = useTemplateFallback
+    ? templateSampleUrl || rawHeaderHandle
+    : rawHeaderHandle || templateSampleUrl;
 
   // If format is IMAGE:
   let activeImageUrl = rawActiveImageUrl;
 
-  if (format === 'IMAGE') {
+  if (format === 'IMAGE' || hasMediaUrl) {
     const trimmed = String(rawActiveImageUrl || '').trim();
     if (/^\d+$/.test(trimmed)) {
       activeImageUrl = `/api/meta/media-proxy?mediaId=${encodeURIComponent(trimmed)}`;
-    } else if (!trimmed || trimmed.startsWith('4:') || /^[0-9a-f]{8}-[0-9a-f]{4}/i.test(trimmed)) {
-      activeImageUrl = '/uploads/24X4_1793012982079.jpg';
     } else if (trimmed.includes('lookaside.fbsbx.com') || trimmed.includes('scontent.whatsapp.net')) {
       activeImageUrl = `/api/meta/media-proxy?url=${encodeURIComponent(trimmed)}`;
+    } else if (!trimmed || trimmed.startsWith('4:') || /^[0-9a-f]{8}-[0-9a-f]{4}/i.test(trimmed)) {
+      activeImageUrl = '/uploads/24X4_1793012982079.jpg';
     }
   }
 
@@ -108,15 +157,13 @@ export const MiniTemplatePhonePreview: React.FC<MiniTemplatePhonePreviewProps> =
     activeImageUrl.trim() !== '' &&
     !activeImageUrl.startsWith('4:') &&
     (activeImageUrl.startsWith('http') ||
-      activeImageUrl.startsWith('/uploads/') ||
-      activeImageUrl.startsWith('/assets/') ||
-      activeImageUrl.startsWith('/api/') ||
+      activeImageUrl.startsWith('/') ||
       activeImageUrl.startsWith('blob:') ||
       activeImageUrl.startsWith('data:'));
 
   // Substitute {{1}}, {{2}} in header text
   const getSubstitutedHeaderText = () => {
-    let text = headerComp?.text || 'Header Title';
+    let text = headerComp?.text || (safeTemplate as any)?.headerText || 'Important Update';
     if (customVariables) {
       text = text.replace(/\{\{(\d+)\}\}/g, (match, p1) => {
         const val =
@@ -156,18 +203,29 @@ export const MiniTemplatePhonePreview: React.FC<MiniTemplatePhonePreviewProps> =
   };
 
   const renderBodyContent = () => {
-    if (!bodyComp?.text) return 'Hello, thank you for contacting us!';
-    let rawText = bodyComp.text;
+    const rawBodyText =
+      bodyComp?.text ||
+      (safeTemplate as any)?.bodyText ||
+      (safeTemplate as any)?.body ||
+      (safeTemplate as any)?.messageBody ||
+      (safeTemplate as any)?.text ||
+      'Hello {{1}},\nThank you for choosing us! We are here to assist you with the best services.';
+
+    let rawText = rawBodyText;
     // Strip legacy auto-injected text so templates display cleanly as user intended
     rawText = rawText
       .replace(/\s*We truly value your business and are here to provide the best service\. Please let us know if you need any assistance\./g, '')
       .replace(/\s*Thank you for choosing us!/g, '');
 
+    if (!rawText.trim()) {
+      rawText = 'Hello {{1}},\nThank you for choosing us!';
+    }
+
     const sampleList: string[] =
-      bodyComp.example?.body_text?.[0] ||
-      (bodyComp.example as any)?.body_text_flat ||
+      bodyComp?.example?.body_text?.[0] ||
+      (bodyComp?.example as any)?.body_text_flat ||
       [];
-    const defaultSamples = ['Rahul', 'ORD-9842', 'Tomorrow', 'Track Order', '50% OFF'];
+    const defaultSamples = ['Valued Customer', 'ORD-9842', 'Tomorrow', 'Track Order', 'Special Offer'];
 
     if (!highlightVariables) {
       // Plain text replacement
@@ -211,6 +269,8 @@ export const MiniTemplatePhonePreview: React.FC<MiniTemplatePhonePreviewProps> =
     }
     return '10:45 AM';
   };
+
+  const showHeader = Boolean(headerComp || hasMediaUrl || (safeTemplate as any)?.headerText);
 
   return (
     <div
@@ -267,7 +327,7 @@ export const MiniTemplatePhonePreview: React.FC<MiniTemplatePhonePreviewProps> =
                 isLarge ? 'w-7 h-7 text-xs shadow-xs' : isCompact ? 'w-4 h-4 text-[7.5px]' : 'w-5 h-5 text-[9px]'
               }`}
             >
-              {businessName.slice(0, 2).toUpperCase() || 'WA'}
+              {(safeBusinessName.slice(0, 2) || 'WA').toUpperCase()}
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex items-center space-x-1">
@@ -276,7 +336,7 @@ export const MiniTemplatePhonePreview: React.FC<MiniTemplatePhonePreviewProps> =
                     isLarge ? 'text-xs' : isCompact ? 'text-[8.5px]' : 'text-[10px]'
                   }`}
                 >
-                  {businessName}
+                  {safeBusinessName}
                 </p>
                 <ShieldCheck
                   className={`text-emerald-300 shrink-0 ${
@@ -331,7 +391,7 @@ export const MiniTemplatePhonePreview: React.FC<MiniTemplatePhonePreviewProps> =
             }`}
           >
             {/* Header Rendering */}
-            {headerComp && (
+            {showHeader && (
               <div className="overflow-hidden rounded-md">
                 {format === 'TEXT' && (
                   <p
@@ -343,7 +403,7 @@ export const MiniTemplatePhonePreview: React.FC<MiniTemplatePhonePreviewProps> =
                   </p>
                 )}
 
-                {format === 'IMAGE' && (
+                {(format === 'IMAGE' || hasMediaUrl) && (
                   <div
                     className={`relative rounded-xl overflow-hidden bg-neutral-100 dark:bg-neutral-800 border border-neutral-200/60 dark:border-neutral-700 ${
                       isLarge ? 'h-44 sm:h-48' : 'aspect-16/10'
@@ -375,8 +435,8 @@ export const MiniTemplatePhonePreview: React.FC<MiniTemplatePhonePreviewProps> =
                           }`}
                         >
                           {rawHeaderHandle
-                            ? rawHeaderHandle.split('/').pop()?.split('?')[0] || 'Image Attachment'
-                            : 'Template Image Attachment'}
+                            ? String(rawHeaderHandle).split('/').pop()?.split('?')[0] || 'Image Attachment'
+                            : 'WhatsApp Header Attachment'}
                         </span>
                         <span className="text-[9px] text-neutral-500 dark:text-neutral-400 mt-0.5">
                           WhatsApp Header Photo
@@ -487,13 +547,13 @@ export const MiniTemplatePhonePreview: React.FC<MiniTemplatePhonePreviewProps> =
             </div>
 
             {/* WhatsApp CTA / Quick Reply Buttons */}
-            {buttonsComp?.buttons && buttonsComp.buttons.length > 0 && (
+            {effectiveButtons.length > 0 && (
               <div
                 className={`border-t border-neutral-100 dark:border-neutral-700/60 ${
                   isLarge ? 'pt-2 space-y-1.5' : isCompact ? 'pt-1 space-y-0.5' : 'pt-1.5 space-y-1'
                 }`}
               >
-                {buttonsComp.buttons.slice(0, 3).map((btn, idx) => {
+                {effectiveButtons.slice(0, 3).map((btn: any, idx: number) => {
                   const bType = (btn.type || 'QUICK_REPLY').toUpperCase();
                   return (
                     <div

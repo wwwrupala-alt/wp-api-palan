@@ -1914,9 +1914,9 @@ Rahul: 919974428034
                   {selectedTemplate ? (
                     <div className="w-full bg-white dark:bg-[#1f2c34] rounded-2xl rounded-tl-xs p-2.5 shadow-md space-y-1.5 text-xs border border-black/5 dark:border-white/5 animate-fadeIn">
                       {/* Header (Media / Text) */}
-                      {headerComponent && (
+                      {(headerComponent || campaignMediaPreviewUrl || campaignMediaUrl) && (
                         <div className="rounded-xl overflow-hidden bg-neutral-100 dark:bg-neutral-800/80">
-                          {headerComponent.format === 'IMAGE' && (
+                          {(!headerComponent || headerComponent.format === 'IMAGE') && (
                             (() => {
                               const rawImgUrl =
                                 campaignMediaPreviewUrl ||
