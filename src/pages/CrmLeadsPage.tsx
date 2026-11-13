@@ -35,8 +35,10 @@ import {
   Briefcase,
   RotateCcw,
   AlertTriangle,
+  Smartphone,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
+import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
 import { useToast } from '../context/ToastContext.tsx';
 import type {
   CrmLead,
@@ -103,6 +105,7 @@ export const CrmLeadsPage: React.FC<CrmLeadsPageProps> = ({
   onNavigateToInbox,
 }) => {
   const { organization, userProfile } = useAuth();
+  const { activeAccount, accounts } = useWhatsAppAccounts();
   const toast = useToast();
   const orgId = organization?.id || userProfile?.organizationId || 'org_lax_1';
 
@@ -122,6 +125,18 @@ export const CrmLeadsPage: React.FC<CrmLeadsPageProps> = ({
 
   // View Mode: Table vs Visual Pipeline (Kanban)
   const [viewMode, setViewMode] = useState<'table' | 'kanban'>('table');
+
+  // Account Filter (auto-synced with Header's selected WhatsApp number)
+  const [accountFilter, setAccountFilter] = useState<string>(activeAccount?.id || 'all');
+
+  useEffect(() => {
+    if (activeAccount?.id) {
+      setAccountFilter(activeAccount.id);
+      setSelectedCampaign('all');
+      setSelectedButton('all');
+      setSelectedLeadIds(new Set());
+    }
+  }, [activeAccount?.id]);
 
   // Filters
   const [selectedCampaign, setSelectedCampaign] = useState<string>('all');
@@ -152,12 +167,23 @@ export const CrmLeadsPage: React.FC<CrmLeadsPageProps> = ({
   const [showResetModal, setShowResetModal] = useState(false);
   const [resetting, setResetting] = useState(false);
 
+  const selectedFilterAccount = useMemo(() => {
+    if (accountFilter === 'all') return null;
+    return accounts.find((a) => a.id === accountFilter) || activeAccount || null;
+  }, [accountFilter, accounts, activeAccount]);
+
   // Fetch Leads
   const fetchLeads = async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams();
       params.append('orgId', orgId);
+      if (accountFilter !== 'all' && selectedFilterAccount) {
+        params.append('whatsAppAccountId', selectedFilterAccount.id);
+        if (selectedFilterAccount.phoneNumberId) {
+          params.append('phoneNumberId', selectedFilterAccount.phoneNumberId);
+        }
+      }
       if (selectedCampaign !== 'all') params.append('campaignId', selectedCampaign);
       if (selectedInteraction !== 'all') params.append('interactionType', selectedInteraction);
       if (selectedButton !== 'all') params.append('buttonText', selectedButton);
@@ -186,7 +212,7 @@ export const CrmLeadsPage: React.FC<CrmLeadsPageProps> = ({
 
   useEffect(() => {
     fetchLeads();
-  }, [selectedCampaign, selectedInteraction, selectedButton, selectedStage]);
+  }, [orgId, accountFilter, selectedFilterAccount?.id, selectedCampaign, selectedInteraction, selectedButton, selectedStage]);
 
   // Handle Search submit / debounce
   useEffect(() => {
@@ -688,6 +714,51 @@ export const CrmLeadsPage: React.FC<CrmLeadsPageProps> = ({
 
       {/* FILTER & SEARCH CONTROLS */}
       <div className="p-4 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 shadow-2xs space-y-3">
+        {accounts.length > 0 && (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-neutral-200 dark:border-neutral-800 text-xs">
+            <div className="flex items-center space-x-2">
+              <Smartphone className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <span className="font-bold text-neutral-800 dark:text-neutral-200">
+                Showing Leads For WhatsApp Number:
+              </span>
+              {selectedFilterAccount ? (
+                <span className="px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 font-semibold">
+                  {selectedFilterAccount.displayPhoneNumber} ({selectedFilterAccount.verifiedName})
+                </span>
+              ) : (
+                <span className="px-2 py-0.5 rounded-full bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 font-semibold">
+                  All WhatsApp Numbers
+                </span>
+              )}
+            </div>
+
+            <select
+              value={accountFilter}
+              onChange={(e) => {
+                setAccountFilter(e.target.value);
+                setSelectedCampaign('all');
+                setSelectedButton('all');
+                setSelectedLeadIds(new Set());
+              }}
+              className="px-3 py-1.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 font-semibold text-xs cursor-pointer"
+            >
+              {activeAccount && (
+                <option value={activeAccount.id}>
+                  Selected: {activeAccount.displayPhoneNumber} ({activeAccount.verifiedName})
+                </option>
+              )}
+              {accounts
+                .filter((acc) => acc.id !== activeAccount?.id)
+                .map((acc) => (
+                  <option key={acc.id} value={acc.id}>
+                    {acc.displayPhoneNumber} - {acc.verifiedName}
+                  </option>
+                ))}
+              <option value="all">🌐 All WhatsApp Numbers</option>
+            </select>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-xs">
           {/* 1. Campaign Filter */}
           <div>

@@ -3186,9 +3186,12 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
         console.warn('[Webhook] processIncomingCustomerReply error:', err);
       });
 
-      // Automatically capture & update in CRM Leads & Retargeting Funnel with matched Campaign metadata
+      // Automatically capture & update in CRM Leads & Retargeting Funnel with matched Campaign & WhatsApp Number metadata
       await recordCrmLeadFromInteraction({
         organizationId: targetOrgId,
+        whatsAppAccountId: matchedAccount?.id || phoneNumberId,
+        phoneNumberId: phoneNumberId || matchedAccount?.phoneNumberId,
+        displayPhoneNumber: matchedAccount?.displayPhoneNumber,
         phone: `+${cleanPhone}`,
         customerName: senderName,
         interactionType: isButtonClick ? 'button_click' : 'text_reply',

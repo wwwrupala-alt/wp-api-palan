@@ -115,6 +115,9 @@ async function loadOrgLeadsFromFirestore(orgId: string, forceRefresh = false): P
  */
 export async function recordCrmLeadFromInteraction(params: {
   organizationId: string;
+  whatsAppAccountId?: string;
+  phoneNumberId?: string;
+  displayPhoneNumber?: string;
   phone: string;
   customerName?: string;
   interactionType: LeadInteractionType;
@@ -127,6 +130,9 @@ export async function recordCrmLeadFromInteraction(params: {
 }): Promise<CrmLead> {
   const {
     organizationId,
+    whatsAppAccountId,
+    phoneNumberId,
+    displayPhoneNumber,
     phone,
     customerName,
     interactionType,
@@ -141,10 +147,16 @@ export async function recordCrmLeadFromInteraction(params: {
   const cleanPhone = phone.replace(/[^0-9]/g, '');
   const orgMap = await loadOrgLeadsFromFirestore(organizationId);
 
-  // Check if lead with this phone already exists
+  // Check if lead with this phone (and same WhatsApp number when specified) already exists
   let existingLead: CrmLead | undefined;
   for (const lead of orgMap.values()) {
-    if (phonesMatch(lead.cleanPhone || lead.phone, cleanPhone)) {
+    if (!phonesMatch(lead.cleanPhone || lead.phone, cleanPhone)) continue;
+    const sameOrUnassignedAccount =
+      (!lead.phoneNumberId && !lead.whatsAppAccountId) ||
+      (phoneNumberId && (lead.phoneNumberId === phoneNumberId || lead.whatsAppAccountId === phoneNumberId)) ||
+      (whatsAppAccountId && (lead.whatsAppAccountId === whatsAppAccountId || lead.phoneNumberId === whatsAppAccountId));
+
+    if (sameOrUnassignedAccount) {
       existingLead = lead;
       break;
     }
@@ -154,6 +166,9 @@ export async function recordCrmLeadFromInteraction(params: {
 
   if (existingLead) {
     existingLead.interactionType = interactionType;
+    if (whatsAppAccountId) existingLead.whatsAppAccountId = whatsAppAccountId;
+    if (phoneNumberId) existingLead.phoneNumberId = phoneNumberId;
+    if (displayPhoneNumber) existingLead.displayPhoneNumber = displayPhoneNumber;
     if (buttonText) existingLead.buttonText = buttonText;
     if (buttonPayload) existingLead.buttonPayload = buttonPayload;
     if (replyText) existingLead.replyText = replyText;
@@ -190,7 +205,8 @@ export async function recordCrmLeadFromInteraction(params: {
   }
 
   // Create brand new lead
-  const newLeadId = `lead_${cleanPhone}_${Date.now().toString(36)}`;
+  const accSuffix = (phoneNumberId || whatsAppAccountId || 'wa').slice(-6);
+  const newLeadId = `lead_${cleanPhone}_${accSuffix}_${Date.now().toString(36)}`;
   let initialStage: LeadPipelineStage = 'new';
   if (interactionType === 'button_click') {
     const lowerBtn = (buttonText || '').toLowerCase();
@@ -204,6 +220,9 @@ export async function recordCrmLeadFromInteraction(params: {
   const newLead: CrmLead = cleanUndefined({
     id: newLeadId,
     organizationId,
+    whatsAppAccountId,
+    phoneNumberId,
+    displayPhoneNumber,
     customerName: customerName || `+${cleanPhone}`,
     phone: phone.startsWith('+') ? phone : `+${cleanPhone}`,
     cleanPhone,
@@ -248,12 +267,35 @@ export async function recordCrmLeadFromInteraction(params: {
 export async function handleGetCrmLeads(req: Request, res: Response): Promise<void> {
   try {
     const orgId = (req.headers['x-organization-id'] as string) || (req.query.orgId as string) || 'org_lax_1';
-    const { campaignId, interactionType, buttonText, stage, search, refresh } = req.query;
+    const {
+      campaignId,
+      interactionType,
+      buttonText,
+      stage,
+      search,
+      refresh,
+      whatsAppAccountId,
+      phoneNumberId,
+    } = req.query;
 
     const orgMap = await loadOrgLeadsFromFirestore(orgId, refresh === 'true');
     let leads = Array.from(orgMap.values());
 
-    // Collect all campaigns and distinct button texts across all leads
+    // Scope by selected WhatsApp number / account if requested
+    const targetAccId = typeof whatsAppAccountId === 'string' && whatsAppAccountId !== 'all' ? whatsAppAccountId : '';
+    const targetPhoneId = typeof phoneNumberId === 'string' && phoneNumberId !== 'all' ? phoneNumberId : '';
+
+    if (targetAccId || targetPhoneId) {
+      leads = leads.filter((l) => {
+        const lAccId = l.whatsAppAccountId || '';
+        const lPhoneId = l.phoneNumberId || '';
+        if (targetAccId && (lAccId === targetAccId || lPhoneId === targetAccId)) return true;
+        if (targetPhoneId && (lPhoneId === targetPhoneId || lAccId === targetPhoneId)) return true;
+        return false;
+      });
+    }
+
+    // Collect all campaigns and distinct button texts across the scoped leads
     const campaignsSet = new Set<string>();
     const buttonsSet = new Set<string>();
 

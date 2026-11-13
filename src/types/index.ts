@@ -668,6 +668,9 @@ export interface CrmLeadNote {
 export interface CrmLead {
   id: string;
   organizationId: string;
+  whatsAppAccountId?: string;
+  phoneNumberId?: string;
+  displayPhoneNumber?: string;
   customerName: string;
   phone: string;
   cleanPhone: string;

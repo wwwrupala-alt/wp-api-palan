@@ -181,7 +181,7 @@ const WhatsAppAccountsContext = createContext<WhatsAppAccountsContextType | unde
 export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { organization, currentUser, userProfile } = useAuth();
   const [accounts, setAccounts] = useState<WhatsAppAccount[]>([]);
-  const [activeAccount, setActiveAccount] = useState<WhatsAppAccount | null>(null);
+  const [activeAccount, setActiveAccountState] = useState<WhatsAppAccount | null>(null);
   const [loading, setLoading] = useState(true);
   const [metaStatus, setMetaStatus] = useState<MetaConfigStatus | null>(null);
 
@@ -205,6 +205,20 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
         ? `org_${currentUser.uid}`
         : 'org_default')
     );
+  };
+
+  const setActiveAccount = (account: WhatsAppAccount | null) => {
+    setActiveAccountState(account);
+    const effectiveOrgId = getEffectiveOrgId();
+    if (effectiveOrgId) {
+      try {
+        if (account?.id) {
+          localStorage.setItem(`active_wa_account_id_${effectiveOrgId}`, account.id);
+        } else {
+          localStorage.removeItem(`active_wa_account_id_${effectiveOrgId}`);
+        }
+      } catch {}
+    }
   };
 
   const fetchMetaStatus = async () => {
@@ -279,13 +293,13 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
     const effectiveOrgId = getEffectiveOrgId();
     if (!currentUser || !effectiveOrgId) {
       setAccounts([]);
-      setActiveAccount(null);
+      setActiveAccountState(null);
       setLoading(false);
       return;
     }
 
     setAccounts([]);
-    setActiveAccount(null);
+    setActiveAccountState(null);
     setLoading(true);
 
     const accountsPath = `organizations/${effectiveOrgId}/whatsappAccounts`;
@@ -298,6 +312,8 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
         snapshot.forEach((docSnap) => {
           list.push({ id: docSnap.id, ...(docSnap.data() as Omit<WhatsAppAccount, 'id'>) });
         });
+        list.sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
+
         if (list.length > 0) {
           try {
             localStorage.setItem(`cached_wa_accounts_${effectiveOrgId}`, JSON.stringify(list));
@@ -305,8 +321,8 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
         }
         setAccounts(list);
 
-        // Keep active account selected or pick first connected
-        setActiveAccount((prev) => {
+        // Keep active account selected or restore last selected from localStorage
+        setActiveAccountState((prev) => {
           if (prev) {
             const found = list.find((a) => a.id === prev.id);
             if (found) {
@@ -326,6 +342,15 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
               return found;
             }
           }
+
+          try {
+            const savedId = localStorage.getItem(`active_wa_account_id_${effectiveOrgId}`);
+            if (savedId) {
+              const savedMatch = list.find((a) => a.id === savedId || a.phoneNumberId === savedId);
+              if (savedMatch) return savedMatch;
+            }
+          } catch {}
+
           return list.find((a) => a.connectionStatus === 'connected') || list[0] || null;
         });
 
@@ -366,7 +391,17 @@ export const WhatsAppAccountsProvider: React.FC<{ children: React.ReactNode }> =
         }
 
         setAccounts(fallbackAccounts);
-        setActiveAccount((prev) => prev || fallbackAccounts.find((a) => a.connectionStatus === 'connected') || fallbackAccounts[0]);
+        setActiveAccountState((prev) => {
+          if (prev) return prev;
+          try {
+            const savedId = localStorage.getItem(`active_wa_account_id_${effectiveOrgId}`);
+            if (savedId) {
+              const savedMatch = fallbackAccounts.find((a) => a.id === savedId || a.phoneNumberId === savedId);
+              if (savedMatch) return savedMatch;
+            }
+          } catch {}
+          return fallbackAccounts.find((a) => a.connectionStatus === 'connected') || fallbackAccounts[0];
+        });
         setLoading(false);
       }
     );
