@@ -2827,8 +2827,14 @@ export async function correlateInboundReplyToCampaignsAndDrips(
   organizationId: string,
   cleanPhone: string,
   replyText: string,
-  timestampSeconds?: number | string
-) {
+  timestampSeconds?: number | string,
+  options?: {
+    isButtonClick?: boolean;
+    buttonText?: string;
+    buttonPayload?: string;
+  }
+): Promise<{ campaignId: string; campaignName: string; templateName?: string } | null> {
+  let matchedCampaignInfo: { campaignId: string; campaignName: string; templateName?: string } | null = null;
   try {
     const nowIso = new Date().toISOString();
     const eventTimeIso = timestampSeconds
@@ -2842,6 +2848,9 @@ export async function correlateInboundReplyToCampaignsAndDrips(
     // Sort recent first
     campList.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
 
+    const isBtn = Boolean(options?.isButtonClick);
+    const btnDisplay = (options?.buttonText || replyText || '').slice(0, 60);
+
     for (const camp of campList.slice(0, 30)) {
       const campId = camp.id;
       const recsSnap = await getDocs(collection(serverDb, `organizations/${organizationId}/campaigns/${campId}/recipients`));
@@ -2851,10 +2860,37 @@ export async function correlateInboundReplyToCampaignsAndDrips(
       for (const rDoc of recsSnap.docs) {
         const rData: any = rDoc.data();
         const rPhone = String(rData.phoneNumber || '').replace(/[^0-9]/g, '');
-        if (rPhone === cleanPhone || rPhone.endsWith(cleanPhone) || cleanPhone.endsWith(rPhone)) {
+        const isPhoneMatch =
+          rPhone === cleanPhone ||
+          rPhone.endsWith(cleanPhone) ||
+          cleanPhone.endsWith(rPhone) ||
+          (rPhone.length >= 10 && cleanPhone.length >= 10 && rPhone.slice(-10) === cleanPhone.slice(-10));
+
+        if (isPhoneMatch) {
           recipientMatched = true;
+          if (!matchedCampaignInfo) {
+            matchedCampaignInfo = {
+              campaignId: campId,
+              campaignName: camp.name || camp.templateName || 'WhatsApp Campaign',
+              templateName: camp.templateName,
+            };
+          }
 
           const existingTimeline: any[] = Array.isArray(rData.timeline) ? rData.timeline : [];
+          const timelineEntry = isBtn
+            ? {
+                status: 'replied',
+                timestamp: eventTimeIso,
+                description: `Button clicked: "${btnDisplay}"`,
+                details: `Button clicked: ${options?.buttonText || replyText || ''}`,
+              }
+            : {
+                status: 'replied',
+                timestamp: eventTimeIso,
+                description: `Customer read & replied: "${(replyText || '').slice(0, 60)}"`,
+                details: replyText || '',
+              };
+
           const updateFields: any = {
             currentStatus: 'read',
             readAt: rData.readAt || eventTimeIso,
@@ -2862,14 +2898,7 @@ export async function correlateInboundReplyToCampaignsAndDrips(
             hasReplied: true,
             repliedAt: rData.repliedAt || eventTimeIso,
             updatedAt: nowIso,
-            timeline: [
-              ...existingTimeline,
-              {
-                status: 'read',
-                timestamp: eventTimeIso,
-                description: `Customer read & replied: "${(replyText || '').slice(0, 60)}"`,
-              },
-            ],
+            timeline: [...existingTimeline, timelineEntry],
           };
 
           await updateDoc(rDoc.ref, updateFields).catch(() => {});
@@ -2893,6 +2922,7 @@ export async function correlateInboundReplyToCampaignsAndDrips(
         let readCount = 0;
         let failedCount = 0;
         let repliedCount = 0;
+        let buttonClicksCount = 0;
         let totalCount = 0;
 
         refreshedRecsSnap.forEach((d) => {
@@ -2906,6 +2936,12 @@ export async function correlateInboundReplyToCampaignsAndDrips(
           }
           if (r.currentStatus === 'failed') failedCount++;
           if (r.hasReplied || r.repliedAt) repliedCount++;
+          if (
+            Array.isArray(r.timeline) &&
+            r.timeline.some((t: any) => t.details?.includes('Button clicked') || t.description?.includes('Button'))
+          ) {
+            buttonClicksCount++;
+          }
         });
 
         const deliveryRate = totalCount > 0 ? Number(((deliveredCount / totalCount) * 100).toFixed(1)) : 0;
@@ -2921,6 +2957,7 @@ export async function correlateInboundReplyToCampaignsAndDrips(
             read: readCount,
             failed: failedCount,
             replied: repliedCount,
+            buttonClicks: buttonClicksCount,
             deliveryRate,
             readRate,
             failureRate,
@@ -2992,6 +3029,7 @@ export async function correlateInboundReplyToCampaignsAndDrips(
   } catch (err) {
     console.warn('[correlateInboundReplyToCampaignsAndDrips] Error:', err);
   }
+  return matchedCampaignInfo;
 }
 
 // Helper: Process incoming WhatsApp messages, persist to Firestore Inbox and trigger active Bot Flow
@@ -3119,35 +3157,47 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
         status: 'success',
       });
 
-      // Correlate with campaign delivery: mark recipient as replied and read in real-time
-      correlateInboundReplyToCampaignsAndDrips(
+      // Correlate with campaign delivery: mark recipient as replied, button-clicked & read in real-time
+      const isButtonClick = msg.type === 'button' || msg.type === 'interactive';
+      const matchedCampaign = await correlateInboundReplyToCampaignsAndDrips(
         targetOrgId,
         cleanPhone,
         textBody,
-        msg.timestamp
+        msg.timestamp,
+        {
+          isButtonClick,
+          buttonText: isButtonClick ? textBody : undefined,
+          buttonPayload: interactiveButtonId || undefined,
+        }
       ).catch((err) => {
         console.warn('[Webhook] correlateInboundReplyToCampaignsAndDrips error:', err);
+        return null;
       });
 
-      processIncomingCustomerReply({
+      await processIncomingCustomerReply({
         fromPhone: cleanPhone,
         messageText: textBody,
         timestampSeconds: msg.timestamp,
         wamid: msg.id,
         organizationId: targetOrgId,
+        isButtonClick,
+        buttonText: isButtonClick ? textBody : undefined,
       }).catch((err) => {
         console.warn('[Webhook] processIncomingCustomerReply error:', err);
       });
 
-      // Automatically capture & update in CRM Leads & Retargeting Funnel
-      recordCrmLeadFromInteraction({
+      // Automatically capture & update in CRM Leads & Retargeting Funnel with matched Campaign metadata
+      await recordCrmLeadFromInteraction({
         organizationId: targetOrgId,
         phone: `+${cleanPhone}`,
         customerName: senderName,
-        interactionType: (msg.type === 'button' || msg.type === 'interactive') ? 'button_click' : 'text_reply',
-        buttonText: (msg.type === 'button' || msg.type === 'interactive') ? textBody : undefined,
+        interactionType: isButtonClick ? 'button_click' : 'text_reply',
+        buttonText: isButtonClick ? textBody : undefined,
         buttonPayload: interactiveButtonId || undefined,
-        replyText: (msg.type !== 'button' && msg.type !== 'interactive') ? textBody : undefined,
+        replyText: !isButtonClick ? textBody : undefined,
+        campaignId: matchedCampaign?.campaignId,
+        campaignName: matchedCampaign?.campaignName,
+        templateName: matchedCampaign?.templateName,
       }).catch((err) => {
         console.warn('[Webhook] recordCrmLeadFromInteraction error:', err);
       });

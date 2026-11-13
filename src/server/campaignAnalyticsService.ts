@@ -429,10 +429,21 @@ export async function processIncomingCustomerReply(params: {
   timestampSeconds?: number | string;
   wamid?: string;
   organizationId?: string;
+  isButtonClick?: boolean;
+  buttonText?: string;
 }): Promise<{ correlated: boolean; recipient?: CampaignRecipient }> {
-  const { fromPhone, messageText, timestampSeconds, organizationId } = params;
+  const { fromPhone, messageText, timestampSeconds, organizationId, isButtonClick, buttonText } = params;
   const cleanPhone = fromPhone.replace(/[^0-9]/g, '');
-  const list = phoneIndex.get(cleanPhone) || [];
+  let list = phoneIndex.get(cleanPhone) || [];
+  if (list.length === 0 && cleanPhone.length >= 10) {
+    const suffix = cleanPhone.slice(-10);
+    for (const [key, val] of phoneIndex.entries()) {
+      if (key.length >= 10 && key.slice(-10) === suffix && val.length > 0) {
+        list = val;
+        break;
+      }
+    }
+  }
 
   if (list.length === 0) {
     return { correlated: false };
@@ -447,14 +458,21 @@ export async function processIncomingCustomerReply(params: {
 
   recipient.hasReplied = true;
   recipient.repliedAt = recipient.repliedAt || eventTimeIso;
+  if (recipient.currentStatus !== 'read') {
+    recipient.currentStatus = 'read';
+    recipient.readAt = recipient.readAt || eventTimeIso;
+    recipient.deliveredAt = recipient.deliveredAt || eventTimeIso;
+  }
   recipient.updatedAt = nowIso;
 
-  // Add reply event to timeline
+  const displayBody = (buttonText || messageText || '').slice(0, 80);
   recipient.timeline.push({
     status: 'replied',
     timestamp: eventTimeIso,
-    description: `Customer Replied: "${messageText.slice(0, 80)}${messageText.length > 80 ? '...' : ''}"`,
-    details: messageText,
+    description: isButtonClick
+      ? `Button clicked: "${displayBody}"`
+      : `Customer Replied: "${displayBody}${(messageText || '').length > 80 ? '...' : ''}"`,
+    details: isButtonClick ? `Button clicked: ${buttonText || messageText}` : messageText,
   });
 
   if (recipient.organizationId || organizationId) {
@@ -651,17 +669,31 @@ export async function reconcileAndGetCampaignAnalytics(
         } catch {}
       }
 
-      // 2. Cross-check inbox messages: if customer sent a reply, mark hasReplied and read
+      // 2. Cross-check inbound messages in Firestore: if customer replied or clicked a button, mark hasReplied and read
       if (!r.hasReplied && r.phoneNumber) {
         const cleanPhone = String(r.phoneNumber).replace(/[^0-9]/g, '');
+        const cleanSuffix = cleanPhone.length >= 10 ? cleanPhone.slice(-10) : cleanPhone;
+        const sentTimeMs = r.sentAt ? new Date(r.sentAt).getTime() : (r.createdAt ? new Date(r.createdAt).getTime() : 0);
         try {
-          const inboxCol = collection(serverDb, `organizations/${targetOrgId}/inbox`);
-          const inSnap = await getDocs(inboxCol).catch(() => null);
+          const messagesCol = collection(serverDb, `organizations/${targetOrgId}/messages`);
+          const inSnap = await getDocs(messagesCol).catch(() => null);
           if (inSnap && !inSnap.empty) {
             for (const inDoc of inSnap.docs) {
               const inData = inDoc.data() as any;
-              const inPhone = String(inData.customerPhone || inData.from || '').replace(/[^0-9]/g, '');
-              if (inPhone === cleanPhone || inPhone.endsWith(cleanPhone) || cleanPhone.endsWith(inPhone)) {
+              if (inData.direction !== 'inbound') continue;
+              const inPhone = String(inData.contactId || inData.customerPhone || inData.from || '').replace(/[^0-9]/g, '');
+              const inSuffix = inPhone.length >= 10 ? inPhone.slice(-10) : inPhone;
+              const phoneMatched =
+                inPhone === cleanPhone ||
+                inPhone.endsWith(cleanPhone) ||
+                cleanPhone.endsWith(inPhone) ||
+                (cleanSuffix.length === 10 && inSuffix === cleanSuffix);
+              const msgTimeMs = inData.timestamp ? new Date(inData.timestamp).getTime() : 0;
+              const isAfterCampaign = !sentTimeMs || !msgTimeMs || msgTimeMs >= sentTimeMs - 60000;
+
+              if (phoneMatched && isAfterCampaign) {
+                const isBtn = inData.messageType === 'button' || inData.messageType === 'interactive';
+                const msgBody = inData.body || inData.text || 'Reply';
                 r.hasReplied = true;
                 r.repliedAt = r.repliedAt || inData.timestamp || nowIso;
                 if (r.currentStatus !== 'read') {
@@ -674,7 +706,10 @@ export async function reconcileAndGetCampaignAnalytics(
                   r.timeline.push({
                     status: 'replied',
                     timestamp: r.repliedAt,
-                    description: `Customer replied: "${(inData.text || inData.body || 'Reply').slice(0, 60)}"`,
+                    description: isBtn
+                      ? `Button clicked: "${msgBody.slice(0, 60)}"`
+                      : `Customer replied: "${msgBody.slice(0, 60)}"`,
+                    details: isBtn ? `Button clicked: ${msgBody}` : msgBody,
                   });
                 }
                 updatedAny = true;

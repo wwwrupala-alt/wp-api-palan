@@ -92,9 +92,9 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
   // New Advance Campaign Modal
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  // Auto-open modal when navigated with pre-selected template
+  // Auto-open modal when navigated with pre-selected template or CRM Leads retargeting audience
   useEffect(() => {
-    if (initialTemplateId) {
+    if (initialTemplateId || sessionStorage.getItem('prefill_broadcast_audience')) {
       setIsModalOpen(true);
     }
   }, [initialTemplateId]);

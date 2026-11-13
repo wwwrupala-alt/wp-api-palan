@@ -18,6 +18,37 @@ import type {
 // In-memory cache of CRM leads grouped by organizationId
 // orgId -> Map<leadId, CrmLead>
 const crmLeadsStore = new Map<string, Map<string, CrmLead>>();
+const hydratedOrgs = new Set<string>();
+const hydratingPromises = new Map<string, Promise<void>>();
+
+/**
+ * Recursively removes undefined fields from an object or array so Firestore never rejects writes.
+ */
+function cleanUndefined<T>(val: T): T {
+  if (val === undefined) return undefined as any;
+  if (val === null || typeof val !== 'object') return val;
+  if (Array.isArray(val)) {
+    return val.filter((item) => item !== undefined).map((item) => cleanUndefined(item)) as any;
+  }
+  const clean: any = {};
+  for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
+    if (v !== undefined) {
+      clean[k] = cleanUndefined(v);
+    }
+  }
+  return clean;
+}
+
+function phonesMatch(a: string, b: string): boolean {
+  const cleanA = (a || '').replace(/[^0-9]/g, '');
+  const cleanB = (b || '').replace(/[^0-9]/g, '');
+  if (!cleanA || !cleanB) return false;
+  if (cleanA === cleanB) return true;
+  if (cleanA.length >= 10 && cleanB.length >= 10) {
+    return cleanA.slice(-10) === cleanB.slice(-10);
+  }
+  return false;
+}
 
 // Fresh start: No demo or fake leads are seeded by default.
 // Leads are ONLY created when actual WhatsApp recipients reply or click interactive buttons.
@@ -27,6 +58,54 @@ function ensureOrgLeads(orgId: string): Map<string, CrmLead> {
     orgMap = new Map<string, CrmLead>();
     crmLeadsStore.set(orgId, orgMap);
   }
+  return orgMap;
+}
+
+/**
+ * Loads existing CRM leads for an organization from Firestore into memory.
+ * Prevents leads from disappearing across server restarts or serverless cold starts.
+ */
+async function loadOrgLeadsFromFirestore(orgId: string, forceRefresh = false): Promise<Map<string, CrmLead>> {
+  const orgMap = ensureOrgLeads(orgId);
+  if (!forceRefresh && hydratedOrgs.has(orgId)) {
+    return orgMap;
+  }
+
+  const inflight = hydratingPromises.get(orgId);
+  if (inflight && !forceRefresh) {
+    await inflight;
+    return ensureOrgLeads(orgId);
+  }
+
+  const loadPromise = (async () => {
+    try {
+      const snapshot = await getDocs(collection(serverDb, `organizations/${orgId}/crm_leads`));
+      snapshot.forEach((snapDoc) => {
+        const data = snapDoc.data() as CrmLead;
+        if (data && (data.id || snapDoc.id)) {
+          const leadId = data.id || snapDoc.id;
+          const cleanPhone = (data.cleanPhone || data.phone || '').replace(/[^0-9]/g, '');
+          orgMap.set(leadId, {
+            ...data,
+            id: leadId,
+            organizationId: data.organizationId || orgId,
+            cleanPhone,
+            notes: Array.isArray(data.notes) ? data.notes : [],
+            dealValue: Number(data.dealValue) || 0,
+            stage: data.stage || 'new',
+          });
+        }
+      });
+      hydratedOrgs.add(orgId);
+    } catch (err) {
+      console.warn(`[CrmLeads] Failed to hydrate leads from Firestore for org ${orgId}:`, err);
+    } finally {
+      hydratingPromises.delete(orgId);
+    }
+  })();
+
+  hydratingPromises.set(orgId, loadPromise);
+  await loadPromise;
   return orgMap;
 }
 
@@ -60,12 +139,12 @@ export async function recordCrmLeadFromInteraction(params: {
   } = params;
 
   const cleanPhone = phone.replace(/[^0-9]/g, '');
-  const orgMap = ensureOrgLeads(organizationId);
+  const orgMap = await loadOrgLeadsFromFirestore(organizationId);
 
   // Check if lead with this phone already exists
   let existingLead: CrmLead | undefined;
   for (const lead of orgMap.values()) {
-    if (lead.cleanPhone === cleanPhone) {
+    if (phonesMatch(lead.cleanPhone || lead.phone, cleanPhone)) {
       existingLead = lead;
       break;
     }
@@ -81,7 +160,7 @@ export async function recordCrmLeadFromInteraction(params: {
     if (campaignId) existingLead.campaignId = campaignId;
     if (campaignName) existingLead.campaignName = campaignName;
     if (templateName) existingLead.templateName = templateName;
-    if (customerName && (!existingLead.customerName || existingLead.customerName === existingLead.phone)) {
+    if (customerName && (!existingLead.customerName || existingLead.customerName === existingLead.phone || existingLead.customerName.startsWith('+'))) {
       existingLead.customerName = customerName;
     }
     existingLead.lastInteractedAt = now;
@@ -97,8 +176,16 @@ export async function recordCrmLeadFromInteraction(params: {
       }
     }
 
-    // Persist to Firestore
-    setDoc(doc(serverDb, `organizations/${organizationId}/crm_leads`, existingLead.id), existingLead).catch(() => {});
+    // Persist to Firestore (await so serverless doesn't drop the write)
+    try {
+      await setDoc(
+        doc(serverDb, `organizations/${organizationId}/crm_leads`, existingLead.id),
+        cleanUndefined(existingLead),
+        { merge: true }
+      );
+    } catch (persistErr) {
+      console.warn(`[CrmLeads] Failed to persist updated lead ${existingLead.id}:`, persistErr);
+    }
     return existingLead;
   }
 
@@ -114,7 +201,7 @@ export async function recordCrmLeadFromInteraction(params: {
     }
   }
 
-  const newLead: CrmLead = {
+  const newLead: CrmLead = cleanUndefined({
     id: newLeadId,
     organizationId,
     customerName: customerName || `+${cleanPhone}`,
@@ -133,12 +220,19 @@ export async function recordCrmLeadFromInteraction(params: {
     lastInteractedAt: now,
     createdAt: now,
     updatedAt: now,
-  };
+  });
 
   orgMap.set(newLeadId, newLead);
 
-  // Persist to Firestore
-  setDoc(doc(serverDb, `organizations/${organizationId}/crm_leads`, newLeadId), newLead).catch(() => {});
+  // Persist to Firestore (await so serverless doesn't drop the write)
+  try {
+    await setDoc(
+      doc(serverDb, `organizations/${organizationId}/crm_leads`, newLeadId),
+      newLead
+    );
+  } catch (persistErr) {
+    console.warn(`[CrmLeads] Failed to persist new lead ${newLeadId}:`, persistErr);
+  }
   return newLead;
 }
 
@@ -154,9 +248,9 @@ export async function recordCrmLeadFromInteraction(params: {
 export async function handleGetCrmLeads(req: Request, res: Response): Promise<void> {
   try {
     const orgId = (req.headers['x-organization-id'] as string) || (req.query.orgId as string) || 'org_lax_1';
-    const { campaignId, interactionType, buttonText, stage, search } = req.query;
+    const { campaignId, interactionType, buttonText, stage, search, refresh } = req.query;
 
-    const orgMap = ensureOrgLeads(orgId);
+    const orgMap = await loadOrgLeadsFromFirestore(orgId, refresh === 'true');
     let leads = Array.from(orgMap.values());
 
     // Collect all campaigns and distinct button texts across all leads
@@ -242,7 +336,7 @@ export async function handleUpdateCrmLead(req: Request, res: Response): Promise<
     const { id } = req.params;
     const { stage, dealValue, assignedAgentId, assignedAgentName, customerName, email } = req.body;
 
-    const orgMap = ensureOrgLeads(orgId);
+    const orgMap = await loadOrgLeadsFromFirestore(orgId);
     const lead = orgMap.get(id);
 
     if (!lead) {
@@ -258,7 +352,11 @@ export async function handleUpdateCrmLead(req: Request, res: Response): Promise<
     if (email !== undefined) lead.email = email;
     lead.updatedAt = new Date().toISOString();
 
-    setDoc(doc(serverDb, `organizations/${orgId}/crm_leads`, id), lead, { merge: true }).catch(() => {});
+    await setDoc(
+      doc(serverDb, `organizations/${orgId}/crm_leads`, id),
+      cleanUndefined(lead),
+      { merge: true }
+    );
 
     res.json({ success: true, lead });
   } catch (err: any) {
@@ -282,7 +380,7 @@ export async function handleAddCrmLeadNote(req: Request, res: Response): Promise
       return;
     }
 
-    const orgMap = ensureOrgLeads(orgId);
+    const orgMap = await loadOrgLeadsFromFirestore(orgId);
     const lead = orgMap.get(id);
 
     if (!lead) {
@@ -301,7 +399,11 @@ export async function handleAddCrmLeadNote(req: Request, res: Response): Promise
     lead.notes.unshift(note);
     lead.updatedAt = new Date().toISOString();
 
-    setDoc(doc(serverDb, `organizations/${orgId}/crm_leads`, id), lead, { merge: true }).catch(() => {});
+    await setDoc(
+      doc(serverDb, `organizations/${orgId}/crm_leads`, id),
+      cleanUndefined(lead),
+      { merge: true }
+    );
 
     res.json({ success: true, note, lead });
   } catch (err: any) {
@@ -324,17 +426,22 @@ export async function handleBulkUpdateStage(req: Request, res: Response): Promis
       return;
     }
 
-    const orgMap = ensureOrgLeads(orgId);
-    const updatedCount = 0;
+    const orgMap = await loadOrgLeadsFromFirestore(orgId);
 
-    for (const id of leadIds) {
-      const lead = orgMap.get(id);
-      if (lead) {
-        lead.stage = stage;
-        lead.updatedAt = new Date().toISOString();
-        setDoc(doc(serverDb, `organizations/${orgId}/crm_leads`, id), lead, { merge: true }).catch(() => {});
-      }
-    }
+    await Promise.all(
+      leadIds.map(async (id: string) => {
+        const lead = orgMap.get(id);
+        if (lead) {
+          lead.stage = stage;
+          lead.updatedAt = new Date().toISOString();
+          await setDoc(
+            doc(serverDb, `organizations/${orgId}/crm_leads`, id),
+            cleanUndefined(lead),
+            { merge: true }
+          );
+        }
+      })
+    );
 
     res.json({ success: true, message: `Updated ${leadIds.length} lead(s) to ${stage}.` });
   } catch (err: any) {
@@ -352,10 +459,10 @@ export async function handleDeleteCrmLead(req: Request, res: Response): Promise<
     const orgId = (req.headers['x-organization-id'] as string) || (req.query.orgId as string) || 'org_lax_1';
     const { id } = req.params;
 
-    const orgMap = ensureOrgLeads(orgId);
+    const orgMap = await loadOrgLeadsFromFirestore(orgId);
     orgMap.delete(id);
 
-    deleteDoc(doc(serverDb, `organizations/${orgId}/crm_leads`, id)).catch(() => {});
+    await deleteDoc(doc(serverDb, `organizations/${orgId}/crm_leads`, id));
 
     res.json({ success: true, message: 'Lead removed.' });
   } catch (err: any) {
@@ -379,24 +486,23 @@ export async function handleResetCrmLeads(req: Request, res: Response): Promise<
       for (const [oId, map] of crmLeadsStore.entries()) {
         deletedCount += map.size;
         map.clear();
+        hydratedOrgs.add(oId);
         try {
           const snapshot = await getDocs(collection(serverDb, `organizations/${oId}/crm_leads`));
-          snapshot.forEach((snapDoc) => {
-            deleteDoc(snapDoc.ref).catch(() => {});
-          });
+          await Promise.all(snapshot.docs.map((snapDoc) => deleteDoc(snapDoc.ref).catch(() => {})));
         } catch {}
       }
       crmLeadsStore.clear();
     } else {
-      const orgMap = ensureOrgLeads(orgId);
+      const orgMap = await loadOrgLeadsFromFirestore(orgId);
       deletedCount = orgMap.size;
       orgMap.clear();
+      hydratedOrgs.add(orgId);
 
       try {
         const snapshot = await getDocs(collection(serverDb, `organizations/${orgId}/crm_leads`));
-        snapshot.forEach((snapDoc) => {
-          deleteDoc(snapDoc.ref).catch(() => {});
-        });
+        deletedCount = Math.max(deletedCount, snapshot.size);
+        await Promise.all(snapshot.docs.map((snapDoc) => deleteDoc(snapDoc.ref).catch(() => {})));
       } catch {}
     }
 

@@ -99,6 +99,7 @@ export const serverDb = initializeFirestore(
   {
     experimentalForceLongPolling: true,
     localCache: memoryLocalCache(),
+    ignoreUndefinedProperties: true,
   },
   dbId
 );

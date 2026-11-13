@@ -346,8 +346,28 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
       setScheduledDateTime(getQuickPresetTime(60));
       setErrorMsg(null);
     } else {
-      // Default new campaign reset
-      setCampName('');
+      // Check if navigated from CRM Leads 1-Click Retargeting
+      const prefillRaw = sessionStorage.getItem('prefill_broadcast_audience');
+      const prefillTag = sessionStorage.getItem('prefill_broadcast_source_tag');
+      let prefilledText = '';
+      let prefilledName = '';
+
+      if (prefillRaw) {
+        try {
+          const parsed = JSON.parse(prefillRaw) as Array<{ name?: string; phone: string }>;
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            prefilledText = parsed
+              .map((item) => (item.name && item.name !== item.phone ? `${item.name}: ${item.phone}` : item.phone))
+              .join('\n');
+            prefilledName = prefillTag || `CRM Retargeting (${parsed.length} Leads)`;
+          }
+        } catch {}
+        sessionStorage.removeItem('prefill_broadcast_audience');
+        sessionStorage.removeItem('prefill_broadcast_source_tag');
+      }
+
+      // Default new campaign reset (or prefill from CRM retargeting)
+      setCampName(prefilledName);
       if (!selectedTemplateId && templates.length > 0) {
         const approved = templates.filter((t) => t.status === 'APPROVED');
         if (approved.length > 0) setSelectedTemplateId(approved[0].id);
@@ -357,7 +377,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
       setCampaignMediaPreviewUrl('');
       setUploadedCampaignMedia(null);
       setAudienceMode('manual');
-      setManualNumbersText('');
+      setManualNumbersText(prefilledText);
       setScheduleMode('immediate');
       setScheduledDateTime(getQuickPresetTime(60));
       setErrorMsg(null);
