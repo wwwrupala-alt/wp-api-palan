@@ -18,8 +18,6 @@ import {
   Shield,
   FileText,
   Globe,
-  Phone,
-  Mail,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhiteLabel } from '../context/WhiteLabelContext.tsx';
@@ -553,30 +551,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onOpenLegal }) => {
 
         {/* Security assurance & Direct URLs */}
         <div className="mt-5 text-center space-y-2">
-          {(branding.supportPhone || branding.supportEmail) && (
-            <div className="flex items-center justify-center flex-wrap gap-x-3 gap-y-1 text-[11px] text-neutral-500 dark:text-neutral-400 pb-1">
-              <span>Admin Support:</span>
-              {branding.supportPhone && (
-                <a
-                  href={`tel:${branding.supportPhone}`}
-                  className="text-emerald-600 dark:text-emerald-400 font-semibold hover:underline inline-flex items-center space-x-1"
-                >
-                  <Phone className="w-3 h-3" />
-                  <span>{branding.supportPhone}</span>
-                </a>
-              )}
-              {branding.supportEmail && (
-                <a
-                  href={`mailto:${branding.supportEmail}`}
-                  className="text-emerald-600 dark:text-emerald-400 font-semibold hover:underline inline-flex items-center space-x-1"
-                >
-                  <Mail className="w-3 h-3" />
-                  <span>{branding.supportEmail}</span>
-                </a>
-              )}
-            </div>
-          )}
-
           <div className="text-xs text-neutral-500 dark:text-neutral-400 flex items-center justify-center space-x-2">
             <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
             <span>Meta Official API WhatsApp Marketing</span>
