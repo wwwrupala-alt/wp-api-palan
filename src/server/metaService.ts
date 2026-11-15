@@ -4415,74 +4415,80 @@ export async function handleUploadMedia(req: Request, res: Response) {
       console.warn('[UploadMedia] Disk public write notice:', diskErr);
     }
 
-    try {
-      await loadMetaConfigFromDb();
-      const config = getMetaConfig();
-      const orgId = (req.headers['x-organization-id'] as string) || req.body.organizationId || 'org_usr_9974292240';
-      const effectiveCfg = orgId ? await getEffectiveMetaConfig(orgId) : await getEffectiveMetaConfig('default');
-      let token = customToken || (req.headers['x-meta-token'] as string) || effectiveCfg.systemToken || config.systemToken;
-      let targetPhoneId = req.body.phoneNumberId || (req.query.phoneNumberId as string);
+    if (!req.body.skipMetaUpload) {
+      try {
+        await loadMetaConfigFromDb();
+        const config = getMetaConfig();
+        const orgId = (req.headers['x-organization-id'] as string) || req.body.organizationId || 'org_usr_9974292240';
+        const effectiveCfg = orgId ? await getEffectiveMetaConfig(orgId) : await getEffectiveMetaConfig('default');
+        let token = customToken || (req.headers['x-meta-token'] as string) || effectiveCfg.systemToken || config.systemToken;
+        let targetPhoneId = req.body.phoneNumberId || (req.query.phoneNumberId as string);
 
-      if (!targetPhoneId && orgId) {
-        try {
-          const accSnap = await getDocs(collection(serverDb, `organizations/${orgId}/whatsappAccounts`));
-          if (!accSnap.empty) {
-            targetPhoneId = accSnap.docs[0].id;
-          }
-        } catch {}
-      }
-
-      if (!token && targetPhoneId && orgId) {
-        try {
-          const accSnap = await getDoc(doc(serverDb, `organizations/${orgId}/whatsappAccounts/${targetPhoneId}`));
-          if (accSnap.exists()) {
-            const accData = accSnap.data();
-            token = accData.customToken || accData.permanentToken || accData.userAccessToken;
-          }
-        } catch {}
-      }
-
-      if (token && targetPhoneId) {
-        try {
-          const blob = new Blob([new Uint8Array(buffer)], { type: mimeType });
-          const formData = new FormData();
-          formData.append('messaging_product', 'whatsapp');
-          formData.append('type', mimeType);
-          formData.append('file', blob, filename);
-
-          const uploadUrl = `https://graph.facebook.com/${config.graphVersion}/${targetPhoneId}/media`;
-          const mRes = await fetch(uploadUrl, {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${token}` },
-            body: formData,
-          });
-          const mData = await mRes.json();
-          if (mRes.ok && mData.id) {
-            metaMediaId = String(mData.id);
-            metaMediaIdCache.set(uniqueName, metaMediaId);
-            metaMediaIdCache.set(relativeUrl, metaMediaId);
-            console.log(`[UploadMedia] Direct Meta Media ID created: ${metaMediaId}`);
-          } else {
-            console.warn('[UploadMedia] Meta media upload API notice:', mData);
-          }
-        } catch (mErr) {
-          console.warn('[UploadMedia] Direct Meta upload notice:', mErr);
+        if (!targetPhoneId && orgId) {
+          try {
+            const accSnap = await getDocs(collection(serverDb, `organizations/${orgId}/whatsappAccounts`));
+            if (!accSnap.empty) {
+              targetPhoneId = accSnap.docs[0].id;
+            }
+          } catch {}
         }
-      }
 
-      const appId = config.appId || '28291855670435316';
-      if (token && appId && !metaMediaId) {
-        const format = ext === '.mp4' || ext === '.3gp' ? 'VIDEO' : ext === '.pdf' ? 'DOCUMENT' : 'IMAGE';
-        headerHandle = await getMetaHeaderHandleForMedia(
-          relativeUrl,
-          token,
-          appId,
-          format,
-          config.graphVersion || 'v22.0'
-        );
+        if (!token && targetPhoneId && orgId) {
+          try {
+            const accSnap = await getDoc(doc(serverDb, `organizations/${orgId}/whatsappAccounts/${targetPhoneId}`));
+            if (accSnap.exists()) {
+              const accData = accSnap.data();
+              token = accData.customToken || accData.permanentToken || accData.userAccessToken;
+            }
+          } catch {}
+        }
+
+        if (token && targetPhoneId) {
+          try {
+            const blob = new Blob([new Uint8Array(buffer)], { type: mimeType });
+            const formData = new FormData();
+            formData.append('messaging_product', 'whatsapp');
+            formData.append('type', mimeType);
+            formData.append('file', blob, filename);
+
+            const uploadUrl = `https://graph.facebook.com/${config.graphVersion}/${targetPhoneId}/media`;
+            const mRes = await fetch(uploadUrl, {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${token}` },
+              body: formData,
+            });
+            const mData = await mRes.json();
+            if (mRes.ok && mData.id) {
+              metaMediaId = String(mData.id);
+              metaMediaIdCache.set(uniqueName, metaMediaId);
+              metaMediaIdCache.set(relativeUrl, metaMediaId);
+              console.log(`[UploadMedia] Direct Meta Media ID created: ${metaMediaId}`);
+            } else {
+              console.warn('[UploadMedia] Meta media upload API notice:', mData);
+            }
+          } catch (mErr) {
+            console.warn('[UploadMedia] Direct Meta upload notice:', mErr);
+          }
+        }
+
+        const appId = config.appId || '28291855670435316';
+        if (token && appId && !metaMediaId) {
+          const format = ext === '.mp4' || ext === '.3gp' ? 'VIDEO' : ext === '.pdf' ? 'DOCUMENT' : 'IMAGE';
+          headerHandle = await getMetaHeaderHandleForMedia(
+            relativeUrl,
+            token,
+            appId,
+            format,
+            config.graphVersion || 'v22.0'
+          );
+        }
+      } catch (hErr) {
+        console.warn('[handleUploadMedia] Resumable handle notice:', hErr);
       }
-    } catch (hErr) {
-      console.warn('[handleUploadMedia] Resumable handle notice:', hErr);
+    } else if (req.body.metaMediaId) {
+      metaMediaId = String(req.body.metaMediaId);
+      metaMediaIdCache.set(uniqueName, metaMediaId);
+      metaMediaIdCache.set(relativeUrl, metaMediaId);
     }
 
     return res.json({

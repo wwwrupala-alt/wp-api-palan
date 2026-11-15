@@ -32,6 +32,8 @@ export interface MiniTemplatePhonePreviewProps {
   messageTimestamp?: string;
   deliveryStatus?: 'queued' | 'sent' | 'delivered' | 'read' | 'failed' | string;
   highlightVariables?: boolean;
+  phoneNumberId?: string;
+  organizationId?: string;
 }
 
 export const MiniTemplatePhonePreview: React.FC<MiniTemplatePhonePreviewProps> = ({
@@ -46,6 +48,8 @@ export const MiniTemplatePhonePreview: React.FC<MiniTemplatePhonePreviewProps> =
   messageTimestamp,
   deliveryStatus = 'read',
   highlightVariables = false,
+  phoneNumberId,
+  organizationId,
 }) => {
   const effectiveSize = size || (compact ? 'compact' : 'medium');
   const isLarge = effectiveSize === 'large';
@@ -106,15 +110,20 @@ export const MiniTemplatePhonePreview: React.FC<MiniTemplatePhonePreviewProps> =
   React.useEffect(() => {
     setImageLoadError(false);
     setUseTemplateFallback(false);
-  }, [customMediaUrl, safeTemplate?.id, safeTemplate?.name]);
+  }, [customMediaUrl, customVariables?.header_media_url, customVariables?.header_media_id, safeTemplate?.id, safeTemplate?.name]);
 
-  // Resolve raw header handle or media URL
-  const rawHeaderHandle =
+  // Explicit media specified by the campaign (must NOT be silently replaced by template default sample on error)
+  const explicitCustomMedia =
     customMediaUrl ||
     customVariables?.header_media_url ||
     customVariables?.headerMediaUrl ||
     customVariables?.media_url ||
     customVariables?.mediaUrl ||
+    customVariables?.header_media_id ||
+    customVariables?.media_id ||
+    '';
+
+  const templateSampleUrl =
     (safeTemplate as any)?.headerMediaUrl ||
     (safeTemplate as any)?.mediaSampleUrl ||
     headerComp?.example?.header_handle?.[0] ||
@@ -122,11 +131,8 @@ export const MiniTemplatePhonePreview: React.FC<MiniTemplatePhonePreviewProps> =
     (headerComp as any)?.exampleUrl ||
     '';
 
-  const templateSampleUrl =
-    headerComp?.example?.header_handle?.[0] ||
-    (headerComp as any)?.mediaSampleUrl ||
-    (headerComp as any)?.exampleUrl ||
-    '';
+  // Resolve raw header handle or media URL
+  const rawHeaderHandle = explicitCustomMedia || templateSampleUrl || '';
 
   // Synthesize headerComp if missing but media URL or header text exists
   const hasMediaUrl = Boolean(rawHeaderHandle && String(rawHeaderHandle).trim() !== '');
@@ -134,9 +140,18 @@ export const MiniTemplatePhonePreview: React.FC<MiniTemplatePhonePreviewProps> =
   // Format header media preview URL
   const format = (headerComp?.format || (hasMediaUrl ? 'IMAGE' : 'TEXT')).toUpperCase();
 
-  const rawActiveImageUrl = useTemplateFallback
-    ? templateSampleUrl || rawHeaderHandle
-    : rawHeaderHandle || templateSampleUrl;
+  const rawActiveImageUrl =
+    !explicitCustomMedia && useTemplateFallback
+      ? templateSampleUrl
+      : explicitCustomMedia || templateSampleUrl;
+
+  const appendProxyContext = (proxyUrl: string) => {
+    const [base, qs = ''] = proxyUrl.split('?');
+    const params = new URLSearchParams(qs);
+    if (phoneNumberId && !params.get('phoneNumberId')) params.set('phoneNumberId', phoneNumberId);
+    if (organizationId && !params.get('orgId')) params.set('orgId', organizationId);
+    return `${base}?${params.toString()}`;
+  };
 
   // If format is IMAGE:
   let activeImageUrl = rawActiveImageUrl;
@@ -144,11 +159,13 @@ export const MiniTemplatePhonePreview: React.FC<MiniTemplatePhonePreviewProps> =
   if (format === 'IMAGE' || hasMediaUrl) {
     const trimmed = String(rawActiveImageUrl || '').trim();
     if (/^\d+$/.test(trimmed)) {
-      activeImageUrl = `/api/meta/media-proxy?mediaId=${encodeURIComponent(trimmed)}`;
+      activeImageUrl = appendProxyContext(`/api/meta/media-proxy?mediaId=${encodeURIComponent(trimmed)}`);
+    } else if (trimmed.includes('/api/meta/media-proxy')) {
+      activeImageUrl = appendProxyContext(trimmed);
     } else if (trimmed.includes('lookaside.fbsbx.com') || trimmed.includes('scontent.whatsapp.net')) {
-      activeImageUrl = `/api/meta/media-proxy?url=${encodeURIComponent(trimmed)}`;
+      activeImageUrl = appendProxyContext(`/api/meta/media-proxy?url=${encodeURIComponent(trimmed)}`);
     } else if (!trimmed || trimmed.startsWith('4:') || /^[0-9a-f]{8}-[0-9a-f]{4}/i.test(trimmed)) {
-      activeImageUrl = '/uploads/24X4_1793012982079.jpg';
+      activeImageUrl = '';
     }
   }
 
@@ -415,7 +432,7 @@ export const MiniTemplatePhonePreview: React.FC<MiniTemplatePhonePreviewProps> =
                         alt="Header attachment"
                         className="w-full h-full object-cover"
                         onError={() => {
-                          if (!useTemplateFallback && templateSampleUrl && templateSampleUrl !== activeImageUrl) {
+                          if (!explicitCustomMedia && !useTemplateFallback && templateSampleUrl && templateSampleUrl !== activeImageUrl) {
                             setUseTemplateFallback(true);
                           } else {
                             setImageLoadError(true);

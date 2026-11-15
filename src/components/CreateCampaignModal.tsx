@@ -225,6 +225,13 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
       setTemplateVariables(clonedVars);
 
       // Pre-fill media attachment (image, video, document)
+      const cloneAccount =
+        availableAccounts.find(
+          (a) =>
+            a.id === initialCloneCampaign.whatsAppAccountId ||
+            a.phoneNumberId === initialCloneCampaign.phoneNumberId
+        ) || currentAccount;
+
       const clonedMediaId =
         initialCloneCampaign.variableValues?.header_media_id ||
         initialCloneCampaign.variableValues?.media_id ||
@@ -236,6 +243,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
         initialCloneCampaign.headerMediaUrl ||
         initialCloneCampaign.variableValues?.header_media_url ||
         initialCloneCampaign.variableValues?.headerMediaUrl ||
+        initialCloneCampaign.variableValues?.media_url ||
         initialCloneCampaign.scheduleData?.variableValues?.header_media_url ||
         (initialCloneCampaign as any).mediaUrl ||
         '';
@@ -245,15 +253,60 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
         media = '';
       }
       if (!media && clonedMediaId) {
-        media = clonedMediaId;
+        media = String(clonedMediaId);
       }
       if (!media) {
         media = matchingTpl?.components?.find((c) => c.type === 'HEADER')?.example?.header_handle?.[0] || '';
       }
 
       if (media) {
-        const rawName = media.split('/').pop()?.split('?')[0] || 'cloned_media_attachment';
-        const cleanName = decodeURIComponent(rawName);
+        const trimmedMedia = media.trim();
+        const urlMediaIdMatch = trimmedMedia.match(/[?&]mediaId=([^&]+)/i);
+        const extractedUrlMediaId = urlMediaIdMatch ? decodeURIComponent(urlMediaIdMatch[1]) : '';
+        const isNumericId = /^\d+$/.test(trimmedMedia);
+        const effectiveMediaId =
+          (isNumericId ? trimmedMedia : '') ||
+          extractedUrlMediaId ||
+          (clonedMediaId ? String(clonedMediaId).trim() : '');
+
+        const buildProxyUrl = (baseParams: Record<string, string>, includeToken: boolean) => {
+          const params = new URLSearchParams(baseParams);
+          const pId = initialCloneCampaign.phoneNumberId || cloneAccount?.phoneNumberId;
+          const aId = initialCloneCampaign.whatsAppAccountId || cloneAccount?.id;
+          if (pId) params.set('phoneNumberId', pId);
+          if (organizationId) params.set('orgId', organizationId);
+          if (aId) params.set('accountId', aId);
+          if (includeToken && cloneAccount?.customToken) params.set('token', cloneAccount.customToken);
+          return `/api/meta/media-proxy?${params.toString()}`;
+        };
+
+        let storedMediaUrl = trimmedMedia;
+        let previewUrl = trimmedMedia;
+
+        if (isNumericId || trimmedMedia.includes('/api/meta/media-proxy')) {
+          const targetId = effectiveMediaId || trimmedMedia;
+          if (targetId && !trimmedMedia.includes('url=')) {
+            storedMediaUrl = buildProxyUrl({ mediaId: targetId }, false);
+            previewUrl = buildProxyUrl({ mediaId: targetId }, true);
+          } else {
+            const existingQs = trimmedMedia.split('?')[1] || '';
+            const existingParams = Object.fromEntries(new URLSearchParams(existingQs).entries());
+            storedMediaUrl = buildProxyUrl(existingParams, false);
+            previewUrl = buildProxyUrl(existingParams, true);
+          }
+        } else if (trimmedMedia.includes('lookaside.fbsbx.com') || trimmedMedia.includes('scontent.whatsapp.net')) {
+          previewUrl = buildProxyUrl({ url: trimmedMedia }, true);
+        }
+
+        const rawName = trimmedMedia.split('/').pop()?.split('?')[0] || 'cloned_media_attachment';
+        const decodedName = decodeURIComponent(rawName);
+        const cleanName =
+          decodedName === 'media-proxy' || /^\d+$/.test(decodedName)
+            ? effectiveMediaId
+              ? `Campaign Media (${effectiveMediaId})`
+              : 'Cloned Campaign Media'
+            : decodedName;
+
         const ext = cleanName.split('.').pop()?.toLowerCase() || '';
         let contentType = 'image/jpeg';
         if (['png'].includes(ext)) contentType = 'image/png';
@@ -261,21 +314,17 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
         else if (['mp4', '3gp'].includes(ext)) contentType = 'video/mp4';
         else if (['pdf'].includes(ext)) contentType = 'application/pdf';
 
-        const isNumericId = /^\d+$/.test(media);
-        const effectiveMediaId = isNumericId ? media : clonedMediaId;
-        const previewUrl = isNumericId
-          ? `/api/meta/media-proxy?mediaId=${encodeURIComponent(media)}&token=${encodeURIComponent(currentAccount?.customToken || '')}`
-          : media;
-
-        setCampaignMediaUrl(media);
+        setCampaignMediaUrl(storedMediaUrl);
         setCampaignMediaPreviewUrl(previewUrl);
         setUploadedCampaignMedia({
           filename: cleanName,
           originalName: cleanName,
           url: previewUrl,
-          fullUrl: previewUrl.startsWith('http') ? previewUrl : `${typeof window !== 'undefined' ? window.location.origin : ''}${previewUrl}`,
-          id: effectiveMediaId,
-          metaMediaId: effectiveMediaId,
+          fullUrl: previewUrl.startsWith('http')
+            ? previewUrl
+            : `${typeof window !== 'undefined' ? window.location.origin : ''}${previewUrl}`,
+          id: effectiveMediaId || undefined,
+          metaMediaId: effectiveMediaId || undefined,
           size: 1024 * 150,
           contentType,
         });
@@ -398,8 +447,15 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
   } | null>(null);
   const [isUploadingCampaignMedia, setIsUploadingCampaignMedia] = useState(false);
   const [uploadCampaignError, setUploadCampaignError] = useState<string | null>(null);
+  const [bannerThumbError, setBannerThumbError] = useState(false);
+  const [phonePreviewImgError, setPhonePreviewImgError] = useState(false);
   const campaignFileInputRef = React.useRef<HTMLInputElement | null>(null);
   const [isDraggingCampaign, setIsDraggingCampaign] = useState(false);
+
+  useEffect(() => {
+    setBannerThumbError(false);
+    setPhonePreviewImgError(false);
+  }, [campaignMediaUrl, campaignMediaPreviewUrl, selectedTemplateId]);
 
   // Test send state
   const [testPhone, setTestPhone] = useState('');
@@ -624,10 +680,14 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
       const res = await uploadMediaFile(file, currentAccount?.customToken, currentAccount?.phoneNumberId);
       setUploadedCampaignMedia(res);
       const mediaId = res.metaMediaId || res.id;
+      const proxyParams = new URLSearchParams();
+      if (mediaId) proxyParams.set('mediaId', String(mediaId));
+      if (currentAccount?.phoneNumberId) proxyParams.set('phoneNumberId', currentAccount.phoneNumberId);
+      if (organizationId) proxyParams.set('orgId', organizationId);
       const displayUrl =
-        (res.fullUrl && !res.fullUrl.startsWith('blob:') ? res.fullUrl : '') ||
         (res.url && !res.url.startsWith('blob:') ? res.url : '') ||
-        (mediaId ? `/api/meta/media-proxy?mediaId=${mediaId}` : '') ||
+        (res.fullUrl && !res.fullUrl.startsWith('blob:') ? res.fullUrl : '') ||
+        (mediaId ? `/api/meta/media-proxy?${proxyParams.toString()}` : '') ||
         localPreviewUrl;
 
       setCampaignMediaUrl(displayUrl);
@@ -657,7 +717,10 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
         variablePayload[`body_${k}`] = templateVariables[k] || `Customer`;
       });
 
-      const testMediaId = uploadedCampaignMedia?.metaMediaId || uploadedCampaignMedia?.id;
+      const testMediaId =
+        uploadedCampaignMedia?.metaMediaId ||
+        uploadedCampaignMedia?.id ||
+        campaignMediaUrl.match(/[?&]mediaId=(\d+)/i)?.[1];
       if (testMediaId && /^\d+$/.test(String(testMediaId).trim())) {
         variablePayload.header_media_id = String(testMediaId).trim();
       } else if (campaignMediaUrl && /^\d{10,}$/.test(campaignMediaUrl.trim())) {
@@ -751,7 +814,10 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
         campaignVariables[`body_${k}`] = templateVariables[k] || `Customer`;
       });
 
-      const launchMediaId = uploadedCampaignMedia?.metaMediaId || uploadedCampaignMedia?.id;
+      const launchMediaId =
+        uploadedCampaignMedia?.metaMediaId ||
+        uploadedCampaignMedia?.id ||
+        campaignMediaUrl.match(/[?&]mediaId=(\d+)/i)?.[1];
       if (launchMediaId && /^\d+$/.test(String(launchMediaId).trim())) {
         campaignVariables.header_media_id = String(launchMediaId).trim();
       } else if (campaignMediaUrl && /^\d{10,}$/.test(campaignMediaUrl.trim())) {
@@ -928,7 +994,10 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
         campaignVariables[`body_${k}`] = templateVariables[k] || `Customer`;
       });
 
-      const saveMediaId = uploadedCampaignMedia?.metaMediaId || uploadedCampaignMedia?.id;
+      const saveMediaId =
+        uploadedCampaignMedia?.metaMediaId ||
+        uploadedCampaignMedia?.id ||
+        campaignMediaUrl.match(/[?&]mediaId=(\d+)/i)?.[1];
       if (saveMediaId && /^\d+$/.test(String(saveMediaId).trim())) {
         campaignVariables.header_media_id = String(saveMediaId).trim();
       } else if (campaignMediaUrl && /^\d{10,}$/.test(campaignMediaUrl.trim())) {
@@ -1338,12 +1407,19 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
                       {uploadedCampaignMedia || campaignMediaUrl ? (
                         <div className="p-3 rounded-xl border border-emerald-500/40 bg-emerald-50/50 dark:bg-emerald-950/20 flex items-center justify-between gap-3 animate-fadeIn">
                           <div className="flex items-center space-x-3 overflow-hidden">
-                            {headerComponent?.format === 'IMAGE' && (
-                              <img
-                                src={campaignMediaPreviewUrl || uploadedCampaignMedia?.url || campaignMediaUrl}
-                                alt="Banner"
-                                className="w-12 h-12 rounded-lg object-cover border border-emerald-300 dark:border-emerald-700 shrink-0"
-                              />
+                            {(!headerComponent || headerComponent?.format === 'IMAGE') && (
+                              !bannerThumbError && (campaignMediaPreviewUrl || uploadedCampaignMedia?.url || campaignMediaUrl) ? (
+                                <img
+                                  src={campaignMediaPreviewUrl || uploadedCampaignMedia?.url || campaignMediaUrl}
+                                  alt="Banner"
+                                  className="w-12 h-12 rounded-lg object-cover border border-emerald-300 dark:border-emerald-700 shrink-0"
+                                  onError={() => setBannerThumbError(true)}
+                                />
+                              ) : (
+                                <div className="w-12 h-12 rounded-lg bg-emerald-100/80 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-700 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                                  <ImageIcon className="w-5 h-5" />
+                                </div>
+                              )
                             )}
                             {headerComponent?.format === 'VIDEO' && (
                               <div className="w-12 h-12 rounded-lg bg-neutral-900 text-white flex items-center justify-center shrink-0">
@@ -1943,38 +2019,54 @@ Rahul: 919974428034
                                 uploadedCampaignMedia?.url ||
                                 uploadedCampaignMedia?.fullUrl ||
                                 campaignMediaUrl ||
-                                headerComponent.example?.header_handle?.[0] ||
+                                headerComponent?.example?.header_handle?.[0] ||
                                 '';
 
                               let safeImgSrc = rawImgUrl;
                               const trimmedImg = String(rawImgUrl || '').trim();
+                              const enrichProxy = (proxyStr: string) => {
+                                const [b, q = ''] = proxyStr.split('?');
+                                const p = new URLSearchParams(q);
+                                if (currentAccount?.phoneNumberId && !p.get('phoneNumberId')) {
+                                  p.set('phoneNumberId', currentAccount.phoneNumberId);
+                                }
+                                if (organizationId && !p.get('orgId')) {
+                                  p.set('orgId', organizationId);
+                                }
+                                if (currentAccount?.id && !p.get('accountId')) {
+                                  p.set('accountId', currentAccount.id);
+                                }
+                                if (currentAccount?.customToken && !p.get('token')) {
+                                  p.set('token', currentAccount.customToken);
+                                }
+                                return `${b}?${p.toString()}`;
+                              };
 
                               if (/^\d+$/.test(trimmedImg)) {
-                                safeImgSrc = `/api/meta/media-proxy?mediaId=${encodeURIComponent(trimmedImg)}`;
+                                safeImgSrc = enrichProxy(`/api/meta/media-proxy?mediaId=${encodeURIComponent(trimmedImg)}`);
+                              } else if (trimmedImg.includes('/api/meta/media-proxy')) {
+                                safeImgSrc = enrichProxy(trimmedImg);
                               } else if (trimmedImg.includes('lookaside.fbsbx.com') || trimmedImg.includes('scontent.whatsapp.net')) {
-                                safeImgSrc = `/api/meta/media-proxy?url=${encodeURIComponent(trimmedImg)}`;
+                                safeImgSrc = enrichProxy(`/api/meta/media-proxy?url=${encodeURIComponent(trimmedImg)}`);
                               } else if (!trimmedImg || trimmedImg.startsWith('4:') || /^[0-9a-f]{8}-[0-9a-f]{4}/i.test(trimmedImg)) {
-                                safeImgSrc = '/uploads/24X4_1793012982079.jpg';
+                                safeImgSrc = '';
                               }
 
-                              return safeImgSrc ? (
+                              return safeImgSrc && !phonePreviewImgError ? (
                                 <div className="w-full rounded-xl overflow-hidden bg-neutral-900/5 dark:bg-white/5 flex items-center justify-center p-0.5">
                                   <img
                                     src={safeImgSrc}
                                     alt="Header preview"
                                     className="w-full max-h-64 object-contain rounded-lg shadow-2xs"
-                                    onError={(e) => {
-                                      const target = e.currentTarget;
-                                      if (target.src !== '/uploads/24X4_1793012982079.jpg') {
-                                        target.src = '/uploads/24X4_1793012982079.jpg';
-                                      }
-                                    }}
+                                    onError={() => setPhonePreviewImgError(true)}
                                   />
                                 </div>
                               ) : (
                                 <div className="h-24 flex flex-col items-center justify-center text-neutral-400 space-y-1">
                                   <ImageIcon className="w-6 h-6 text-emerald-500" />
-                                  <span className="text-[10px] font-medium">Header Image Banner</span>
+                                  <span className="text-[10px] font-medium">
+                                    {uploadedCampaignMedia?.originalName || 'Header Image Banner'}
+                                  </span>
                                 </div>
                               );
                             })()

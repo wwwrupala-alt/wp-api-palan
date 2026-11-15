@@ -2202,12 +2202,47 @@ export async function uploadMediaFile(
         if (metaData && metaData.id) {
           const localBlobUrl = URL.createObjectURL(file);
           console.log('[DirectMetaUpload] Uploaded directly to Meta Cloud API. Media ID:', metaData.id);
+
+          // Best-effort persist local copy on server (/uploads/...) so preview & clone work permanently even without blob URL
+          let durableUrl = '';
+          let durableFullUrl = '';
+          try {
+            const fileToPersist = file.type.startsWith('image/') ? await compressImageIfNeeded(file) : file;
+            if (fileToPersist.size <= 4 * 1024 * 1024) {
+              const base64: string = await new Promise((resolveB64, rejectB64) => {
+                const reader = new FileReader();
+                reader.onload = () => resolveB64(reader.result as string);
+                reader.onerror = () => rejectB64(new Error('read error'));
+                reader.readAsDataURL(fileToPersist);
+              });
+              const persistRes = await fetch('/api/media/upload', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  filename: fileToPersist.name,
+                  base64,
+                  contentType: fileToPersist.type,
+                  phoneNumberId,
+                  metaMediaId: String(metaData.id),
+                  skipMetaUpload: true,
+                }),
+              });
+              if (persistRes.ok) {
+                const persistData = await persistRes.json();
+                if (persistData?.url) durableUrl = persistData.url;
+                if (persistData?.fullUrl) durableFullUrl = persistData.fullUrl;
+              }
+            }
+          } catch (persistErr) {
+            console.warn('[DirectMetaUpload] Persistent /uploads save notice:', persistErr);
+          }
+
           return {
             success: true,
             filename: file.name,
             originalName: file.name,
-            url: localBlobUrl,
-            fullUrl: localBlobUrl,
+            url: durableUrl || localBlobUrl,
+            fullUrl: durableFullUrl || durableUrl || localBlobUrl,
             id: metaData.id,
             metaMediaId: metaData.id,
             headerHandle: metaData.id,

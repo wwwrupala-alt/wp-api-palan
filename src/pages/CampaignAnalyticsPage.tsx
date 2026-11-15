@@ -135,7 +135,7 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
   const [templates, setTemplates] = useState<Template[]>([]);
   const [previewRecipientId, setPreviewRecipientId] = useState<string>('default');
   const [highlightVariables, setHighlightVariables] = useState<boolean>(true);
-  const [isPreviewSectionCollapsed, setIsPreviewSectionCollapsed] = useState<boolean>(false);
+  const [isPreviewSectionCollapsed, setIsPreviewSectionCollapsed] = useState<boolean>(true);
   const [isFunnelSectionCollapsed, setIsFunnelSectionCollapsed] = useState<boolean>(true);
 
   // Load Templates in real-time
@@ -214,16 +214,37 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
 
   // Effective Media URL for Header
   const effectiveHeaderMediaUrl = useMemo(() => {
-    return (
+    const raw =
       currentCampaign?.headerMediaUrl ||
       currentCampaign?.variableValues?.header_media_url ||
       currentCampaign?.variableValues?.headerMediaUrl ||
       currentCampaign?.variableValues?.media_url ||
       currentCampaign?.scheduleData?.variableValues?.header_media_url ||
+      currentCampaign?.variableValues?.header_media_id ||
+      currentCampaign?.variableValues?.media_id ||
+      currentCampaign?.scheduleData?.variableValues?.header_media_id ||
+      (currentCampaign as any)?.headerMediaId ||
       (currentCampaign?.template as any)?.headerMediaUrl ||
-      ''
-    );
-  }, [currentCampaign]);
+      '';
+    const trimmed = String(raw || '').trim();
+    if (!trimmed) return '';
+    const pId = currentCampaign?.phoneNumberId || activeAccount?.phoneNumberId || '';
+    const oId = organization?.id || '';
+    if (/^\d+$/.test(trimmed)) {
+      const params = new URLSearchParams({ mediaId: trimmed });
+      if (pId) params.set('phoneNumberId', pId);
+      if (oId) params.set('orgId', oId);
+      return `/api/meta/media-proxy?${params.toString()}`;
+    }
+    if (trimmed.includes('/api/meta/media-proxy')) {
+      const [base, qs = ''] = trimmed.split('?');
+      const params = new URLSearchParams(qs);
+      if (pId && !params.get('phoneNumberId')) params.set('phoneNumberId', pId);
+      if (oId && !params.get('orgId')) params.set('orgId', oId);
+      return `${base}?${params.toString()}`;
+    }
+    return trimmed;
+  }, [currentCampaign, activeAccount?.phoneNumberId, organization?.id]);
 
   // Guaranteed fallback template structure so the preview is never empty
   const effectiveTemplate = useMemo<Template>(() => {
@@ -1543,6 +1564,8 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
                     businessName={activeAccount?.verifiedName || 'CloudWABA Official'}
                     customVariables={effectivePreviewVariables}
                     customMediaUrl={effectiveHeaderMediaUrl}
+                    phoneNumberId={currentCampaign?.phoneNumberId || activeAccount?.phoneNumberId}
+                    organizationId={organization?.id}
                     recipientName={activePreviewRecipient?.customerName}
                     deliveryStatus={activePreviewRecipient?.currentStatus || 'read'}
                     messageTimestamp={
@@ -2380,6 +2403,8 @@ export const CampaignAnalyticsPage: React.FC<CampaignAnalyticsPageProps> = ({
                         body_1: selectedRecipientForModal.customerName,
                       }}
                       customMediaUrl={effectiveHeaderMediaUrl}
+                      phoneNumberId={currentCampaign?.phoneNumberId || activeAccount?.phoneNumberId}
+                      organizationId={organization?.id}
                       deliveryStatus={selectedRecipientForModal.currentStatus}
                       messageTimestamp={
                         selectedRecipientForModal.sentAt || selectedRecipientForModal.createdAt

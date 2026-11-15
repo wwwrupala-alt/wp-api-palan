@@ -201,59 +201,157 @@ apiApp.post('/api/media/upload', handleUploadMedia);
 
 // Media Proxy: Safely fetch Meta scontent, lookaside or Meta Media ID buffers for live preview
 apiApp.get('/api/meta/media-proxy', async (req, res) => {
-  const mediaIdParam = (req.query.mediaId as string) || '';
-  let targetUrl = (req.query.url as string) || '';
+  const mediaIdParam = ((req.query.mediaId as string) || '').trim();
+  let targetUrl = ((req.query.url as string) || '').trim();
+  const phoneNumberIdParam = ((req.query.phoneNumberId as string) || '').trim();
+  const accountIdParam = ((req.query.accountId as string) || '').trim();
+  const orgIdParam = ((req.headers['x-organization-id'] as string) || (req.query.orgId as string) || '').trim();
+
+  // Unwrap if url itself points to /api/meta/media-proxy
+  if (targetUrl.includes('/api/meta/media-proxy')) {
+    const nestedMediaId = targetUrl.match(/[?&]mediaId=(\d+)/i)?.[1];
+    const nestedUrl = targetUrl.match(/[?&]url=([^&]+)/i)?.[1];
+    if (nestedMediaId) {
+      targetUrl = nestedMediaId;
+    } else if (nestedUrl) {
+      targetUrl = decodeURIComponent(nestedUrl);
+    }
+  }
 
   // If url is actually a numeric Meta Media ID (e.g. "2381431199056815")
-  const effectiveMediaId = mediaIdParam || (/^\d+$/.test(targetUrl.trim()) ? targetUrl.trim() : '');
+  const effectiveMediaId = mediaIdParam || (/^\d+$/.test(targetUrl) ? targetUrl : '');
 
   try {
-    const config = getMetaConfig();
-    let token = (req.query.token as string) || (req.headers['x-meta-token'] as string) || config.systemToken;
-
-    if (!token) {
-      try {
-        const orgId = (req.headers['x-organization-id'] as string) || (req.query.orgId as string) || 'org_7600468044';
-        const accSnap = await getDocs(collection(serverDb, `organizations/${orgId}/whatsappAccounts`));
-        for (const docSnap of accSnap.docs) {
-          const accData = docSnap.data();
-          const found = accData.customToken || accData.userAccessToken || accData.permanentToken;
-          if (found) {
-            token = found;
-            break;
-          }
-        }
-        if (!token) {
-          const allOrgs = await getDocs(collection(serverDb, 'organizations'));
-          for (const o of allOrgs.docs) {
-            const oAccs = await getDocs(collection(serverDb, `organizations/${o.id}/whatsappAccounts`));
-            for (const a of oAccs.docs) {
-              const d = a.data();
-              const found = d.customToken || d.userAccessToken || d.permanentToken;
-              if (found) {
-                token = found;
-                break;
-              }
-            }
-            if (token) break;
-          }
-        }
-      } catch (dbErr) {
-        console.warn('media-proxy token lookup notice:', dbErr);
+    // 1. Check in-memory media buffer cache first for resolved Meta Media ID
+    if (effectiveMediaId) {
+      const cachedMedia = inMemoryMediaBufferCache.get(`media_${effectiveMediaId}`);
+      if (cachedMedia) {
+        res.setHeader('Content-Type', cachedMedia.mimeType || 'image/jpeg');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        return res.send(cachedMedia.buffer);
       }
     }
 
+    const config = getMetaConfig();
+    const candidateTokens: string[] = [];
+    const seenTokens = new Set<string>();
+    const addToken = (t?: unknown) => {
+      if (typeof t === 'string') {
+        const clean = t.trim();
+        if (clean && !seenTokens.has(clean)) {
+          seenTokens.add(clean);
+          candidateTokens.push(clean);
+        }
+      }
+    };
+
+    // Priority 1: Explicit token passed via query or header
+    addToken(req.query.token);
+    addToken(req.headers['x-meta-token']);
+
+    // Priority 2: Look up WhatsApp accounts from Firestore (matching phoneNumberId / accountId first, then org, then all orgs)
+    const matchedPhoneTokens: string[] = [];
+    const orgTokens: string[] = [];
+    const otherTokens: string[] = [];
+
+    try {
+      const collectAccountTokens = (accId: string, d: Record<string, any>, isTargetOrg: boolean) => {
+        const accTok = d.customToken || d.permanentToken || d.userAccessToken;
+        if (!accTok || typeof accTok !== 'string') return;
+        const isPhoneMatch =
+          (phoneNumberIdParam && (d.phoneNumberId === phoneNumberIdParam || accId === phoneNumberIdParam)) ||
+          (accountIdParam && accId === accountIdParam);
+        if (isPhoneMatch) {
+          matchedPhoneTokens.push(accTok);
+        } else if (isTargetOrg) {
+          orgTokens.push(accTok);
+        } else {
+          otherTokens.push(accTok);
+        }
+      };
+
+      if (orgIdParam) {
+        const accSnap = await getDocs(collection(serverDb, `organizations/${orgIdParam}/whatsappAccounts`));
+        for (const docSnap of accSnap.docs) {
+          collectAccountTokens(docSnap.id, docSnap.data(), true);
+        }
+      }
+
+      // Also scan all organizations so cross-org / missing orgId requests still resolve the right WABA token
+      const allOrgs = await getDocs(collection(serverDb, 'organizations'));
+      for (const o of allOrgs.docs) {
+        if (orgIdParam && o.id === orgIdParam) continue;
+        const oAccs = await getDocs(collection(serverDb, `organizations/${o.id}/whatsappAccounts`));
+        for (const a of oAccs.docs) {
+          collectAccountTokens(a.id, a.data(), false);
+        }
+      }
+    } catch (dbErr) {
+      console.warn('media-proxy token lookup notice:', dbErr);
+    }
+
+    matchedPhoneTokens.forEach(addToken);
+    orgTokens.forEach(addToken);
+    addToken(config.systemToken);
+    addToken(process.env.META_ACCESS_TOKEN);
+    addToken(process.env.WHATSAPP_ACCESS_TOKEN);
+    otherTokens.forEach(addToken);
+
+    let resolvedToken = candidateTokens[0] || '';
+
     if (effectiveMediaId) {
-      if (!token) {
+      if (candidateTokens.length === 0) {
         return res.status(400).json({ error: 'Meta token required to resolve mediaId' });
       }
-      // 1. Fetch media download URL from Meta Graph API
-      const metaLookupRes = await fetch(`https://graph.facebook.com/${config.graphVersion}/${effectiveMediaId}?access_token=${token}`);
-      const metaLookup = await metaLookupRes.json();
-      if (!metaLookupRes.ok || !metaLookup?.url) {
-        return res.status(404).json({ error: metaLookup?.error?.message || 'Media not found on Meta' });
+
+      let lastErrorMsg = 'Media not found on Meta';
+      let downloadedBuffer: Buffer | null = null;
+      let downloadedContentType = 'image/jpeg';
+
+      for (const tok of candidateTokens) {
+        try {
+          const metaLookupRes = await fetch(
+            `https://graph.facebook.com/${config.graphVersion}/${encodeURIComponent(effectiveMediaId)}?access_token=${encodeURIComponent(tok)}`
+          );
+          const metaLookup = await metaLookupRes.json();
+          if (!metaLookupRes.ok || !metaLookup?.url) {
+            if (metaLookup?.error?.message) lastErrorMsg = metaLookup.error.message;
+            continue;
+          }
+
+          const mediaFetchRes = await fetch(metaLookup.url, {
+            headers: { Authorization: `Bearer ${tok}` },
+          });
+          if (!mediaFetchRes.ok) {
+            lastErrorMsg = `Failed to fetch remote media: ${mediaFetchRes.statusText}`;
+            continue;
+          }
+
+          const arrBuf = await mediaFetchRes.arrayBuffer();
+          downloadedBuffer = Buffer.from(arrBuf);
+          downloadedContentType = mediaFetchRes.headers.get('content-type') || metaLookup.mime_type || 'image/jpeg';
+          resolvedToken = tok;
+          break;
+        } catch (tryErr: any) {
+          lastErrorMsg = tryErr?.message || lastErrorMsg;
+        }
       }
-      targetUrl = metaLookup.url;
+
+      if (!downloadedBuffer) {
+        return res.status(404).json({ error: lastErrorMsg });
+      }
+
+      // Cache in memory so subsequent preview / clone loads are instant
+      inMemoryMediaBufferCache.set(`media_${effectiveMediaId}`, {
+        buffer: downloadedBuffer,
+        mimeType: downloadedContentType,
+        originalName: `media_${effectiveMediaId}`,
+        filename: `media_${effectiveMediaId}`,
+      });
+
+      res.setHeader('Content-Type', downloadedContentType);
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      return res.send(downloadedBuffer);
     }
 
     if (!targetUrl) {
@@ -262,6 +360,12 @@ apiApp.get('/api/meta/media-proxy', async (req, res) => {
 
     // If it's a local relative path like /uploads/...
     if (targetUrl.startsWith('/uploads/')) {
+      const filenameOnly = path.basename(targetUrl.split('?')[0]);
+      const memCached = inMemoryMediaBufferCache.get(filenameOnly) || inMemoryMediaBufferCache.get(targetUrl);
+      if (memCached) {
+        res.setHeader('Content-Type', memCached.mimeType || 'image/jpeg');
+        return res.send(memCached.buffer);
+      }
       const publicUploads = path.join(process.cwd(), 'public', targetUrl);
       if (fs.existsSync(publicUploads)) {
         return res.sendFile(publicUploads);
@@ -274,8 +378,8 @@ apiApp.get('/api/meta/media-proxy', async (req, res) => {
     }
 
     const fetchHeaders: Record<string, string> = {};
-    if (token && (targetUrl.includes('facebook.com') || targetUrl.includes('fbsbx.com') || targetUrl.includes('whatsapp.net'))) {
-      fetchHeaders['Authorization'] = `Bearer ${token}`;
+    if (resolvedToken && (targetUrl.includes('facebook.com') || targetUrl.includes('fbsbx.com') || targetUrl.includes('whatsapp.net'))) {
+      fetchHeaders['Authorization'] = `Bearer ${resolvedToken}`;
     }
     const response = await fetch(targetUrl, { headers: fetchHeaders });
     if (!response.ok) {

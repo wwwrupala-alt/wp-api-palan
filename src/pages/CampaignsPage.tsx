@@ -29,6 +29,7 @@ import {
   ChevronLeft,
   ChevronRight,
   RotateCcw,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -291,16 +292,45 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
     }
   };
 
-  // Resolved template for the campaign preview modal
-  const previewTemplate = useMemo<Template | null>(() => {
-    if (!previewCampaign) return null;
-    const mediaUrl =
+  const resolvedPreviewMediaUrl = useMemo(() => {
+    if (!previewCampaign) return '';
+    const raw =
       previewCampaign.headerMediaUrl ||
       previewCampaign.variableValues?.header_media_url ||
       previewCampaign.variableValues?.headerMediaUrl ||
       previewCampaign.variableValues?.media_url ||
       previewCampaign.scheduleData?.variableValues?.header_media_url ||
+      previewCampaign.variableValues?.header_media_id ||
+      previewCampaign.variableValues?.media_id ||
+      previewCampaign.scheduleData?.variableValues?.header_media_id ||
+      (previewCampaign as any).headerMediaId ||
       '';
+    const trimmed = String(raw || '').trim();
+    if (!trimmed) return '';
+    const pId = previewCampaign.phoneNumberId || activeAccount?.phoneNumberId || '';
+    const oId = organization?.id || '';
+    if (/^\d+$/.test(trimmed)) {
+      const params = new URLSearchParams({ mediaId: trimmed });
+      if (pId) params.set('phoneNumberId', pId);
+      if (oId) params.set('orgId', oId);
+      if (previewCampaign.whatsAppAccountId) params.set('accountId', previewCampaign.whatsAppAccountId);
+      return `/api/meta/media-proxy?${params.toString()}`;
+    }
+    if (trimmed.includes('/api/meta/media-proxy')) {
+      const [base, qs = ''] = trimmed.split('?');
+      const params = new URLSearchParams(qs);
+      if (pId && !params.get('phoneNumberId')) params.set('phoneNumberId', pId);
+      if (oId && !params.get('orgId')) params.set('orgId', oId);
+      if (previewCampaign.whatsAppAccountId && !params.get('accountId')) params.set('accountId', previewCampaign.whatsAppAccountId);
+      return `${base}?${params.toString()}`;
+    }
+    return trimmed;
+  }, [previewCampaign, activeAccount?.phoneNumberId, organization?.id]);
+
+  // Resolved template for the campaign preview modal
+  const previewTemplate = useMemo<Template | null>(() => {
+    if (!previewCampaign) return null;
+    const mediaUrl = resolvedPreviewMediaUrl;
 
     if (previewCampaign.template && previewCampaign.template.components && previewCampaign.template.components.length > 0) {
       const hasHeader = previewCampaign.template.components.some((c) => c.type === 'HEADER');
@@ -386,9 +416,13 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
     const bodyComp = previewTemplate.components?.find((c) => c.type === 'BODY');
     const vars = previewCampaign.variableValues || {};
     const media =
+      resolvedPreviewMediaUrl ||
       previewCampaign.headerMediaUrl ||
       vars.header_media_url ||
       vars.headerMediaUrl ||
+      vars.media_url ||
+      vars.header_media_id ||
+      vars.media_id ||
       '';
 
     if (headerComp?.format === 'IMAGE' || headerComp?.format === 'VIDEO' || headerComp?.format === 'DOCUMENT') {
@@ -1494,13 +1528,9 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
                   template={previewTemplate}
                   businessName={activeAccount?.verifiedName || 'Official Business'}
                   customVariables={previewCampaign.variableValues}
-                  customMediaUrl={
-                    previewCampaign.headerMediaUrl ||
-                    previewCampaign.variableValues?.header_media_url ||
-                    previewCampaign.variableValues?.header_media_id ||
-                    previewCampaign.scheduleData?.variableValues?.header_media_url ||
-                    previewCampaign.scheduleData?.variableValues?.header_media_id
-                  }
+                  customMediaUrl={resolvedPreviewMediaUrl}
+                  phoneNumberId={previewCampaign.phoneNumberId || activeAccount?.phoneNumberId}
+                  organizationId={organization?.id}
                   messageTimestamp={previewCampaign.startedAt || previewCampaign.createdAt}
                   deliveryStatus="read"
                   size="large"
@@ -1554,13 +1584,24 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
                       {previewVariablesList.map((item, idx) => {
                         const valTrimmed = String(item.value || '').trim();
                         const isNumericMedia = /^\d+$/.test(valTrimmed);
+                        const pId = previewCampaign.phoneNumberId || activeAccount?.phoneNumberId || '';
+                        const oId = organization?.id || '';
+                        const appendCtx = (u: string) => {
+                          const [b, q = ''] = u.split('?');
+                          const p = new URLSearchParams(q);
+                          if (pId && !p.get('phoneNumberId')) p.set('phoneNumberId', pId);
+                          if (oId && !p.get('orgId')) p.set('orgId', oId);
+                          return `${b}?${p.toString()}`;
+                        };
                         const mediaThumbSrc = isNumericMedia
-                          ? `/api/meta/media-proxy?mediaId=${encodeURIComponent(valTrimmed)}`
+                          ? appendCtx(`/api/meta/media-proxy?mediaId=${encodeURIComponent(valTrimmed)}`)
+                          : valTrimmed.includes('/api/meta/media-proxy')
+                          ? appendCtx(valTrimmed)
+                          : valTrimmed.includes('lookaside.fbsbx.com') || valTrimmed.includes('scontent.whatsapp.net')
+                          ? appendCtx(`/api/meta/media-proxy?url=${encodeURIComponent(valTrimmed)}`)
                           : valTrimmed.startsWith('http') || valTrimmed.startsWith('/uploads/') || valTrimmed.startsWith('/assets/')
                           ? valTrimmed
-                          : valTrimmed.includes('lookaside.fbsbx.com') || valTrimmed.includes('scontent.whatsapp.net')
-                          ? `/api/meta/media-proxy?url=${encodeURIComponent(valTrimmed)}`
-                          : '/uploads/24X4_1793012982079.jpg';
+                          : '';
 
                         return (
                           <div
@@ -1577,22 +1618,27 @@ export const CampaignsPage: React.FC<CampaignsPageProps> = ({
                             <div className="text-right max-w-[190px]">
                               {item.type === 'media' ? (
                                 <div className="flex items-center justify-end space-x-1.5">
-                                  <img
-                                    src={mediaThumbSrc}
-                                    alt="Media preview"
-                                    className="w-7 h-7 rounded-md object-cover border border-emerald-300 dark:border-emerald-700 shadow-2xs shrink-0"
-                                    onError={(e) => {
-                                      const target = e.currentTarget;
-                                      if (target.src !== '/uploads/24X4_1793012982079.jpg') {
-                                        target.src = '/uploads/24X4_1793012982079.jpg';
-                                      }
-                                    }}
-                                  />
+                                  {mediaThumbSrc ? (
+                                    <img
+                                      src={mediaThumbSrc}
+                                      alt="Media preview"
+                                      className="w-7 h-7 rounded-md object-cover border border-emerald-300 dark:border-emerald-700 shadow-2xs shrink-0"
+                                      onError={(e) => {
+                                        e.currentTarget.style.display = 'none';
+                                      }}
+                                    />
+                                  ) : (
+                                    <div className="w-7 h-7 rounded-md bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 flex items-center justify-center shrink-0">
+                                      <ImageIcon className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                                    </div>
+                                  )}
                                   <span
                                     className="font-mono text-[10px] text-emerald-700 dark:text-emerald-300 truncate block max-w-[120px]"
                                     title={item.value}
                                   >
-                                    {item.value.split('/').pop()?.split('?')[0] || item.value}
+                                    {valTrimmed.includes('/api/meta/media-proxy')
+                                      ? `Media ID: ${valTrimmed.match(/[?&]mediaId=([^&]+)/i)?.[1] || 'Attached'}`
+                                      : item.value.split('/').pop()?.split('?')[0] || item.value}
                                   </span>
                                 </div>
                               ) : (

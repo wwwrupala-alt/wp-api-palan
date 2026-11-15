@@ -69,6 +69,24 @@ export async function resolveMetaMediaObject(
     return { id: trimmed };
   }
 
+  // 1b. If it's our internal media-proxy URL referencing a Meta Media ID or remote URL
+  if (trimmed.includes('/api/meta/media-proxy')) {
+    const mediaIdMatch = trimmed.match(/[?&]mediaId=(\d+)/i);
+    if (mediaIdMatch && mediaIdMatch[1]) {
+      return { id: mediaIdMatch[1] };
+    }
+    const urlMatch = trimmed.match(/[?&]url=([^&]+)/i);
+    if (urlMatch && urlMatch[1]) {
+      return resolveMetaMediaObject(
+        decodeURIComponent(urlMatch[1]),
+        phoneNumberId,
+        token,
+        mediaType,
+        graphVersion
+      );
+    }
+  }
+
   const cacheKey = `${phoneNumberId}:${trimmed}`;
   if (metaMediaIdCache.has(cacheKey)) {
     const cachedId = metaMediaIdCache.get(cacheKey)!;
