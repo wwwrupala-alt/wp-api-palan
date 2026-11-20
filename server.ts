@@ -62,6 +62,17 @@ async function startServer() {
   // 1. Mount API backend endpoints FIRST before any static or SPA fallback
   app.use(apiApp);
 
+  // Always serve sw.js with no-store so stale browser service workers update immediately
+  app.get('/sw.js', (_req, res, next) => {
+    const swPath = path.join(__dirname, 'public', 'sw.js');
+    if (fs.existsSync(swPath)) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+      return res.sendFile(swPath);
+    }
+    return next();
+  });
+
   // 2. Initialize background schedulers for scheduled broadcasts & drip sequences
   startCampaignScheduler();
   startDripScheduler();
@@ -85,6 +96,7 @@ async function startServer() {
         port: PORT,
         hmr: false,
         watch: null,
+        allowedHosts: true,
       },
       appType: 'spa',
     });

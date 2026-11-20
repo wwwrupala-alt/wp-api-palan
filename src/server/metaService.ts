@@ -1730,8 +1730,16 @@ export async function executeCampaignDispatchCore(params: {
     }
   }
 
-  // 2. Dispatch messages with automated pacing delay adhering to Meta rate limits
-  for (const recipient of recipients) {
+  // 2. Dispatch messages using Fast & Safe Balanced Batching (~12–15 msg/sec)
+  // Safely stays well below Meta's 80 msg/sec default burst limit, with adaptive slowdown on 130429 / HTTP 429
+  const MAX_BATCH_SIZE = 15;
+  const MIN_BATCH_SIZE = 5;
+  const BATCH_WINDOW_MS = 1000;
+  let currentBatchSize = MAX_BATCH_SIZE;
+  let cleanBatchesStreak = 0;
+  const sendUrl = `https://graph.facebook.com/${config.graphVersion}/${phoneNumberId}/messages`;
+
+  const dispatchSingleRecipient = async (recipient: any): Promise<{ hitRateLimit: boolean }> => {
     const cleanPhone = (recipient.phone || recipient).replace(/[^0-9]/g, '');
     const recipientVariables = recipient.variableValues || variableValues || {};
     const formattedComponents = formatTemplateComponentsForSending(
@@ -1741,26 +1749,29 @@ export async function executeCampaignDispatchCore(params: {
     );
     const recipientId = recipient.id || `rec_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const customerName = recipient.name || 'Customer';
+    const itemIso = new Date().toISOString();
+    let hitRateLimit = false;
+
+    const requestBody = JSON.stringify({
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: cleanPhone,
+      type: 'template',
+      template: {
+        name: template.name,
+        language: { code: template.language || 'en_US' },
+        ...(formattedComponents.length > 0 ? { components: formattedComponents } : {}),
+      },
+    });
 
     try {
-      const sendUrl = `https://graph.facebook.com/${config.graphVersion}/${phoneNumberId}/messages`;
       let resMeta = await fetch(sendUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({
-          messaging_product: 'whatsapp',
-          recipient_type: 'individual',
-          to: cleanPhone,
-          type: 'template',
-          template: {
-            name: template.name,
-            language: { code: template.language || 'en_US' },
-            ...(formattedComponents.length > 0 ? { components: formattedComponents } : {}),
-          },
-        }),
+        body: requestBody,
       });
 
       let dataMeta = await resMeta.json();
@@ -1768,6 +1779,7 @@ export async function executeCampaignDispatchCore(params: {
       // SMART RATE LIMIT PROTECTION (Error 130429 / HTTP 429)
       // If Meta throttle is hit, pause 3s and retry once automatically before marking failed
       if (dataMeta?.error?.code === 130429 || resMeta.status === 429) {
+        hitRateLimit = true;
         console.warn(`[Broadcast] Rate limit (130429) detected for ${cleanPhone}. Pausing 3s for throttle cooldown...`);
         await new Promise((resolve) => setTimeout(resolve, 3000));
 
@@ -1778,17 +1790,7 @@ export async function executeCampaignDispatchCore(params: {
               'Content-Type': 'application/json',
               Authorization: `Bearer ${token}`,
             },
-            body: JSON.stringify({
-              messaging_product: 'whatsapp',
-              recipient_type: 'individual',
-              to: cleanPhone,
-              type: 'template',
-              template: {
-                name: template.name,
-                language: { code: template.language || 'en_US' },
-                ...(formattedComponents.length > 0 ? { components: formattedComponents } : {}),
-              },
-            }),
+            body: requestBody,
           });
           const retryData = await retryRes.json();
           if (retryRes.ok && !retryData.error) {
@@ -1796,8 +1798,8 @@ export async function executeCampaignDispatchCore(params: {
             dataMeta = retryData;
             console.log(`[Broadcast] Auto-retry succeeded for ${cleanPhone} after rate limit pause.`);
           } else {
-            // Still hitting rate limit, pause 4s to protect subsequent campaign numbers
-            await new Promise((resolve) => setTimeout(resolve, 4000));
+            resMeta = retryRes;
+            dataMeta = retryData;
           }
         } catch {}
       }
@@ -1818,7 +1820,7 @@ export async function executeCampaignDispatchCore(params: {
           whatsappMessageId: wamid,
           fbTraceId: traceId || undefined,
           currentStatus: 'sent',
-          sentAt: nowIso,
+          sentAt: itemIso,
           timeline: [
             {
               status: 'queued',
@@ -1827,39 +1829,38 @@ export async function executeCampaignDispatchCore(params: {
             },
             {
               status: 'sent',
-              timestamp: nowIso,
+              timestamp: itemIso,
               description: 'Dispatched via Meta WhatsApp Cloud API',
               details: traceId ? `WAMID: ${wamid} | x-fb-trace-id: ${traceId}` : `WAMID: ${wamid}`,
             },
           ],
           createdAt: nowIso,
-          updatedAt: nowIso,
+          updatedAt: itemIso,
         };
         dispatchedRecipients.push(recItem);
 
         if (organizationId && campaignId) {
           try {
-            // 1. Save recipient to campaign subcollection in Firestore
             const recDocRef = doc(serverDb, `organizations/${organizationId}/campaigns/${campaignId}/recipients`, recipientId);
-            await setDoc(recDocRef, recItem, { merge: true });
-
-            // 2. Index in wamidTracker for instantaneous status webhook correlation
             const trackerRef = doc(serverDb, 'wamidTracker', wamid);
-            await setDoc(
-              trackerRef,
-              {
-                wamid,
-                organizationId,
-                campaignId,
-                recipientId,
-                phoneNumber: cleanPhone,
-                customerName,
-                status: 'sent',
-                fbTraceId: traceId || undefined,
-                updatedAt: nowIso,
-              },
-              { merge: true }
-            );
+            await Promise.all([
+              setDoc(recDocRef, cleanFirestoreData(recItem), { merge: true }),
+              setDoc(
+                trackerRef,
+                cleanFirestoreData({
+                  wamid,
+                  organizationId,
+                  campaignId,
+                  recipientId,
+                  phoneNumber: cleanPhone,
+                  customerName,
+                  status: 'sent',
+                  fbTraceId: traceId || undefined,
+                  updatedAt: itemIso,
+                }),
+                { merge: true }
+              ),
+            ]);
           } catch (saveErr) {
             console.warn('[Broadcast] Error writing recipient/tracker to Firestore:', saveErr);
           }
@@ -1878,26 +1879,26 @@ export async function executeCampaignDispatchCore(params: {
           customerName,
           currentStatus: 'failed',
           fbTraceId: traceId || undefined,
-          failedAt: nowIso,
+          failedAt: itemIso,
           failureReason: errorMsg,
           failureCode: dataMeta.error?.code ? String(dataMeta.error.code) : undefined,
           timeline: [
             {
               status: 'failed',
-              timestamp: nowIso,
+              timestamp: itemIso,
               description: `Failed to deliver: ${errorMsg}`,
               details: traceId ? `x-fb-trace-id: ${traceId}` : undefined,
             },
           ],
           createdAt: nowIso,
-          updatedAt: nowIso,
+          updatedAt: itemIso,
         };
         dispatchedRecipients.push(failRec);
 
         if (organizationId && campaignId) {
           try {
             const recDocRef = doc(serverDb, `organizations/${organizationId}/campaigns/${campaignId}/recipients`, recipientId);
-            await setDoc(recDocRef, failRec, { merge: true });
+            await setDoc(recDocRef, cleanFirestoreData(failRec), { merge: true });
           } catch (saveErr) {
             console.warn('[Broadcast] Error saving failed recipient to Firestore:', saveErr);
           }
@@ -1907,11 +1908,52 @@ export async function executeCampaignDispatchCore(params: {
       failedCount++;
       const netError = err instanceof Error ? err.message : 'Network error';
       errors.push({ phone: cleanPhone, error: netError });
+
+      const failRec: CampaignRecipient = {
+        id: recipientId,
+        campaignId: campaignId || '',
+        campaignName: campaignName || template.name,
+        organizationId: organizationId || '',
+        phoneNumber: `+${cleanPhone}`,
+        customerName,
+        currentStatus: 'failed',
+        failedAt: itemIso,
+        failureReason: netError,
+        timeline: [
+          {
+            status: 'failed',
+            timestamp: itemIso,
+            description: `Network error: ${netError}`,
+          },
+        ],
+        createdAt: nowIso,
+        updatedAt: itemIso,
+      };
+      dispatchedRecipients.push(failRec);
+
+      if (organizationId && campaignId) {
+        try {
+          const recDocRef = doc(serverDb, `organizations/${organizationId}/campaigns/${campaignId}/recipients`, recipientId);
+          await setDoc(recDocRef, cleanFirestoreData(failRec), { merge: true });
+        } catch {}
+      }
     }
 
-    // Periodic progress update in Firestore every 5 recipients so live UI shows progress
+    return { hitRateLimit };
+  };
+
+  let cursor = 0;
+  while (cursor < recipients.length) {
+    const batchStart = Date.now();
+    const batch = recipients.slice(cursor, cursor + currentBatchSize);
+    cursor += batch.length;
+
+    const batchResults = await Promise.all(batch.map((recipient) => dispatchSingleRecipient(recipient)));
+    const batchHitRateLimit = batchResults.some((r) => r.hitRateLimit);
+
+    // Update campaign progress once per batch (keeps live UI smooth while minimizing Firestore writes)
     const processedSoFar = sentCount + failedCount;
-    if (organizationId && campaignId && (processedSoFar % 5 === 0 || processedSoFar === recipients.length)) {
+    if (organizationId && campaignId) {
       try {
         const campDocRef = doc(serverDb, `organizations/${organizationId}/campaigns`, campaignId);
         updateDoc(campDocRef, {
@@ -1924,9 +1966,25 @@ export async function executeCampaignDispatchCore(params: {
       } catch {}
     }
 
-    // Pacing delay (500ms) between recipient dispatches to adhere to Meta Cloud API burst rate limit
-    if (recipients.length > 1 && processedSoFar < recipients.length) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
+    // Adaptive rate control & strict 1-second window pacing
+    if (cursor < recipients.length) {
+      if (batchHitRateLimit) {
+        cleanBatchesStreak = 0;
+        currentBatchSize = Math.max(MIN_BATCH_SIZE, Math.floor(currentBatchSize / 2));
+        console.warn(
+          `[Broadcast] Meta rate-limit encountered. Stepping batch size down to ${currentBatchSize} msg/sec and cooling down 3s...`
+        );
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+      } else {
+        cleanBatchesStreak++;
+        if (cleanBatchesStreak >= 2 && currentBatchSize < MAX_BATCH_SIZE) {
+          currentBatchSize = Math.min(MAX_BATCH_SIZE, currentBatchSize + 3);
+        }
+        const elapsed = Date.now() - batchStart;
+        if (elapsed < BATCH_WINDOW_MS) {
+          await new Promise((resolve) => setTimeout(resolve, BATCH_WINDOW_MS - elapsed));
+        }
+      }
     }
   }
 
@@ -1934,6 +1992,7 @@ export async function executeCampaignDispatchCore(params: {
     registerRecipients(campaignId, dispatchedRecipients, organizationId);
   }
 
+  const completedIso = new Date().toISOString();
   const campaignStats = {
     sent: sentCount,
     failed: failedCount,
@@ -1955,9 +2014,9 @@ export async function executeCampaignDispatchCore(params: {
         campDocRef,
         {
           status: 'completed',
-          completedAt: nowIso,
+          completedAt: completedIso,
           stats: campaignStats,
-          updatedAt: nowIso,
+          updatedAt: completedIso,
         },
         { merge: true }
       );

@@ -57,7 +57,7 @@ export async function resolveMetaMediaObject(
   mediaRef: string | undefined,
   phoneNumberId: string,
   token: string,
-  mediaType: 'image' | 'video' | 'document' = 'image',
+  mediaType: 'image' | 'video' | 'document' | 'audio' = 'image',
   graphVersion: string = 'v22.0'
 ): Promise<{ id?: string; link?: string; filename?: string } | null> {
   if (!mediaRef || typeof mediaRef !== 'string') return null;

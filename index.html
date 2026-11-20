@@ -33,15 +33,40 @@
     <script type="module" src="/src/main.tsx"></script>
     <script>
       if ('serviceWorker' in navigator) {
-        window.addEventListener('load', function() {
-          navigator.serviceWorker.register('/sw.js')
-            .then(function(reg) {
-              console.log('[PWA] Service Worker registered with scope:', reg.scope);
-            })
-            .catch(function(err) {
-              console.warn('[PWA] Service Worker registration failed:', err);
-            });
-        });
+        var host = window.location.hostname || '';
+        var isDevPreview =
+          host === 'localhost' ||
+          host === '127.0.0.1' ||
+          host.indexOf('ais-dev-') === 0 ||
+          host.indexOf('ais-pre-') === 0;
+
+        if (isDevPreview) {
+          var hadController = Boolean(navigator.serviceWorker.controller);
+          navigator.serviceWorker.getRegistrations().then(function(regs) {
+            return Promise.all(regs.map(function(r) { return r.unregister(); }));
+          }).then(function() {
+            if ('caches' in window) {
+              return caches.keys().then(function(keys) {
+                return Promise.all(keys.map(function(k) { return caches.delete(k); }));
+              });
+            }
+          }).then(function() {
+            if (hadController && !sessionStorage.getItem('cw_sw_cleared_v2')) {
+              sessionStorage.setItem('cw_sw_cleared_v2', '1');
+              window.location.reload();
+            }
+          }).catch(function() {});
+        } else {
+          window.addEventListener('load', function() {
+            navigator.serviceWorker.register('/sw.js')
+              .then(function(reg) {
+                console.log('[PWA] Service Worker registered with scope:', reg.scope);
+              })
+              .catch(function(err) {
+                console.warn('[PWA] Service Worker registration failed:', err);
+              });
+          });
+        }
       }
     </script>
   </body>

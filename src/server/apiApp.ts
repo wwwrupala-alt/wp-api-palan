@@ -111,6 +111,13 @@ import {
   handleDeleteCrmLead,
   handleResetCrmLeads,
 } from './crmLeadsService.ts';
+import {
+  handleExternalWhatsAppSend,
+  handleGetExternalApiConfig,
+  handleSaveExternalApiConfig,
+  handleRegenerateExternalApiKey,
+  handleGetExternalApiLogs,
+} from './externalApiService.ts';
 
 // Initialize default accounts and persistent disk backups
 ensureDefaultAccounts().catch((err) => {
@@ -465,6 +472,11 @@ apiApp.get('/api/meta/templates', handleGetTemplates);
 apiApp.post('/api/meta/templates', handleCreateTemplate);
 apiApp.delete('/api/meta/templates', handleDeleteTemplate);
 apiApp.post('/api/meta/send-message', handleSendMessage);
+apiApp.post('/api/whatsapp/send', handleExternalWhatsAppSend);
+apiApp.get('/api/external-api/config', handleGetExternalApiConfig);
+apiApp.post('/api/external-api/config', handleSaveExternalApiConfig);
+apiApp.post('/api/external-api/regenerate', handleRegenerateExternalApiKey);
+apiApp.get('/api/external-api/logs', handleGetExternalApiLogs);
 apiApp.post('/api/meta/campaigns/send', handleSendCampaign);
 apiApp.post('/api/meta/campaigns/:campaignId/send-now', handleSendScheduledCampaignNow);
 apiApp.post('/api/meta/campaigns/:campaignId/trigger', handleSendScheduledCampaignNow);

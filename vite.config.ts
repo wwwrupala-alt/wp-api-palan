@@ -22,6 +22,7 @@ export default defineConfig(() => {
       // HMR is disabled in AI Studio environment
       hmr: false,
       watch: null,
+      allowedHosts: true as const,
     },
   };
 });

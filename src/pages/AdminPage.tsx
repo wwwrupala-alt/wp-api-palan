@@ -28,6 +28,12 @@ import {
   Upload,
   HelpCircle,
   Image as ImageIcon,
+  Key,
+  Eye,
+  EyeOff,
+  Code,
+  Webhook,
+  FileText,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -43,10 +49,10 @@ import { MaskedIdDisplay } from '../components/MaskedIdDisplay.tsx';
 
 export const AdminPage: React.FC = () => {
   const { organization, currentUser, refreshProfile, isMasterAdmin } = useAuth();
-  const { refreshMetaStatus } = useWhatsAppAccounts();
+  const { accounts, activeAccount, refreshMetaStatus } = useWhatsAppAccounts();
   const toast = useToast();
 
-  const [activeTab, setActiveTab] = useState<'meta_app' | 'whitelabel' | 'health' | 'logs' | 'storage'>('meta_app');
+  const [activeTab, setActiveTab] = useState<'meta_app' | 'whitelabel' | 'health' | 'logs' | 'storage' | 'external_api'>('meta_app');
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [copiedToken, setCopiedToken] = useState(false);
   const [copiedRedirect, setCopiedRedirect] = useState(false);
@@ -122,6 +128,31 @@ export const AdminPage: React.FC = () => {
   const [autoPurgeEnabledInput, setAutoPurgeEnabledInput] = useState(true);
   const [cascadeDeleteInput, setCascadeDeleteInput] = useState(true);
   const [savingStorageSettings, setSavingStorageSettings] = useState(false);
+
+  // External API / Integration State
+  const [extApiKey, setExtApiKey] = useState('');
+  const [extApiEnabled, setExtApiEnabled] = useState(true);
+  const [extDefaultPhoneId, setExtDefaultPhoneId] = useState('');
+  const [extLastUsedAt, setExtLastUsedAt] = useState<string | null>(null);
+  const [extConfigLoading, setExtConfigLoading] = useState(false);
+  const [extSavingConfig, setExtSavingConfig] = useState(false);
+  const [extRegenerating, setExtRegenerating] = useState(false);
+  const [extShowKey, setExtShowKey] = useState(false);
+  const [copiedExtEndpoint, setCopiedExtEndpoint] = useState(false);
+  const [copiedExtKey, setCopiedExtKey] = useState(false);
+  const [copiedExtCurl, setCopiedExtCurl] = useState(false);
+  const [extLogs, setExtLogs] = useState<any[]>([]);
+  const [extLogsLoading, setExtLogsLoading] = useState(false);
+  const [extTestTo, setExtTestTo] = useState('');
+  const [extTestName, setExtTestName] = useState('');
+  const [extTestMessage, setExtTestMessage] = useState('');
+  const [extTestMediaUrl, setExtTestMediaUrl] = useState('');
+  const [extTestCaption, setExtTestCaption] = useState('');
+  const [extTestSending, setExtTestSending] = useState(false);
+  const [extTestResult, setExtTestResult] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const extEndpointUrl =
+    typeof window !== 'undefined' ? `${window.location.origin}/api/whatsapp/send` : 'https://www.wabacloud.in/api/whatsapp/send';
 
   // Check if this tenant has their own custom dedicated Meta App
   const hasCustomMetaApp = Boolean(organization?.metaAppConfig?.appId);
@@ -435,7 +466,163 @@ export const AdminPage: React.FC = () => {
     if (activeTab === 'storage') {
       fetchStorageMetrics();
     }
-  }, [activeTab]);
+    if (activeTab === 'external_api') {
+      fetchExternalApiConfig();
+      fetchExternalApiLogs();
+    }
+  }, [activeTab, organization?.id]);
+
+  const resolvedOrgId = organization?.id || `org_${currentUser?.uid || 'master_platform'}`;
+
+  const fetchExternalApiConfig = async () => {
+    setExtConfigLoading(true);
+    try {
+      const res = await fetch(`/api/external-api/config?organizationId=${encodeURIComponent(resolvedOrgId)}`, {
+        headers: { 'x-organization-id': resolvedOrgId },
+      });
+      const data = await res.json();
+      if (res.ok && data.ok && data.config) {
+        setExtApiKey(data.config.apiKey || '');
+        setExtApiEnabled(data.config.enabled !== false);
+        setExtDefaultPhoneId(data.config.defaultPhoneNumberId || activeAccount?.phoneNumberId || '');
+        setExtLastUsedAt(data.config.lastUsedAt || null);
+      }
+    } catch (err) {
+      console.warn('Failed to load External API config:', err);
+    } finally {
+      setExtConfigLoading(false);
+    }
+  };
+
+  const fetchExternalApiLogs = async () => {
+    setExtLogsLoading(true);
+    try {
+      const res = await fetch(`/api/external-api/logs?organizationId=${encodeURIComponent(resolvedOrgId)}`, {
+        headers: { 'x-organization-id': resolvedOrgId },
+      });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        setExtLogs(data.logs || []);
+      }
+    } catch (err) {
+      console.warn('Failed to load External API logs:', err);
+    } finally {
+      setExtLogsLoading(false);
+    }
+  };
+
+  const handleSaveExternalApiConfig = async (nextEnabled?: boolean, nextPhoneId?: string) => {
+    setExtSavingConfig(true);
+    try {
+      const res = await fetch('/api/external-api/config', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-organization-id': resolvedOrgId,
+        },
+        body: JSON.stringify({
+          organizationId: resolvedOrgId,
+          enabled: nextEnabled !== undefined ? nextEnabled : extApiEnabled,
+          defaultPhoneNumberId: nextPhoneId !== undefined ? nextPhoneId : extDefaultPhoneId,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || 'Failed to save External API configuration.');
+      }
+      setExtApiEnabled(data.config.enabled !== false);
+      setExtDefaultPhoneId(data.config.defaultPhoneNumberId || '');
+      toast.showSuccess('Settings Saved', 'External API configuration saved to database.');
+    } catch (err: any) {
+      toast.showError('Save Failed', err?.message || 'Could not save External API configuration.');
+    } finally {
+      setExtSavingConfig(false);
+    }
+  };
+
+  const handleRegenerateExternalApiKey = async () => {
+    if (
+      extApiKey &&
+      !window.confirm(
+        'Generate a new API Key?\n\nYour old API Key will stop working immediately and external servers (e.g. voice AI) must update to the new key.'
+      )
+    ) {
+      return;
+    }
+
+    setExtRegenerating(true);
+    try {
+      const res = await fetch('/api/external-api/regenerate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-organization-id': resolvedOrgId,
+        },
+        body: JSON.stringify({ organizationId: resolvedOrgId }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || 'Failed to regenerate API key.');
+      }
+      setExtApiKey(data.config.apiKey);
+      setExtShowKey(true);
+      toast.showSuccess('New API Key Generated', 'Copy and save the new key in your Voice AI server.');
+    } catch (err: any) {
+      toast.showError('Generation Failed', err?.message || 'Could not regenerate API key.');
+    } finally {
+      setExtRegenerating(false);
+    }
+  };
+
+  const handleSendTestExternalApi = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!extApiKey) {
+      toast.showWarning('API Key Missing', 'Wait for API Key to load or generate one first.');
+      return;
+    }
+    if (!extTestTo.trim()) {
+      toast.showWarning('Phone Required', 'Enter a recipient WhatsApp number to test.');
+      return;
+    }
+    if (!extTestMessage.trim() && !extTestMediaUrl.trim()) {
+      toast.showWarning('Content Required', 'Enter a message or mediaUrl to test.');
+      return;
+    }
+
+    setExtTestSending(true);
+    setExtTestResult(null);
+    try {
+      const res = await fetch('/api/whatsapp/send', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': extApiKey,
+        },
+        body: JSON.stringify({
+          to: extTestTo.trim(),
+          name: extTestName.trim() || undefined,
+          message: extTestMessage.trim() || undefined,
+          mediaUrl: extTestMediaUrl.trim() || undefined,
+          caption: extTestCaption.trim() || undefined,
+          source: 'settings-api-tester',
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        setExtTestResult({ ok: true, text: `Sent · Message ID: ${data.messageId}` });
+        toast.showSuccess('Test Message Sent', `Message ID: ${data.messageId}`);
+      } else {
+        setExtTestResult({ ok: false, text: data.error || 'Delivery failed' });
+        toast.showError('Test Failed', data.error || 'Meta rejected test message.');
+      }
+      fetchExternalApiLogs();
+    } catch (err: any) {
+      setExtTestResult({ ok: false, text: err?.message || 'Network error' });
+      toast.showError('Network Error', err?.message || 'Failed to invoke /api/whatsapp/send.');
+    } finally {
+      setExtTestSending(false);
+    }
+  };
 
   const handleVerifyDns = async (domainToTest: string) => {
     if (!domainToTest) {
@@ -620,6 +807,18 @@ export const AdminPage: React.FC = () => {
           <span className="px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-800">
             AUTO-CLEAN
           </span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('external_api')}
+          className={`pb-3 border-b-2 flex items-center space-x-1.5 transition-colors cursor-pointer shrink-0 ${
+            activeTab === 'external_api'
+              ? 'border-emerald-600 text-emerald-700 dark:border-emerald-400 dark:text-emerald-400 font-semibold'
+              : 'border-transparent text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-300'
+          }`}
+        >
+          <Webhook className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+          <span>External API / Integration</span>
         </button>
       </div>
 
@@ -1682,6 +1881,434 @@ export const AdminPage: React.FC = () => {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 5: EXTERNAL API / INTEGRATION */}
+      {activeTab === 'external_api' && (
+        <div className="space-y-6">
+          {/* Header & Status Row */}
+          <div className="p-6 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-neutral-200 dark:border-neutral-800 pb-4">
+              <div>
+                <h3 className="text-base font-bold text-neutral-900 dark:text-white flex items-center space-x-2">
+                  <Webhook className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+                  <span>External API / Integration</span>
+                </h3>
+                <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-1">
+                  Connect external servers such as <span className="font-mono text-neutral-700 dark:text-neutral-300">vanidesk-voice-ai</span> to send live WhatsApp messages, links, PDFs, or images via REST API during calls.
+                </p>
+              </div>
+
+              <div className="flex items-center space-x-3 shrink-0">
+                <span className="text-xs font-medium text-neutral-600 dark:text-neutral-400">
+                  {extApiEnabled ? 'API Active' : 'API Disabled'}
+                </span>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={extApiEnabled}
+                    onChange={(e) => {
+                      const next = e.target.checked;
+                      setExtApiEnabled(next);
+                      handleSaveExternalApiConfig(next, undefined);
+                    }}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-neutral-200 dark:bg-neutral-700 peer-focus:outline-hidden rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600" />
+                </label>
+              </div>
+            </div>
+
+            {extConfigLoading ? (
+              <div className="py-8 flex items-center justify-center space-x-2 text-xs text-neutral-500 dark:text-neutral-400">
+                <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />
+                <span>Loading API credentials...</span>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Left Column: Endpoint & API Key */}
+                <div className="space-y-4">
+                  {/* Webhook Endpoint URL */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-neutral-800 dark:text-neutral-200 block">
+                      REST Endpoint URL (POST)
+                    </label>
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="text"
+                        readOnly
+                        value={extEndpointUrl}
+                        className="flex-1 px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-950 font-mono tabular-nums text-xs text-neutral-900 dark:text-neutral-100 select-all"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(extEndpointUrl);
+                          setCopiedExtEndpoint(true);
+                          setTimeout(() => setCopiedExtEndpoint(false), 2000);
+                        }}
+                        className="px-3.5 py-2 rounded-xl bg-neutral-900 dark:bg-neutral-800 hover:bg-neutral-800 dark:hover:bg-neutral-700 text-white text-xs font-medium flex items-center space-x-1.5 cursor-pointer shrink-0 transition-colors"
+                      >
+                        {copiedExtEndpoint ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span>{copiedExtEndpoint ? 'Copied' : 'Copy URL'}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Secret API Key */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-semibold text-neutral-800 dark:text-neutral-200 flex items-center space-x-1.5">
+                        <Key className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                        <span>Secret API Key</span>
+                      </label>
+                      {extLastUsedAt && (
+                        <span className="text-[11px] font-mono tabular-nums text-neutral-500 dark:text-neutral-400">
+                          Last used: {new Date(extLastUsedAt).toLocaleString()}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center space-x-2">
+                      <div className="relative flex-1">
+                        <input
+                          type={extShowKey ? 'text' : 'password'}
+                          readOnly
+                          value={extApiKey}
+                          placeholder="Generating key..."
+                          className="w-full pl-3 pr-9 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-950 font-mono tabular-nums text-xs text-neutral-900 dark:text-neutral-100"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setExtShowKey((v) => !v)}
+                          title={extShowKey ? 'Hide key' : 'Show key'}
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 cursor-pointer"
+                        >
+                          {extShowKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+
+                      <button
+                        type="button"
+                        disabled={!extApiKey}
+                        onClick={() => {
+                          navigator.clipboard.writeText(extApiKey);
+                          setCopiedExtKey(true);
+                          setTimeout(() => setCopiedExtKey(false), 2000);
+                        }}
+                        className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium flex items-center space-x-1.5 cursor-pointer shrink-0 disabled:opacity-50 transition-colors"
+                      >
+                        {copiedExtKey ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span>{copiedExtKey ? 'Copied' : 'Copy Key'}</span>
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-1">
+                      <span className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                        Accepts <code className="font-mono text-neutral-700 dark:text-neutral-300">x-api-key</code> or <code className="font-mono text-neutral-700 dark:text-neutral-300">Authorization: Bearer</code>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleRegenerateExternalApiKey}
+                        disabled={extRegenerating}
+                        className="inline-flex items-center space-x-1.5 text-xs font-medium text-rose-600 dark:text-rose-400 hover:underline cursor-pointer disabled:opacity-50"
+                      >
+                        {extRegenerating ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                        <span>{extApiKey ? 'Regenerate Key' : 'Generate Key'}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Default Connected WhatsApp Sender */}
+                  <div className="space-y-1.5 pt-1">
+                    <label className="text-xs font-semibold text-neutral-800 dark:text-neutral-200 block">
+                      Default Sender WhatsApp Number
+                    </label>
+                    <div className="flex items-center space-x-2">
+                      <select
+                        value={extDefaultPhoneId}
+                        onChange={(e) => setExtDefaultPhoneId(e.target.value)}
+                        className="flex-1 px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 text-xs text-neutral-900 dark:text-neutral-100 focus:outline-hidden focus:ring-2 focus:ring-emerald-500"
+                      >
+                        <option value="">Auto-select first connected WhatsApp number</option>
+                        {accounts.map((acc) => (
+                          <option key={acc.id} value={acc.phoneNumberId}>
+                            {acc.displayPhoneNumber || acc.phoneNumberId} · {acc.verifiedName || 'WhatsApp Business'}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => handleSaveExternalApiConfig()}
+                        disabled={extSavingConfig}
+                        className="px-3.5 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-700 text-neutral-800 dark:text-neutral-200 text-xs font-medium flex items-center space-x-1.5 cursor-pointer shrink-0 disabled:opacity-50"
+                      >
+                        {extSavingConfig ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                        <span>Save</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Right Column: Sample Integration Code */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-neutral-800 dark:text-neutral-200 flex items-center space-x-1.5">
+                      <Code className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                      <span>Sample Request (cURL / Voice AI Webhook)</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const curlSnippet = `curl -X POST "${extEndpointUrl}" \\\n  -H "Content-Type: application/json" \\\n  -H "x-api-key: ${extApiKey || '<YOUR_API_KEY>'}" \\\n  -d '{\n    "to": "+919876543210",\n    "name": "Rahul Sharma",\n    "message": "Here is your requested brochure and booking link.",\n    "mediaUrl": "https://example.com/brochure.pdf",\n    "caption": "Product Brochure PDF",\n    "source": "vanidesk-voice-ai"\n  }'`;
+                        navigator.clipboard.writeText(curlSnippet);
+                        setCopiedExtCurl(true);
+                        setTimeout(() => setCopiedExtCurl(false), 2000);
+                      }}
+                      className="text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:underline flex items-center space-x-1 cursor-pointer"
+                    >
+                      {copiedExtCurl ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedExtCurl ? 'Copied cURL' : 'Copy cURL'}</span>
+                    </button>
+                  </div>
+
+                  <pre className="p-4 rounded-xl bg-neutral-950 border border-neutral-800 text-neutral-200 font-mono text-[11px] leading-relaxed overflow-x-auto">
+{`POST ${extEndpointUrl}
+Headers:
+  Content-Type: application/json
+  x-api-key: ${extShowKey && extApiKey ? extApiKey : extApiKey ? `${extApiKey.slice(0, 12)}••••••••••••` : '<API_KEY>'}
+
+Body:
+{
+  "to": "+919876543210",
+  "name": "Customer Name (optional)",
+  "message": "Text message or link to send",
+  "mediaUrl": "Optional PDF/image URL",
+  "caption": "Optional caption for media",
+  "source": "vanidesk-voice-ai"
+}`}
+                  </pre>
+                  <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                    Accepts <span className="font-mono">+91</span>, <span className="font-mono">91</span>, spaces, or 10-digit numbers · Returns <span className="font-mono text-emerald-600 dark:text-emerald-400">{`{ "ok": true, "messageId": "...", "status": "sent" }`}</span>
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Live Test Sender */}
+          <form
+            onSubmit={handleSendTestExternalApi}
+            className="p-6 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 space-y-4"
+          >
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-neutral-200 dark:border-neutral-800 pb-3">
+              <div>
+                <h4 className="text-sm font-bold text-neutral-900 dark:text-white flex items-center space-x-2">
+                  <Send className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                  <span>Test External API Endpoint</span>
+                </h4>
+                <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">
+                  Trigger a real <span className="font-mono">POST /api/whatsapp/send</span> call directly and verify delivery in logs below.
+                </p>
+              </div>
+              {extTestResult && (
+                <span
+                  className={`text-xs font-mono ${
+                    extTestResult.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'
+                  }`}
+                >
+                  {extTestResult.text}
+                </span>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+              <div className="space-y-1">
+                <label className="font-medium text-neutral-700 dark:text-neutral-300 block">
+                  Recipient Phone (to) <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="9876543210 or +919876543210"
+                  value={extTestTo}
+                  onChange={(e) => setExtTestTo(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 font-mono text-xs text-neutral-900 dark:text-neutral-100"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-medium text-neutral-700 dark:text-neutral-300 block">
+                  Customer Name (optional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Rahul Sharma"
+                  value={extTestName}
+                  onChange={(e) => setExtTestName(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 text-xs text-neutral-900 dark:text-neutral-100"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-medium text-neutral-700 dark:text-neutral-300 block">
+                  Media URL (PDF / Image, optional)
+                </label>
+                <input
+                  type="url"
+                  placeholder="https://example.com/brochure.pdf"
+                  value={extTestMediaUrl}
+                  onChange={(e) => setExtTestMediaUrl(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 font-mono text-xs text-neutral-900 dark:text-neutral-100"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-medium text-neutral-700 dark:text-neutral-300 block">
+                  Media Caption (optional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Catalog PDF"
+                  value={extTestCaption}
+                  onChange={(e) => setExtTestCaption(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 text-xs text-neutral-900 dark:text-neutral-100"
+                />
+              </div>
+
+              <div className="md:col-span-2 lg:col-span-3 space-y-1">
+                <label className="font-medium text-neutral-700 dark:text-neutral-300 block">
+                  Message Text or Link
+                </label>
+                <input
+                  type="text"
+                  placeholder="Thank you for speaking with us! Here is the link..."
+                  value={extTestMessage}
+                  onChange={(e) => setExtTestMessage(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 text-xs text-neutral-900 dark:text-neutral-100"
+                />
+              </div>
+
+              <div className="flex items-end">
+                <button
+                  type="submit"
+                  disabled={extTestSending || !extApiKey}
+                  className="w-full py-2 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs flex items-center justify-center space-x-1.5 cursor-pointer disabled:opacity-50 transition-colors"
+                >
+                  {extTestSending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                  <span>{extTestSending ? 'Sending...' : 'Send Test Message'}</span>
+                </button>
+              </div>
+            </div>
+          </form>
+
+          {/* External API Message Logs */}
+          <div className="p-6 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 space-y-4">
+            <div className="flex items-center justify-between border-b border-neutral-200 dark:border-neutral-800 pb-3">
+              <div>
+                <h4 className="text-sm font-bold text-neutral-900 dark:text-white flex items-center space-x-2">
+                  <FileText className="w-4 h-4 text-neutral-500" />
+                  <span>External API Message Logs</span>
+                </h4>
+                <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">
+                  Real-time audit log of WhatsApp messages triggered via <span className="font-mono">POST /api/whatsapp/send</span>.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={fetchExternalApiLogs}
+                disabled={extLogsLoading}
+                className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-700 text-xs font-medium text-neutral-700 dark:text-neutral-200 cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${extLogsLoading ? 'animate-spin' : ''}`} />
+                <span>Refresh Logs</span>
+              </button>
+            </div>
+
+            {extLogsLoading ? (
+              <div className="py-10 flex items-center justify-center space-x-2 text-xs text-neutral-500 dark:text-neutral-400">
+                <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />
+                <span>Loading API message logs...</span>
+              </div>
+            ) : extLogs.length === 0 ? (
+              <div className="py-10 text-center space-y-1">
+                <p className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                  No external API messages sent yet
+                </p>
+                <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                  Messages dispatched from <span className="font-mono">vanidesk-voice-ai</span> or the tester above will appear here with delivery status and Message IDs.
+                </p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="border-b border-neutral-200 dark:border-neutral-800 text-[11px] font-semibold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+                      <th className="py-2.5 pr-4">Time</th>
+                      <th className="py-2.5 pr-4">Recipient</th>
+                      <th className="py-2.5 pr-4">Source</th>
+                      <th className="py-2.5 pr-4">Message / Media</th>
+                      <th className="py-2.5 pr-4">Status</th>
+                      <th className="py-2.5">Message ID / Details</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-100 dark:divide-neutral-800/80">
+                    {extLogs.map((log) => (
+                      <tr key={log.id} className="hover:bg-neutral-50/70 dark:hover:bg-neutral-800/40">
+                        <td className="py-3 pr-4 font-mono tabular-nums text-[11px] text-neutral-500 dark:text-neutral-400 whitespace-nowrap">
+                          {log.timestamp ? new Date(log.timestamp).toLocaleString() : '—'}
+                        </td>
+                        <td className="py-3 pr-4 whitespace-nowrap">
+                          <div className="font-mono tabular-nums font-medium text-neutral-900 dark:text-neutral-100">
+                            {log.to}
+                          </div>
+                          {log.name && (
+                            <div className="text-[11px] text-neutral-500 dark:text-neutral-400">{log.name}</div>
+                          )}
+                        </td>
+                        <td className="py-3 pr-4 font-mono text-[11px] text-neutral-700 dark:text-neutral-300 whitespace-nowrap">
+                          {log.source || 'external-api'}
+                        </td>
+                        <td className="py-3 pr-4 max-w-xs">
+                          <div className="text-neutral-800 dark:text-neutral-200 truncate">
+                            {log.message || log.caption || (log.mediaUrl ? 'Media attachment' : '—')}
+                          </div>
+                          {log.mediaUrl && (
+                            <div className="text-[11px] font-mono text-neutral-500 dark:text-neutral-400 truncate">
+                              {log.mediaType ? `${log.mediaType.toUpperCase()} · ` : ''}{log.mediaUrl}
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-3 pr-4 whitespace-nowrap">
+                          {log.status === 'sent' ? (
+                            <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300">
+                              <CheckCircle2 className="w-3 h-3" />
+                              <span>sent</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300">
+                              <AlertTriangle className="w-3 h-3" />
+                              <span>failed</span>
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3 font-mono tabular-nums text-[11px] max-w-[220px] truncate">
+                          {log.status === 'sent' ? (
+                            <span className="text-neutral-600 dark:text-neutral-400">{log.messageId || '—'}</span>
+                          ) : (
+                            <span className="text-rose-600 dark:text-rose-400" title={log.error || ''}>
+                              {log.error || 'Failed'}
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
       )}
