@@ -1078,8 +1078,29 @@ Body:
                         className="hover:bg-neutral-50/80 dark:hover:bg-neutral-800/40 transition-colors"
                       >
                         <td className="py-3.5 px-5 align-middle">
-                          <div className="font-mono font-semibold text-neutral-900 dark:text-white">
-                            {trg.triggerKey}
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-mono font-semibold text-neutral-900 dark:text-white">
+                              {trg.triggerKey}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                copyText(
+                                  trg.triggerKey,
+                                  `key_${trg.id}`,
+                                  'Trigger Key Copied'
+                                )
+                              }
+                              title={`Copy trigger key "${trg.triggerKey}"`}
+                              aria-label={`Copy trigger key ${trg.triggerKey}`}
+                              className="p-1 rounded-md text-neutral-400 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer shrink-0"
+                            >
+                              {copiedId === `key_${trg.id}` ? (
+                                <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                              ) : (
+                                <Copy className="w-3.5 h-3.5" />
+                              )}
+                            </button>
                           </div>
                           <div className="text-[11px] text-neutral-500 dark:text-neutral-400 truncate max-w-[220px]">
                             {trg.label}
@@ -1850,12 +1871,35 @@ Body:
                     className="w-full px-3.5 py-2 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 font-mono text-xs text-neutral-900 dark:text-white"
                   />
                   {formTriggerKey && (
-                    <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                      Slug:{' '}
-                      <code className="font-mono text-emerald-700 dark:text-emerald-400 font-semibold">
-                        {normalizeTriggerSlug(formTriggerKey) || 'invalid'}
-                      </code>
-                    </p>
+                    <div className="flex items-center gap-1.5 text-[11px] text-neutral-500 dark:text-neutral-400">
+                      <span>
+                        Slug:{' '}
+                        <code className="font-mono text-emerald-700 dark:text-emerald-400 font-semibold">
+                          {normalizeTriggerSlug(formTriggerKey) || 'invalid'}
+                        </code>
+                      </span>
+                      {normalizeTriggerSlug(formTriggerKey) && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            copyText(
+                              normalizeTriggerSlug(formTriggerKey),
+                              'modal_trigger_slug',
+                              'Trigger Key Copied'
+                            )
+                          }
+                          title="Copy trigger key"
+                          aria-label="Copy trigger key"
+                          className="p-0.5 rounded text-neutral-400 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
+                        >
+                          {copiedId === 'modal_trigger_slug' ? (
+                            <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                          ) : (
+                            <Copy className="w-3 h-3" />
+                          )}
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
 
