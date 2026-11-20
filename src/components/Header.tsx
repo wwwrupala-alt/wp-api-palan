@@ -55,6 +55,7 @@ export const Header: React.FC<HeaderProps> = ({
     analytics: 'Campaign Analytics & Live Tracking',
     'crm-leads': 'Campaign Leads & Smart Retargeting',
     automations: 'Bot & Automations',
+    'voice-ai-api': 'Voice AI & External WhatsApp API',
     admin: 'Settings & Meta Cloud API',
     wallet: 'Prepaid Wallet & Live Balance Tracker',
   };
@@ -72,6 +73,7 @@ export const Header: React.FC<HeaderProps> = ({
     analytics: 'Analytics',
     'crm-leads': 'Campaign Leads',
     automations: 'Automations',
+    'voice-ai-api': 'Voice AI & API',
     admin: 'Settings & Meta',
     wallet: 'Wallet & Balance',
   };

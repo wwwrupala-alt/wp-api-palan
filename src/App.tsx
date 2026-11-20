@@ -25,6 +25,7 @@ import { TenantUsersPage } from './pages/TenantUsersPage.tsx';
 import { LegalPage } from './pages/LegalPage.tsx';
 import { WalletPage } from './pages/WalletPage.tsx';
 import { CrmLeadsPage } from './pages/CrmLeadsPage.tsx';
+import { VoiceAiApiPage } from './pages/VoiceAiApiPage.tsx';
 import { WhatsAppPinModal } from './components/WhatsAppPinModal.tsx';
 import { Loader2, ArrowLeft, ShieldAlert, Globe } from 'lucide-react';
 
@@ -87,17 +88,20 @@ const AppContent: React.FC = () => {
         if (prevTab === 'inbox' && !isMasterAdmin && userProfile?.canAccessInbox === false) return 'dashboard';
         if (prevTab === 'drip' && !isMasterAdmin && userProfile?.canAccessDripCampaigns === false) return 'dashboard';
         if (prevTab === 'crm-leads' && !isMasterAdmin && userProfile?.canAccessCrmLeads === false) return 'dashboard';
+        if (prevTab === 'voice-ai-api' && !isMasterAdmin && userProfile?.canAccessVoiceAiApi !== true && (userProfile?.subscription?.features as any)?.canAccessVoiceAiApi !== true) return 'dashboard';
       } else if (isUser) {
         const userPerms = (userProfile?.subscription?.features as any) || {};
         const userCanAuto = userProfile?.canAccessAutomations !== false && userPerms.canAutomations !== false;
         const userCanInbox = userProfile?.canAccessInbox !== false && userPerms.canInbox !== false;
         const userCanDrip = userProfile?.canAccessDripCampaigns !== false && userPerms.canDripCampaigns !== false;
         const userCanCrm = userProfile?.canAccessCrmLeads !== false && userPerms.canAccessCrmLeads !== false && userPerms.canCrmLeads !== false;
+        const userCanVoiceAi = userProfile?.canAccessVoiceAiApi === true || userPerms.canAccessVoiceAiApi === true;
         if (['master', 'users', 'admin'].includes(prevTab)) return 'dashboard';
         if (prevTab === 'automations' && !userCanAuto) return 'dashboard';
         if (prevTab === 'inbox' && !userCanInbox) return 'dashboard';
         if (prevTab === 'drip' && !userCanDrip) return 'dashboard';
         if (prevTab === 'crm-leads' && !userCanCrm) return 'dashboard';
+        if (prevTab === 'voice-ai-api' && !userCanVoiceAi) return 'dashboard';
       }
       return prevTab;
     });
@@ -111,6 +115,8 @@ const AppContent: React.FC = () => {
     userProfile?.canAccessInbox,
     userProfile?.canAccessDripCampaigns,
     userProfile?.canAccessCrmLeads,
+    userProfile?.canAccessVoiceAiApi,
+    (userProfile?.subscription?.features as any)?.canAccessVoiceAiApi,
   ]);
 
   // Re-lock WhatsApp tab on navigating to another menu unless master 1646 PIN was used
@@ -297,6 +303,12 @@ const AppContent: React.FC = () => {
               (userProfile?.canAccessAutomations !== false &&
                 (userProfile?.subscription?.features as any)?.canAutomations !== false)) && (
               <AutomationsPage />
+            )}
+          {currentTab === 'voice-ai-api' &&
+            (isMasterAdmin ||
+              userProfile?.canAccessVoiceAiApi === true ||
+              (userProfile?.subscription?.features as any)?.canAccessVoiceAiApi === true) && (
+              <VoiceAiApiPage />
             )}
           {currentTab === 'admin' && (isAdmin || isMasterAdmin) && (isMasterAdmin || userProfile?.canAccessSettingsMetaApi !== false) && <AdminPage />}
           {currentTab === 'wallet' && (isMasterAdmin || userProfile?.canAccessWallet !== false) && <WalletPage />}

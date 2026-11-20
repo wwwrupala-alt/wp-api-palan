@@ -32,6 +32,7 @@ import {
   Lock,
   Wallet,
   Target,
+  Webhook,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useToast } from '../context/ToastContext.tsx';
@@ -69,6 +70,7 @@ export const TenantUsersPage: React.FC = () => {
     canAutomations: true,
     canAccessWallet: true,
     canAccessCrmLeads: true,
+    canAccessVoiceAiApi: false,
   });
   const [creatingUser, setCreatingUser] = useState(false);
 
@@ -92,6 +94,7 @@ export const TenantUsersPage: React.FC = () => {
     canAutomations: true,
     canAccessWallet: true,
     canAccessCrmLeads: true,
+    canAccessVoiceAiApi: false,
   });
   const [savingEdit, setSavingEdit] = useState(false);
 
@@ -260,6 +263,7 @@ export const TenantUsersPage: React.FC = () => {
         canAutomations: true,
         canAccessWallet: true,
         canAccessCrmLeads: true,
+        canAccessVoiceAiApi: false,
       });
       await loadTenantUsers();
     } catch (err: any) {
@@ -768,6 +772,7 @@ export const TenantUsersPage: React.FC = () => {
                                 canAutomations: u.canAccessAutomations !== false && perms.canAutomations !== false,
                                 canAccessWallet: u.canAccessWallet !== false && perms.canAccessWallet !== false,
                                 canAccessCrmLeads: u.canAccessCrmLeads !== false && perms.canAccessCrmLeads !== false,
+                                canAccessVoiceAiApi: u.canAccessVoiceAiApi === true || perms.canAccessVoiceAiApi === true,
                               });
                             }}
                             title="Edit User & Extend Validity"
@@ -1160,6 +1165,24 @@ export const TenantUsersPage: React.FC = () => {
                       <div className="flex items-center space-x-1.5">
                         <Target className="w-3.5 h-3.5 text-indigo-600" />
                         <span className="font-semibold text-neutral-900 dark:text-white">Campaign Leads &amp; CRM</span>
+                      </div>
+                    </label>
+
+                    <label className="flex items-center space-x-2 p-2 rounded-xl border border-neutral-200 dark:border-neutral-800 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={newUserPermissions.canAccessVoiceAiApi}
+                        onChange={(e) =>
+                          setNewUserPermissions({
+                            ...newUserPermissions,
+                            canAccessVoiceAiApi: e.target.checked,
+                          })
+                        }
+                        className="rounded text-emerald-600"
+                      />
+                      <div className="flex items-center space-x-1.5">
+                        <Webhook className="w-3.5 h-3.5 text-emerald-600" />
+                        <span className="font-semibold text-neutral-900 dark:text-white">Voice AI &amp; External API</span>
                       </div>
                     </label>
                   </div>
@@ -1614,6 +1637,24 @@ export const TenantUsersPage: React.FC = () => {
                       <div className="flex items-center space-x-1.5">
                         <Target className="w-3.5 h-3.5 text-indigo-600" />
                         <span className="font-semibold text-neutral-900 dark:text-white">Campaign Leads &amp; CRM</span>
+                      </div>
+                    </label>
+
+                    <label className="flex items-center space-x-2 p-2 rounded-xl border border-neutral-200 dark:border-neutral-800 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={editPermissions.canAccessVoiceAiApi}
+                        onChange={(e) =>
+                          setEditPermissions({
+                            ...editPermissions,
+                            canAccessVoiceAiApi: e.target.checked,
+                          })
+                        }
+                        className="rounded text-emerald-600"
+                      />
+                      <div className="flex items-center space-x-1.5">
+                        <Webhook className="w-3.5 h-3.5 text-emerald-600" />
+                        <span className="font-semibold text-neutral-900 dark:text-white">Voice AI &amp; External API</span>
                       </div>
                     </label>
                   </div>

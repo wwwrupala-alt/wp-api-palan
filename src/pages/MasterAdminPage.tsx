@@ -50,6 +50,7 @@ import {
   ExternalLink,
   HelpCircle,
   Target,
+  Webhook,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useToast } from '../context/ToastContext.tsx';
@@ -74,6 +75,7 @@ interface AdminTenantItem {
   canAccessInbox?: boolean;
   canAccessDripCampaigns?: boolean;
   canAccessCrmLeads?: boolean;
+  canAccessVoiceAiApi?: boolean;
   subscription?: {
     planId?: string;
     planName?: string;
@@ -161,6 +163,7 @@ export const MasterAdminPage: React.FC = () => {
   const [newCanAccessDripCampaigns, setNewCanAccessDripCampaigns] = useState(true);
   const [newCanAccessWallet, setNewCanAccessWallet] = useState(true);
   const [newCanAccessCrmLeads, setNewCanAccessCrmLeads] = useState(true);
+  const [newCanAccessVoiceAiApi, setNewCanAccessVoiceAiApi] = useState(false);
   const [newAdminLogoUrl, setNewAdminLogoUrl] = useState('');
   const [newAdminContactPhone, setNewAdminContactPhone] = useState('');
   const [newCustomDomain, setNewCustomDomain] = useState('');
@@ -265,6 +268,7 @@ export const MasterAdminPage: React.FC = () => {
   const [editCanAccessDripCampaigns, setEditCanAccessDripCampaigns] = useState(true);
   const [editCanAccessWallet, setEditCanAccessWallet] = useState(true);
   const [editCanAccessCrmLeads, setEditCanAccessCrmLeads] = useState(true);
+  const [editCanAccessVoiceAiApi, setEditCanAccessVoiceAiApi] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
 
   // Modal: Reset Password
@@ -480,6 +484,7 @@ export const MasterAdminPage: React.FC = () => {
           canAccessDripCampaigns: newCanAccessDripCampaigns,
           canAccessWallet: newCanAccessWallet,
           canAccessCrmLeads: newCanAccessCrmLeads,
+          canAccessVoiceAiApi: newCanAccessVoiceAiApi,
           logoUrl: newAdminLogoUrl,
           contactPhone: newAdminContactPhone.trim() || newAdminPhone.trim(),
           customDomain: newCustomDomain.trim().toLowerCase(),
@@ -536,6 +541,7 @@ export const MasterAdminPage: React.FC = () => {
       setNewCanAccessDripCampaigns(true);
       setNewCanAccessWallet(true);
       setNewCanAccessCrmLeads(true);
+      setNewCanAccessVoiceAiApi(false);
       await loadMasterData();
     } catch (err: any) {
       toast.showError('Creation Error', err.message || 'Could not create Admin.');
@@ -579,6 +585,7 @@ export const MasterAdminPage: React.FC = () => {
     setEditCanAccessDripCampaigns(adm.canAccessDripCampaigns !== false);
     setEditCanAccessWallet(adm.canAccessWallet !== false);
     setEditCanAccessCrmLeads(adm.canAccessCrmLeads !== false);
+    setEditCanAccessVoiceAiApi(adm.canAccessVoiceAiApi === true);
     setEditBusinessName(adm.businessName || '');
     setEditAdminLogoUrl(adm.logoUrl || adm.customLogoUrl || '');
     setEditAdminContactPhone(adm.contactPhone || adm.phone || '');
@@ -644,6 +651,7 @@ export const MasterAdminPage: React.FC = () => {
         canAccessDripCampaigns: editCanAccessDripCampaigns,
         canAccessWallet: editCanAccessWallet,
         canAccessCrmLeads: editCanAccessCrmLeads,
+        canAccessVoiceAiApi: editCanAccessVoiceAiApi,
       };
 
       if (validityMode === 'pick_date' && customDateInput) {
@@ -2467,6 +2475,53 @@ export const MasterAdminPage: React.FC = () => {
                 </div>
               </div>
 
+              {/* 6. Voice AI & External WhatsApp API Permission Control (Opt-In) */}
+              <div className="p-3.5 rounded-2xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/40 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2.5">
+                    <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${
+                      newCanAccessVoiceAiApi
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'bg-neutral-200 dark:bg-neutral-700 text-neutral-500 dark:text-neutral-400'
+                    }`}>
+                      <Webhook className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <p className="font-bold text-xs text-neutral-900 dark:text-white">
+                        Voice AI &amp; External WhatsApp API Permission
+                      </p>
+                      <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                        Tick karein to Admin ko sidebar me &ldquo;Voice AI &amp; API&rdquo; (Users &amp; Team ke upar) show hoga aur wo apna AI Calling Template Trigger setup kar sakega
+                      </p>
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={newCanAccessVoiceAiApi}
+                      onChange={(e) => setNewCanAccessVoiceAiApi(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-neutral-300 peer-focus:outline-hidden rounded-full peer dark:bg-neutral-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-neutral-600 peer-checked:bg-emerald-600"></div>
+                  </label>
+                </div>
+
+                <div className={`p-2 rounded-xl text-[11px] flex items-center justify-between ${
+                  newCanAccessVoiceAiApi
+                    ? 'bg-emerald-100/70 text-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                    : 'bg-neutral-200/70 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 border border-neutral-300 dark:border-neutral-700'
+                }`}>
+                  <span className="font-medium">
+                    {newCanAccessVoiceAiApi
+                      ? 'Enabled: Admin sees Voice AI & API above Users & Team and can configure Template Triggers.'
+                      : 'Disabled (Default): Voice AI & API menu stays hidden until Master Admin ticks this box.'}
+                  </span>
+                  <span className="font-bold uppercase text-[10px] px-2 py-0.5 rounded bg-white/70 dark:bg-black/30">
+                    {newCanAccessVoiceAiApi ? 'Allowed' : 'Hidden'}
+                  </span>
+                </div>
+              </div>
+
               <div className="pt-3 border-t border-neutral-200 dark:border-neutral-800 flex justify-end space-x-2">
                 <button
                   type="button"
@@ -3482,6 +3537,53 @@ export const MasterAdminPage: React.FC = () => {
                   </span>
                   <span className="font-bold uppercase text-[10px] px-2 py-0.5 rounded bg-white/70 dark:bg-black/30">
                     {editCanAccessCrmLeads ? 'Allowed' : 'Hidden'}
+                  </span>
+                </div>
+              </div>
+
+              {/* 6. Voice AI & External WhatsApp API Permission Control (Opt-In) */}
+              <div className="p-3.5 rounded-2xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/40 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2.5">
+                    <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${
+                      editCanAccessVoiceAiApi
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'bg-neutral-200 dark:bg-neutral-700 text-neutral-500 dark:text-neutral-400'
+                    }`}>
+                      <Webhook className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <p className="font-bold text-xs text-neutral-900 dark:text-white">
+                        Voice AI &amp; External WhatsApp API Permission
+                      </p>
+                      <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                        Is admin ko &ldquo;Voice AI &amp; API&rdquo; (Users &amp; Team ke upar) allow karna hai ya hide rakhna hai
+                      </p>
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={editCanAccessVoiceAiApi}
+                      onChange={(e) => setEditCanAccessVoiceAiApi(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-neutral-300 peer-focus:outline-hidden rounded-full peer dark:bg-neutral-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-neutral-600 peer-checked:bg-emerald-600"></div>
+                  </label>
+                </div>
+
+                <div className={`p-2 rounded-xl text-[11px] flex items-center justify-between ${
+                  editCanAccessVoiceAiApi
+                    ? 'bg-emerald-100/70 text-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                    : 'bg-neutral-200/70 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 border border-neutral-300 dark:border-neutral-700'
+                }`}>
+                  <span className="font-medium">
+                    {editCanAccessVoiceAiApi
+                      ? 'Permission Allowed: Admin sees Voice AI & API above Users & Team.'
+                      : 'Permission Off: Voice AI & API option is hidden for this Admin.'}
+                  </span>
+                  <span className="font-bold uppercase text-[10px] px-2 py-0.5 rounded bg-white/70 dark:bg-black/30">
+                    {editCanAccessVoiceAiApi ? 'Allowed' : 'Hidden'}
                   </span>
                 </div>
               </div>

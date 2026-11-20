@@ -117,6 +117,9 @@ import {
   handleSaveExternalApiConfig,
   handleRegenerateExternalApiKey,
   handleGetExternalApiLogs,
+  handleGetExternalApiTriggers,
+  handleSaveExternalApiTrigger,
+  handleDeleteExternalApiTrigger,
 } from './externalApiService.ts';
 
 // Initialize default accounts and persistent disk backups
@@ -477,6 +480,9 @@ apiApp.get('/api/external-api/config', handleGetExternalApiConfig);
 apiApp.post('/api/external-api/config', handleSaveExternalApiConfig);
 apiApp.post('/api/external-api/regenerate', handleRegenerateExternalApiKey);
 apiApp.get('/api/external-api/logs', handleGetExternalApiLogs);
+apiApp.get('/api/external-api/triggers', handleGetExternalApiTriggers);
+apiApp.post('/api/external-api/triggers', handleSaveExternalApiTrigger);
+apiApp.delete('/api/external-api/triggers/:triggerId', handleDeleteExternalApiTrigger);
 apiApp.post('/api/meta/campaigns/send', handleSendCampaign);
 apiApp.post('/api/meta/campaigns/:campaignId/send-now', handleSendScheduledCampaignNow);
 apiApp.post('/api/meta/campaigns/:campaignId/trigger', handleSendScheduledCampaignNow);

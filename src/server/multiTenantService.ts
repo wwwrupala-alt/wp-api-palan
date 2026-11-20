@@ -1693,6 +1693,7 @@ export async function handleCreateMasterAdmin(req: Request, res: Response): Prom
       canAccessDripCampaigns,
       canAccessWallet,
       canAccessCrmLeads,
+      canAccessVoiceAiApi,
       logoUrl,
       contactPhone,
       customDomain,
@@ -1785,6 +1786,7 @@ export async function handleCreateMasterAdmin(req: Request, res: Response): Prom
       canAccessDripCampaigns: canAccessDripCampaigns !== false,
       canAccessWallet: canAccessWallet !== false,
       canAccessCrmLeads: canAccessCrmLeads !== false,
+      canAccessVoiceAiApi: Boolean(canAccessVoiceAiApi),
       subscription: {
         planId: planId || 'plan_pro',
         planName,
@@ -1861,6 +1863,7 @@ export async function handleUpdateMasterAdmin(req: Request, res: Response): Prom
       canAccessDripCampaigns,
       canAccessWallet,
       canAccessCrmLeads,
+      canAccessVoiceAiApi,
       customDomain,
       customBrandName,
       customLogoUrl,
@@ -1964,6 +1967,9 @@ export async function handleUpdateMasterAdmin(req: Request, res: Response): Prom
     }
     if (canAccessCrmLeads !== undefined) {
       updates.canAccessCrmLeads = Boolean(canAccessCrmLeads);
+    }
+    if (canAccessVoiceAiApi !== undefined) {
+      updates.canAccessVoiceAiApi = Boolean(canAccessVoiceAiApi);
     }
     if (newPassword && String(newPassword).trim().length >= 6) {
       const cleanP = String(newPassword).trim();
@@ -2620,6 +2626,7 @@ export async function handleCreateAdminUser(req: Request, res: Response): Promis
       canAccessAutomations: permissions?.canAutomations !== false,
       canAccessWallet: permissions?.canAccessWallet !== false,
       canAccessCrmLeads: permissions?.canAccessCrmLeads !== false,
+      canAccessVoiceAiApi: Boolean(permissions?.canAccessVoiceAiApi),
       subscription: {
         planName: designation || 'Team Member',
         status: status || 'active',
@@ -2737,6 +2744,9 @@ export async function handleUpdateAdminUser(req: Request, res: Response): Promis
     }
     if (permissions && permissions.canAccessCrmLeads !== undefined) {
       updates.canAccessCrmLeads = Boolean(permissions.canAccessCrmLeads);
+    }
+    if (permissions && permissions.canAccessVoiceAiApi !== undefined) {
+      updates.canAccessVoiceAiApi = Boolean(permissions.canAccessVoiceAiApi);
     }
     if (phone !== undefined) updates.phone = String(phone).replace(/[^0-9]/g, '');
     if (email !== undefined) updates.email = String(email).trim().toLowerCase();

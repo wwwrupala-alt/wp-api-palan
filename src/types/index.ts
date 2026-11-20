@@ -101,6 +101,7 @@ export interface UserProfile {
   canAccessDripCampaigns?: boolean;
   canAccessWallet?: boolean;
   canAccessCrmLeads?: boolean;
+  canAccessVoiceAiApi?: boolean;
   organizationId: string;
   createdAt: string;
   updatedAt: string;

@@ -25,6 +25,7 @@ import {
   Phone,
   Wallet,
   Target,
+  Webhook,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -185,6 +186,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
       (userProfile?.subscription?.features as any)?.canAutomations !== false);
   if (canAccessAutomations) {
     navItems.push({ id: 'automations', label: 'Automations', icon: Bot });
+  }
+
+  // Check opt-in permission for Voice AI & External WhatsApp API (shown directly above Users & Team)
+  const canAccessVoiceAiApi =
+    isMasterAdmin ||
+    userProfile?.canAccessVoiceAiApi === true ||
+    (userProfile?.subscription?.features as any)?.canAccessVoiceAiApi === true;
+  if (canAccessVoiceAiApi) {
+    navItems.push({ id: 'voice-ai-api', label: 'Voice AI & API', icon: Webhook });
   }
 
   // Admin and Master Admin Tenant Controls (Hidden from standard Users)

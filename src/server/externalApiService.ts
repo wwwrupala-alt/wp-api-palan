@@ -17,6 +17,7 @@ import {
   cleanFirestoreData,
 } from './metaService.ts';
 import { resolveMetaMediaObject } from './metaMediaManager.ts';
+import { formatTemplateComponentsForSending } from './templateUtils.ts';
 
 export interface ExternalApiKeyRecord {
   apiKey: string;
@@ -27,6 +28,34 @@ export interface ExternalApiKeyRecord {
   createdAt: string;
   updatedAt: string;
   lastUsedAt?: string;
+}
+
+export interface TriggerVariableMapping {
+  mode: 'customer_name' | 'dynamic' | 'static';
+  value?: string;
+}
+
+export interface ExternalApiTemplateTrigger {
+  id: string;
+  organizationId: string;
+  triggerKey: string;
+  label: string;
+  description?: string;
+  phoneNumberId: string;
+  displayPhoneNumber?: string;
+  templateId?: string;
+  templateName: string;
+  templateLanguage: string;
+  templateCategory?: string;
+  templateComponents?: any[];
+  headerFormat?: string;
+  headerMediaUrl?: string;
+  headerMediaId?: string;
+  headerFileName?: string;
+  variableMappings?: Record<string, TriggerVariableMapping>;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ExternalApiLogRecord {
@@ -41,6 +70,8 @@ export interface ExternalApiLogRecord {
   mediaUrl?: string;
   mediaType?: string | null;
   caption?: string;
+  triggerKey?: string;
+  templateName?: string;
   source: string;
   status: 'sent' | 'failed';
   messageId?: string | null;
@@ -54,15 +85,16 @@ function generateApiKey(): string {
   return `cw_live_${crypto.randomBytes(24).toString('hex')}`;
 }
 
+export function normalizeTriggerKey(raw: unknown): string {
+  return String(raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
 /**
  * Normalizes Indian & international phone numbers cleanly into WhatsApp Cloud API format (digits with country code, no "+").
- * Handles:
- * - "+919876543210" -> "919876543210"
- * - "+91 98765-43210" -> "919876543210"
- * - "919876543210" -> "919876543210"
- * - "09876543210" -> "919876543210"
- * - "9876543210" -> "919876543210"
- * - "+1 (415) 555-2671" -> "14155552671"
  */
 export function normalizeWhatsAppPhone(input: unknown): {
   valid: boolean;
@@ -74,30 +106,25 @@ export function normalizeWhatsAppPhone(input: unknown): {
     return { valid: false, phone: '', e164: '', error: 'Recipient phone number ("to") is required.' };
   }
 
-  let raw = String(input).trim();
+  const raw = String(input).trim();
   if (!raw) {
     return { valid: false, phone: '', e164: '', error: 'Recipient phone number ("to") is required.' };
   }
 
-  // Keep only digits
   let digits = raw.replace(/[^0-9]/g, '');
 
-  // Handle "00" international dialing prefix (e.g., 00919876543210)
   if (digits.startsWith('00') && digits.length > 10) {
     digits = digits.slice(2);
   }
 
-  // Handle 11-digit Indian number starting with 0 (e.g., 09876543210)
   if (digits.length === 11 && digits.startsWith('0') && /^[6-9]/.test(digits.slice(1))) {
     digits = `91${digits.slice(1)}`;
   }
 
-  // Handle 10-digit Indian mobile number without country code (e.g., 9876543210)
   if (digits.length === 10) {
     digits = `91${digits}`;
   }
 
-  // Validate final WhatsApp E.164 digit length (11 to 15 digits)
   if (digits.length < 11 || digits.length > 15) {
     return {
       valid: false,
@@ -219,7 +246,6 @@ async function detectMediaTypeFromUrl(
     return { mediaType: 'document', filename: baseFilename || 'document.pdf' };
   }
 
-  // If extension is missing (e.g. dynamic CDN/presigned URL), try quick HEAD request to inspect Content-Type
   if (mediaUrl.startsWith('http://') || mediaUrl.startsWith('https://')) {
     try {
       const controller = new AbortController();
@@ -247,7 +273,7 @@ async function detectMediaTypeFromUrl(
         return { mediaType: 'document', filename: baseFilename || 'attachment.pdf' };
       }
     } catch {
-      // Ignore HEAD timeout/errors and fall back safely to document
+      // Ignore HEAD timeout/errors
     }
   }
 
@@ -265,9 +291,28 @@ async function writeExternalApiLog(organizationId: string, log: ExternalApiLogRe
   }
 }
 
+function normalizeIncomingVariables(rawVars: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!rawVars) return out;
+  if (Array.isArray(rawVars)) {
+    rawVars.forEach((val, idx) => {
+      if (val !== undefined && val !== null && String(val).trim() !== '') {
+        out[String(idx + 1)] = String(val).trim();
+      }
+    });
+  } else if (typeof rawVars === 'object') {
+    for (const [k, v] of Object.entries(rawVars as Record<string, unknown>)) {
+      if (v !== undefined && v !== null && String(v).trim() !== '') {
+        const cleanKey = k.replace(/^\{\{|\}\}$/g, '').trim();
+        out[cleanKey] = String(v).trim();
+      }
+    }
+  }
+  return out;
+}
+
 /**
  * GET /api/external-api/config
- * Loads (or initializes) the workspace's External API secret key & configuration for Settings UI.
  */
 export async function handleGetExternalApiConfig(req: Request, res: Response) {
   try {
@@ -288,12 +333,11 @@ export async function handleGetExternalApiConfig(req: Request, res: Response) {
         organizationId,
         defaultPhoneNumberId: d.defaultPhoneNumberId || '',
         enabled: d.enabled !== false,
-        label: d.label || 'Default Voice AI Key',
+        label: d.label || 'Voice AI Integration Key',
         createdAt: d.createdAt || nowIso,
         updatedAt: d.updatedAt || nowIso,
         lastUsedAt: d.lastUsedAt,
       };
-      // Ensure lookup collection doc exists as well
       await setDoc(doc(serverDb, 'externalApiKeys', configRecord.apiKey), cleanFirestoreData(configRecord), {
         merge: true,
       });
@@ -322,7 +366,6 @@ export async function handleGetExternalApiConfig(req: Request, res: Response) {
 
 /**
  * POST /api/external-api/config
- * Saves enabled status, defaultPhoneNumberId, or label for the workspace External API key.
  */
 export async function handleSaveExternalApiConfig(req: Request, res: Response) {
   try {
@@ -363,7 +406,6 @@ export async function handleSaveExternalApiConfig(req: Request, res: Response) {
 
 /**
  * POST /api/external-api/regenerate
- * Generates a brand-new secret API key and invalidates the previous key.
  */
 export async function handleRegenerateExternalApiKey(req: Request, res: Response) {
   try {
@@ -399,8 +441,129 @@ export async function handleRegenerateExternalApiKey(req: Request, res: Response
 }
 
 /**
+ * GET /api/external-api/triggers
+ */
+export async function handleGetExternalApiTriggers(req: Request, res: Response) {
+  try {
+    const organizationId = resolveOrgIdFromManagementRequest(req);
+    if (!organizationId) {
+      return res.status(400).json({ ok: false, error: 'organizationId is required' });
+    }
+
+    const snap = await getDocs(collection(serverDb, `organizations/${organizationId}/externalApiTriggers`));
+    const triggers: ExternalApiTemplateTrigger[] = snap.docs
+      .map((d) => ({ id: d.id, ...(d.data() as any) }))
+      .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime());
+
+    return res.json({ ok: true, triggers });
+  } catch (err: any) {
+    return res.status(500).json({ ok: false, error: err?.message || 'Failed to load template triggers.' });
+  }
+}
+
+/**
+ * POST /api/external-api/triggers
+ * Creates or updates a named AI Call Template Trigger rule in Firestore.
+ */
+export async function handleSaveExternalApiTrigger(req: Request, res: Response) {
+  try {
+    const organizationId = resolveOrgIdFromManagementRequest(req);
+    if (!organizationId) {
+      return res.status(400).json({ ok: false, error: 'organizationId is required' });
+    }
+
+    const body = req.body || {};
+    const triggerKey = normalizeTriggerKey(body.triggerKey);
+    const label = String(body.label || triggerKey || '').trim();
+    const phoneNumberId = String(body.phoneNumberId || '').trim();
+    const templateName = String(body.templateName || '').trim();
+    const templateLanguage = String(body.templateLanguage || 'en_US').trim();
+
+    if (!triggerKey) {
+      return res.status(400).json({ ok: false, error: 'Trigger Key is required (e.g. send_catalog).' });
+    }
+    if (!phoneNumberId) {
+      return res.status(400).json({ ok: false, error: 'WhatsApp Sender Number is required.' });
+    }
+    if (!templateName) {
+      return res.status(400).json({ ok: false, error: 'Approved Meta Template is required.' });
+    }
+
+    // Ensure triggerKey is unique within this organization (unless updating the same trigger ID)
+    const existingSnap = await getDocs(collection(serverDb, `organizations/${organizationId}/externalApiTriggers`));
+    const duplicate = existingSnap.docs.find((d) => {
+      const data = d.data() as any;
+      return normalizeTriggerKey(data.triggerKey) === triggerKey && d.id !== body.id;
+    });
+    if (duplicate) {
+      return res.status(400).json({
+        ok: false,
+        error: `A trigger with key "${triggerKey}" already exists. Use a different Trigger Key or edit the existing one.`,
+      });
+    }
+
+    const nowIso = new Date().toISOString();
+    const triggerId = body.id ? String(body.id).trim() : `trg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const existingDoc = body.id
+      ? existingSnap.docs.find((d) => d.id === triggerId)?.data() as Partial<ExternalApiTemplateTrigger> | undefined
+      : undefined;
+
+    const record: ExternalApiTemplateTrigger = {
+      id: triggerId,
+      organizationId,
+      triggerKey,
+      label,
+      description: typeof body.description === 'string' ? body.description.trim() : '',
+      phoneNumberId,
+      displayPhoneNumber: typeof body.displayPhoneNumber === 'string' ? body.displayPhoneNumber.trim() : '',
+      templateId: typeof body.templateId === 'string' ? body.templateId.trim() : '',
+      templateName,
+      templateLanguage,
+      templateCategory: typeof body.templateCategory === 'string' ? body.templateCategory.trim() : 'UTILITY',
+      templateComponents: Array.isArray(body.templateComponents) ? body.templateComponents : existingDoc?.templateComponents || [],
+      headerFormat: typeof body.headerFormat === 'string' ? body.headerFormat.toUpperCase() : '',
+      headerMediaUrl: typeof body.headerMediaUrl === 'string' ? body.headerMediaUrl.trim() : '',
+      headerMediaId: typeof body.headerMediaId === 'string' ? body.headerMediaId.trim() : '',
+      headerFileName: typeof body.headerFileName === 'string' ? body.headerFileName.trim() : '',
+      variableMappings:
+        body.variableMappings && typeof body.variableMappings === 'object' ? body.variableMappings : {},
+      enabled: body.enabled !== false,
+      createdAt: existingDoc?.createdAt || nowIso,
+      updatedAt: nowIso,
+    };
+
+    await setDoc(
+      doc(serverDb, `organizations/${organizationId}/externalApiTriggers`, triggerId),
+      cleanFirestoreData(record),
+      { merge: true }
+    );
+
+    return res.json({ ok: true, trigger: record });
+  } catch (err: any) {
+    return res.status(500).json({ ok: false, error: err?.message || 'Failed to save template trigger.' });
+  }
+}
+
+/**
+ * DELETE /api/external-api/triggers/:triggerId
+ */
+export async function handleDeleteExternalApiTrigger(req: Request, res: Response) {
+  try {
+    const organizationId = resolveOrgIdFromManagementRequest(req);
+    const { triggerId } = req.params;
+    if (!organizationId || !triggerId) {
+      return res.status(400).json({ ok: false, error: 'organizationId and triggerId are required.' });
+    }
+
+    await deleteDoc(doc(serverDb, `organizations/${organizationId}/externalApiTriggers`, triggerId));
+    return res.json({ ok: true });
+  } catch (err: any) {
+    return res.status(500).json({ ok: false, error: err?.message || 'Failed to delete template trigger.' });
+  }
+}
+
+/**
  * GET /api/external-api/logs
- * Returns recent external API message logs for the workspace.
  */
 export async function handleGetExternalApiLogs(req: Request, res: Response) {
   try {
@@ -426,8 +589,10 @@ export async function handleGetExternalApiLogs(req: Request, res: Response) {
 
 /**
  * POST /api/whatsapp/send
- * Secure external REST endpoint for AI voice calling servers / webhooks (e.g. vanidesk-voice-ai)
- * to send WhatsApp text messages, links, PDFs, or images in real time.
+ * Supports:
+ * 1) Named AI Call Template Triggers: { to, name, trigger: "send_catalog", variables?, mediaUrl?, source }
+ * 2) Direct Meta Approved Template: { to, name, templateName, templateLanguage?, variables?, mediaUrl?, phoneNumberId?, source }
+ * 3) Standard Text / Media Message: { to, name, message, mediaUrl?, caption?, phoneNumberId?, source }
  */
 export async function handleExternalWhatsAppSend(req: Request, res: Response) {
   const nowIso = new Date().toISOString();
@@ -454,7 +619,7 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
     if (keyRecord.enabled === false) {
       return res.status(401).json({
         ok: false,
-        error: 'Unauthorized: External API key is disabled in Settings.',
+        error: 'Unauthorized: External API key is disabled.',
       });
     }
 
@@ -469,6 +634,11 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
       caption,
       source,
       phoneNumberId: requestedPhoneNumberId,
+      trigger,
+      action,
+      templateName: requestedTemplateName,
+      templateLanguage: requestedTemplateLanguage,
+      variables: rawVariables,
     } = req.body || {};
 
     const phoneNorm = normalizeWhatsAppPhone(to);
@@ -479,16 +649,18 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
       });
     }
 
+    const triggerKeyInput = normalizeTriggerKey(trigger || action);
+    const directTemplateName = typeof requestedTemplateName === 'string' ? requestedTemplateName.trim() : '';
     const messageText = typeof message === 'string' ? message.trim() : '';
     const mediaUrlStr = typeof mediaUrl === 'string' ? mediaUrl.trim() : '';
     const captionStr = typeof caption === 'string' ? caption.trim() : '';
     const contactNameStr = typeof name === 'string' ? name.trim() : '';
     const sourceStr = typeof source === 'string' && source.trim() ? source.trim() : 'external-api';
 
-    if (!messageText && !mediaUrlStr) {
+    if (!triggerKeyInput && !directTemplateName && !messageText && !mediaUrlStr) {
       return res.status(400).json({
         ok: false,
-        error: 'Either "message" or "mediaUrl" is required.',
+        error: 'Provide either "trigger", "templateName", "message", or "mediaUrl".',
       });
     }
 
@@ -508,15 +680,14 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
               message: messageText,
               mediaUrl: mediaUrlStr,
               caption: captionStr,
+              triggerKey: triggerKeyInput || undefined,
+              templateName: directTemplateName || undefined,
               source: sourceStr,
               status: 'failed',
               error: 'Workspace is suspended.',
               timestamp: nowIso,
             });
-            return res.status(400).json({
-              ok: false,
-              error: 'Workspace is suspended by Master Admin.',
-            });
+            return res.status(400).json({ ok: false, error: 'Workspace is suspended by Master Admin.' });
           }
           const expiresAt = orgData.subscription?.expiresAt;
           if (expiresAt && !isNaN(new Date(expiresAt).getTime()) && new Date(expiresAt).getTime() < Date.now()) {
@@ -530,15 +701,14 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
               message: messageText,
               mediaUrl: mediaUrlStr,
               caption: captionStr,
+              triggerKey: triggerKeyInput || undefined,
+              templateName: directTemplateName || undefined,
               source: sourceStr,
               status: 'failed',
               error: errMsg,
               timestamp: nowIso,
             });
-            return res.status(400).json({
-              ok: false,
-              error: errMsg,
-            });
+            return res.status(400).json({ ok: false, error: errMsg });
           }
         }
       } catch (subErr) {
@@ -546,20 +716,63 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
       }
     }
 
-    // 4. Resolve connected WhatsApp Business number & access token for this organization
+    // 4. If a named trigger was requested, resolve its configuration from Firestore
+    let matchedTrigger: ExternalApiTemplateTrigger | null = null;
+    if (triggerKeyInput) {
+      const trigSnap = await getDocs(collection(serverDb, `organizations/${organizationId}/externalApiTriggers`));
+      const foundDoc = trigSnap.docs.find(
+        (d) => normalizeTriggerKey((d.data() as any).triggerKey) === triggerKeyInput
+      );
+      if (!foundDoc) {
+        const errMsg = `Trigger "${triggerKeyInput}" not found. Configure it in Voice AI & API → Template Triggers.`;
+        await writeExternalApiLog(organizationId, {
+          id: logId,
+          organizationId,
+          to: phoneNorm.e164,
+          cleanPhone: phoneNorm.phone,
+          name: contactNameStr,
+          message: messageText,
+          triggerKey: triggerKeyInput,
+          source: sourceStr,
+          status: 'failed',
+          error: errMsg,
+          timestamp: nowIso,
+        });
+        return res.status(400).json({ ok: false, error: errMsg });
+      }
+      matchedTrigger = { id: foundDoc.id, ...(foundDoc.data() as any) } as ExternalApiTemplateTrigger;
+      if (matchedTrigger.enabled === false) {
+        const errMsg = `Trigger "${triggerKeyInput}" is currently paused/disabled.`;
+        await writeExternalApiLog(organizationId, {
+          id: logId,
+          organizationId,
+          to: phoneNorm.e164,
+          cleanPhone: phoneNorm.phone,
+          name: contactNameStr,
+          triggerKey: triggerKeyInput,
+          templateName: matchedTrigger.templateName,
+          source: sourceStr,
+          status: 'failed',
+          error: errMsg,
+          timestamp: nowIso,
+        });
+        return res.status(400).json({ ok: false, error: errMsg });
+      }
+    }
+
+    // 5. Resolve connected WhatsApp Business number & access token for this organization
     const accountsSnap = await getDocs(collection(serverDb, `organizations/${organizationId}/whatsappAccounts`));
     const accounts = accountsSnap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
 
     const preferredId =
       (typeof requestedPhoneNumberId === 'string' && requestedPhoneNumberId.trim()) ||
+      matchedTrigger?.phoneNumberId ||
       keyRecord.defaultPhoneNumberId ||
       '';
 
     let targetAccount: any = null;
     if (preferredId) {
-      targetAccount = accounts.find(
-        (a) => a.phoneNumberId === preferredId || a.id === preferredId
-      );
+      targetAccount = accounts.find((a) => a.phoneNumberId === preferredId || a.id === preferredId);
     }
     if (!targetAccount) {
       targetAccount =
@@ -592,7 +805,8 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
         name: contactNameStr,
         message: messageText,
         mediaUrl: mediaUrlStr,
-        caption: captionStr,
+        triggerKey: triggerKeyInput || undefined,
+        templateName: matchedTrigger?.templateName || directTemplateName || undefined,
         source: sourceStr,
         status: 'failed',
         error: errMsg,
@@ -601,103 +815,238 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
       return res.status(400).json({ ok: false, error: errMsg });
     }
 
-    // 5. Build WhatsApp Cloud API payload (Media vs Text)
     const sendUrl = `https://graph.facebook.com/${graphVersion}/${targetPhoneNumberId}/messages`;
-    const combinedCaption =
-      captionStr && messageText && captionStr !== messageText
-        ? `${captionStr}\n\n${messageText}`
-        : captionStr || messageText || '';
 
-    let detectedMediaType: 'image' | 'video' | 'document' | 'audio' | null = null;
     let payload: Record<string, any> = {
       messaging_product: 'whatsapp',
       recipient_type: 'individual',
       to: phoneNorm.phone,
     };
 
+    let resolvedTemplateName = '';
+    let detectedMediaType: 'image' | 'video' | 'document' | 'audio' | 'template' | null = null;
     let usedTextFallbackForMedia = false;
+    let displaySummary = '';
 
-    if (mediaUrlStr) {
-      const detected = await detectMediaTypeFromUrl(mediaUrlStr);
-      detectedMediaType = detected.mediaType;
+    // 6A. TEMPLATE MODE (Named Trigger OR Direct templateName)
+    if (matchedTrigger || directTemplateName) {
+      resolvedTemplateName = matchedTrigger?.templateName || directTemplateName;
+      let resolvedLanguage =
+        matchedTrigger?.templateLanguage ||
+        (typeof requestedTemplateLanguage === 'string' && requestedTemplateLanguage.trim()) ||
+        'en_US';
+      let templateComponents: any[] = matchedTrigger?.templateComponents || [];
 
-      const resolvedMedia = await resolveMetaMediaObject(
-        mediaUrlStr,
-        targetPhoneNumberId,
-        token,
-        detected.mediaType,
-        graphVersion
-      );
-
-      const isUnusableLocalLink =
-        !resolvedMedia?.id &&
-        (!resolvedMedia?.link ||
-          resolvedMedia.link.startsWith('/') ||
-          resolvedMedia.link.includes('localhost') ||
-          resolvedMedia.link.includes('127.0.0.1'));
-
-      if (!resolvedMedia || isUnusableLocalLink) {
-        // Fallback to sending clickable link inside text message if public URL is provided
-        if (mediaUrlStr.startsWith('http://') || mediaUrlStr.startsWith('https://')) {
-          usedTextFallbackForMedia = true;
-          const fallbackBody = combinedCaption
-            ? `${combinedCaption}\n\n${mediaUrlStr}`
-            : mediaUrlStr;
-          payload = {
-            ...payload,
-            type: 'text',
-            text: { preview_url: true, body: fallbackBody },
-          };
-        } else {
-          const errMsg = 'Could not resolve or upload mediaUrl for WhatsApp Cloud API. Provide a valid public HTTPS URL.';
-          await writeExternalApiLog(organizationId, {
-            id: logId,
-            organizationId,
-            whatsAppAccountId: targetAccount?.id || targetPhoneNumberId,
-            phoneNumberId: targetPhoneNumberId,
-            to: phoneNorm.e164,
-            cleanPhone: phoneNorm.phone,
-            name: contactNameStr,
-            message: messageText,
-            mediaUrl: mediaUrlStr,
-            mediaType: detectedMediaType,
-            caption: captionStr,
-            source: sourceStr,
-            status: 'failed',
-            error: errMsg,
-            timestamp: nowIso,
-          });
-          return res.status(400).json({ ok: false, error: errMsg });
+      // Look up live template definition in Firestore so components/language stay accurate
+      try {
+        const templatesSnap = await getDocs(collection(serverDb, `organizations/${organizationId}/templates`));
+        const matchedTplDoc = templatesSnap.docs.find((d) => {
+          const td = d.data() as any;
+          if (matchedTrigger?.templateId && d.id === matchedTrigger.templateId) return true;
+          return (
+            String(td.name || '').toLowerCase() === resolvedTemplateName.toLowerCase() &&
+            (!td.wabaId || !targetAccount?.wabaId || td.wabaId === targetAccount.wabaId)
+          );
+        });
+        if (matchedTplDoc) {
+          const td = matchedTplDoc.data() as any;
+          if (!matchedTrigger?.templateComponents?.length && Array.isArray(td.components)) {
+            templateComponents = td.components;
+          } else if (Array.isArray(td.components) && td.components.length > 0) {
+            templateComponents = td.components;
+          }
+          if (!requestedTemplateLanguage && td.language) {
+            resolvedLanguage = td.language;
+          }
         }
-      } else {
-        const mediaObj: Record<string, any> = resolvedMedia.id
-          ? { id: resolvedMedia.id }
-          : { link: resolvedMedia.link! };
+      } catch (tplErr) {
+        console.warn('[ExternalAPI] Template lookup notice:', tplErr);
+      }
 
-        if (detected.mediaType === 'document') {
-          if (combinedCaption) mediaObj.caption = combinedCaption;
-          mediaObj.filename = detected.filename || resolvedMedia.filename || 'document.pdf';
-          payload = { ...payload, type: 'document', document: mediaObj };
-        } else if (detected.mediaType === 'image') {
-          if (combinedCaption) mediaObj.caption = combinedCaption;
-          payload = { ...payload, type: 'image', image: mediaObj };
-        } else if (detected.mediaType === 'video') {
-          if (combinedCaption) mediaObj.caption = combinedCaption;
-          payload = { ...payload, type: 'video', video: mediaObj };
-        } else if (detected.mediaType === 'audio') {
-          // WhatsApp audio payload does not accept caption
-          payload = { ...payload, type: 'audio', audio: mediaObj };
+      // Build variableValues from trigger mappings + incoming dynamic overrides
+      const incomingVars = normalizeIncomingVariables(rawVariables);
+      const finalVariableValues: Record<string, string> = {};
+
+      if (matchedTrigger?.variableMappings) {
+        for (const [varIdx, mapping] of Object.entries(matchedTrigger.variableMappings)) {
+          if (!mapping) continue;
+          if (mapping.mode === 'customer_name') {
+            finalVariableValues[varIdx] =
+              incomingVars[varIdx] || contactNameStr || mapping.value || 'Customer';
+          } else if (mapping.mode === 'static') {
+            finalVariableValues[varIdx] = mapping.value || incomingVars[varIdx] || '';
+          } else {
+            // dynamic mode: prefer incoming variables[varIdx], then messageText if single dynamic link/text, then fallback value
+            finalVariableValues[varIdx] =
+              incomingVars[varIdx] || messageText || mapping.value || '';
+          }
         }
       }
-    } else {
+
+      // Apply any remaining incoming variable keys directly
+      for (const [k, v] of Object.entries(incomingVars)) {
+        if (v) finalVariableValues[k] = v;
+      }
+
+      // If no mappings existed and {{1}} wasn't provided, use customer name if available
+      if (!finalVariableValues['1'] && contactNameStr) {
+        finalVariableValues['1'] = contactNameStr;
+      }
+
+      // Resolve Header Media if template has IMAGE / VIDEO / DOCUMENT header
+      let resolvedHeaderMedia: { id?: string; link?: string; filename?: string } | null = null;
+      const headerComp = templateComponents.find(
+        (c: any) => String(c.type || '').toUpperCase() === 'HEADER'
+      );
+      const headerFormat = String(
+        headerComp?.format || matchedTrigger?.headerFormat || ''
+      ).toUpperCase();
+
+      if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerFormat)) {
+        const mediaRef =
+          mediaUrlStr ||
+          matchedTrigger?.headerMediaId ||
+          matchedTrigger?.headerMediaUrl ||
+          headerComp?.example?.header_handle?.[0] ||
+          '';
+
+        if (mediaRef) {
+          if (/^\d+$/.test(mediaRef)) {
+            resolvedHeaderMedia = {
+              id: mediaRef,
+              filename: matchedTrigger?.headerFileName || undefined,
+            };
+          } else {
+            resolvedHeaderMedia = await resolveMetaMediaObject(
+              mediaRef,
+              targetPhoneNumberId,
+              token,
+              headerFormat.toLowerCase() as 'image' | 'video' | 'document',
+              graphVersion
+            );
+            if (resolvedHeaderMedia && matchedTrigger?.headerFileName && !resolvedHeaderMedia.filename) {
+              resolvedHeaderMedia.filename = matchedTrigger.headerFileName;
+            }
+          }
+        }
+      }
+
+      const formattedComponents = formatTemplateComponentsForSending(
+        templateComponents,
+        finalVariableValues,
+        resolvedHeaderMedia
+      );
+
+      // If directTemplateName was passed without stored templateComponents, allow basic body parameters from incomingVars
+      if (formattedComponents.length === 0 && Object.keys(incomingVars).length > 0 && templateComponents.length === 0) {
+        const sortedKeys = Object.keys(incomingVars).sort((a, b) => Number(a) - Number(b));
+        formattedComponents.push({
+          type: 'body',
+          parameters: sortedKeys.map((k) => ({ type: 'text', text: incomingVars[k] })),
+        });
+      }
+
       payload = {
         ...payload,
-        type: 'text',
-        text: { preview_url: true, body: messageText },
+        type: 'template',
+        template: {
+          name: resolvedTemplateName,
+          language: { code: resolvedLanguage },
+          ...(formattedComponents.length > 0 ? { components: formattedComponents } : {}),
+        },
       };
+
+      detectedMediaType = 'template';
+      displaySummary = `[Template: ${resolvedTemplateName}]${matchedTrigger ? ` (${matchedTrigger.label || matchedTrigger.triggerKey})` : ''}`;
+    } else {
+      // 6B. STANDARD TEXT / MEDIA MODE (backward compatible)
+      const combinedCaption =
+        captionStr && messageText && captionStr !== messageText
+          ? `${captionStr}\n\n${messageText}`
+          : captionStr || messageText || '';
+
+      if (mediaUrlStr) {
+        const detected = await detectMediaTypeFromUrl(mediaUrlStr);
+        detectedMediaType = detected.mediaType;
+
+        const resolvedMedia = await resolveMetaMediaObject(
+          mediaUrlStr,
+          targetPhoneNumberId,
+          token,
+          detected.mediaType,
+          graphVersion
+        );
+
+        const isUnusableLocalLink =
+          !resolvedMedia?.id &&
+          (!resolvedMedia?.link ||
+            resolvedMedia.link.startsWith('/') ||
+            resolvedMedia.link.includes('localhost') ||
+            resolvedMedia.link.includes('127.0.0.1'));
+
+        if (!resolvedMedia || isUnusableLocalLink) {
+          if (mediaUrlStr.startsWith('http://') || mediaUrlStr.startsWith('https://')) {
+            usedTextFallbackForMedia = true;
+            const fallbackBody = combinedCaption ? `${combinedCaption}\n\n${mediaUrlStr}` : mediaUrlStr;
+            payload = {
+              ...payload,
+              type: 'text',
+              text: { preview_url: true, body: fallbackBody },
+            };
+          } else {
+            const errMsg = 'Could not resolve or upload mediaUrl for WhatsApp Cloud API. Provide a valid public HTTPS URL.';
+            await writeExternalApiLog(organizationId, {
+              id: logId,
+              organizationId,
+              whatsAppAccountId: targetAccount?.id || targetPhoneNumberId,
+              phoneNumberId: targetPhoneNumberId,
+              to: phoneNorm.e164,
+              cleanPhone: phoneNorm.phone,
+              name: contactNameStr,
+              message: messageText,
+              mediaUrl: mediaUrlStr,
+              mediaType: detectedMediaType,
+              caption: captionStr,
+              source: sourceStr,
+              status: 'failed',
+              error: errMsg,
+              timestamp: nowIso,
+            });
+            return res.status(400).json({ ok: false, error: errMsg });
+          }
+        } else {
+          const mediaObj: Record<string, any> = resolvedMedia.id
+            ? { id: resolvedMedia.id }
+            : { link: resolvedMedia.link! };
+
+          if (detected.mediaType === 'document') {
+            if (combinedCaption) mediaObj.caption = combinedCaption;
+            mediaObj.filename = detected.filename || resolvedMedia.filename || 'document.pdf';
+            payload = { ...payload, type: 'document', document: mediaObj };
+          } else if (detected.mediaType === 'image') {
+            if (combinedCaption) mediaObj.caption = combinedCaption;
+            payload = { ...payload, type: 'image', image: mediaObj };
+          } else if (detected.mediaType === 'video') {
+            if (combinedCaption) mediaObj.caption = combinedCaption;
+            payload = { ...payload, type: 'video', video: mediaObj };
+          } else if (detected.mediaType === 'audio') {
+            payload = { ...payload, type: 'audio', audio: mediaObj };
+          }
+        }
+      } else {
+        payload = {
+          ...payload,
+          type: 'text',
+          text: { preview_url: true, body: messageText },
+        };
+      }
+
+      displaySummary =
+        combinedCaption ||
+        (mediaUrlStr ? `[${(detectedMediaType || 'document').toUpperCase()}] ${mediaUrlStr}` : '');
     }
 
-    // 6. Dispatch via Meta WhatsApp Cloud API
+    // 7. Dispatch via Meta WhatsApp Cloud API
     let sendRes = await fetch(sendUrl, {
       method: 'POST',
       headers: {
@@ -709,25 +1058,32 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
 
     let sendData = await sendRes.json();
 
-    // If Meta rejected media attachment URL directly and mediaUrl is an HTTP link, retry once as text link fallback
-    if ((!sendRes.ok || sendData.error) && mediaUrlStr && !usedTextFallbackForMedia && (mediaUrlStr.startsWith('http://') || mediaUrlStr.startsWith('https://'))) {
-      const fallbackBody = combinedCaption
-        ? `${combinedCaption}\n\n${mediaUrlStr}`
-        : mediaUrlStr;
-      const fallbackPayload = {
-        messaging_product: 'whatsapp',
-        recipient_type: 'individual',
-        to: phoneNorm.phone,
-        type: 'text',
-        text: { preview_url: true, body: fallbackBody },
-      };
+    // If Meta rejected media attachment URL directly in non-template mode, retry once as clickable text link
+    if (
+      (!sendRes.ok || sendData.error) &&
+      !resolvedTemplateName &&
+      mediaUrlStr &&
+      !usedTextFallbackForMedia &&
+      (mediaUrlStr.startsWith('http://') || mediaUrlStr.startsWith('https://'))
+    ) {
+      const combinedCaption =
+        captionStr && messageText && captionStr !== messageText
+          ? `${captionStr}\n\n${messageText}`
+          : captionStr || messageText || '';
+      const fallbackBody = combinedCaption ? `${combinedCaption}\n\n${mediaUrlStr}` : mediaUrlStr;
       const retryRes = await fetch(sendUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify(fallbackPayload),
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          recipient_type: 'individual',
+          to: phoneNorm.phone,
+          type: 'text',
+          text: { preview_url: true, body: fallbackBody },
+        }),
       });
       const retryData = await retryRes.json();
       if (retryRes.ok && !retryData.error) {
@@ -749,9 +1105,11 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
         cleanPhone: phoneNorm.phone,
         name: contactNameStr,
         message: messageText,
-        mediaUrl: mediaUrlStr,
+        mediaUrl: mediaUrlStr || matchedTrigger?.headerMediaUrl || undefined,
         mediaType: detectedMediaType,
         caption: captionStr,
+        triggerKey: triggerKeyInput || undefined,
+        templateName: resolvedTemplateName || undefined,
         source: sourceStr,
         status: 'failed',
         error: errorMsg,
@@ -761,7 +1119,7 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
       addWebhookLog({
         event: 'External API Message Failed',
         origin: sourceStr,
-        details: `To: ${phoneNorm.e164} - Error: ${errorMsg}`,
+        details: `To: ${phoneNorm.e164}${resolvedTemplateName ? ` [${resolvedTemplateName}]` : ''} - Error: ${errorMsg}`,
         status: 'error',
         rawPayload: sendData.error,
       });
@@ -774,8 +1132,8 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
 
     const metaMessageId = sendData.messages?.[0]?.id || `wamid_${Date.now()}`;
 
-    // 7. If audio media was sent AND caller also provided message/caption text, deliver the text right after
-    if (detectedMediaType === 'audio' && !usedTextFallbackForMedia && combinedCaption) {
+    // Follow-up text if audio media was sent alongside message/caption
+    if (detectedMediaType === 'audio' && !usedTextFallbackForMedia && (captionStr || messageText)) {
       try {
         await fetch(sendUrl, {
           method: 'POST',
@@ -788,19 +1146,14 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
             recipient_type: 'individual',
             to: phoneNorm.phone,
             type: 'text',
-            text: { preview_url: true, body: combinedCaption },
+            text: { preview_url: true, body: captionStr || messageText },
           }),
         });
-      } catch {
-        // Non-fatal follow-up text
-      }
+      } catch {}
     }
 
     // 8. Persist logs, Inbox conversation/message, contact & wamidTracker
     const convId = `conv_${phoneNorm.phone}`;
-    const displaySummary =
-      combinedCaption ||
-      (mediaUrlStr ? `[${(detectedMediaType || 'document').toUpperCase()}] ${mediaUrlStr}` : '');
 
     await writeExternalApiLog(organizationId, {
       id: logId,
@@ -810,10 +1163,12 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
       to: phoneNorm.e164,
       cleanPhone: phoneNorm.phone,
       name: contactNameStr,
-      message: messageText,
-      mediaUrl: mediaUrlStr,
+      message: messageText || displaySummary,
+      mediaUrl: mediaUrlStr || matchedTrigger?.headerMediaUrl || undefined,
       mediaType: usedTextFallbackForMedia ? 'text' : detectedMediaType,
       caption: captionStr,
+      triggerKey: triggerKeyInput || undefined,
+      templateName: resolvedTemplateName || undefined,
       source: sourceStr,
       status: 'sent',
       messageId: metaMessageId,
@@ -830,6 +1185,8 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
           phoneNumber: phoneNorm.phone,
           status: 'sent',
           source: sourceStr,
+          triggerKey: triggerKeyInput || undefined,
+          templateName: resolvedTemplateName || undefined,
           createdAt: nowIso,
           updatedAt: nowIso,
         }),
@@ -861,8 +1218,9 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
           messageType: usedTextFallbackForMedia ? 'text' : detectedMediaType || 'text',
           messageStatus: 'sent',
           metaMessageId,
+          templateName: resolvedTemplateName || undefined,
           body: displaySummary || mediaUrlStr,
-          mediaUrl: mediaUrlStr || undefined,
+          mediaUrl: mediaUrlStr || matchedTrigger?.headerMediaUrl || undefined,
           source: sourceStr,
           timestamp: nowIso,
         })
@@ -888,7 +1246,6 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
       console.warn('[ExternalAPI] Inbox sync notice:', inboxErr);
     }
 
-    // Update lastUsedAt timestamp asynchronously
     setDoc(
       doc(serverDb, `organizations/${organizationId}/settings`, 'externalApi'),
       { lastUsedAt: nowIso },
@@ -896,9 +1253,9 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
     ).catch(() => {});
 
     addWebhookLog({
-      event: 'External API Message Sent',
+      event: resolvedTemplateName ? 'External API Template Sent' : 'External API Message Sent',
       origin: sourceStr,
-      details: `To: ${phoneNorm.e164}${contactNameStr ? ` (${contactNameStr})` : ''} - ID: ${metaMessageId}`,
+      details: `To: ${phoneNorm.e164}${contactNameStr ? ` (${contactNameStr})` : ''}${resolvedTemplateName ? ` · Template: ${resolvedTemplateName}` : ''} · ID: ${metaMessageId}`,
       status: 'success',
     });
 
@@ -906,6 +1263,8 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
       ok: true,
       messageId: metaMessageId,
       status: 'sent',
+      ...(resolvedTemplateName ? { templateName: resolvedTemplateName } : {}),
+      ...(triggerKeyInput ? { trigger: triggerKeyInput } : {}),
     });
   } catch (err: any) {
     const errorMsg = err?.message || 'Internal server error while sending WhatsApp message.';
