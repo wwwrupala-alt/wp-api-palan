@@ -137,11 +137,12 @@ export async function resolveMetaMediaObject(
     }
   }
 
-  // 3. If it's a remote public HTTPS/HTTP URL (and not localhost, not 127.0.0.1, not blob)
+  // 3. If it's a remote public HTTPS/HTTP URL (and not localhost, not 127.0.0.1, not blob, and not our own /uploads/ path)
   const isInternalDevHost =
     trimmed.startsWith('blob:') ||
     trimmed.includes('localhost') ||
-    trimmed.includes('127.0.0.1');
+    trimmed.includes('127.0.0.1') ||
+    trimmed.includes('/uploads/');
 
   if (
     (trimmed.startsWith('https://') || trimmed.startsWith('http://')) &&

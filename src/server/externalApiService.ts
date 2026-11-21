@@ -870,31 +870,37 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
       if (matchedTrigger?.variableMappings) {
         for (const [varIdx, mapping] of Object.entries(matchedTrigger.variableMappings)) {
           if (!mapping) continue;
-          if (mapping.mode === 'customer_name') {
+          const cleanStaticOrFallback = typeof mapping.value === 'string' ? mapping.value.trim() : '';
+          if (mapping.mode === 'static') {
+            // Fixed value configured in trigger MUST always deliver identically (never overwritten by AI payload)
+            finalVariableValues[varIdx] = cleanStaticOrFallback || incomingVars[varIdx] || '';
+          } else if (mapping.mode === 'customer_name') {
             finalVariableValues[varIdx] =
-              incomingVars[varIdx] || contactNameStr || mapping.value || 'Customer';
-          } else if (mapping.mode === 'static') {
-            finalVariableValues[varIdx] = mapping.value || incomingVars[varIdx] || '';
+              incomingVars[varIdx] || contactNameStr || cleanStaticOrFallback || 'Customer';
           } else {
-            // dynamic mode: prefer incoming variables[varIdx], then messageText if single dynamic link/text, then fallback value
+            // dynamic mode: prefer incoming variables[varIdx], otherwise deliver exact configured fallback value
             finalVariableValues[varIdx] =
-              incomingVars[varIdx] || messageText || mapping.value || '';
+              incomingVars[varIdx] || cleanStaticOrFallback || '';
           }
         }
       }
 
-      // Apply any remaining incoming variable keys directly
+      // Apply any extra incoming variable keys ONLY when not locked as 'static' in the trigger
       for (const [k, v] of Object.entries(incomingVars)) {
-        if (v) finalVariableValues[k] = v;
+        const mappedMode = matchedTrigger?.variableMappings?.[k]?.mode;
+        if (v && mappedMode !== 'static') {
+          finalVariableValues[k] = v;
+        }
       }
 
-      // If no mappings existed and {{1}} wasn't provided, use customer name if available
-      if (!finalVariableValues['1'] && contactNameStr) {
+      // If no mapping existed for {{1}} and it wasn't provided, default to customer name if available
+      if (!finalVariableValues['1'] && contactNameStr && !matchedTrigger?.variableMappings?.['1']) {
         finalVariableValues['1'] = contactNameStr;
       }
 
       // Resolve Header Media if template has IMAGE / VIDEO / DOCUMENT header
       let resolvedHeaderMedia: { id?: string; link?: string; filename?: string } | null = null;
+      let usedStoredHeaderMediaId = false;
       const headerComp = templateComponents.find(
         (c: any) => String(c.type || '').toUpperCase() === 'HEADER'
       );
@@ -903,15 +909,22 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
       ).toUpperCase();
 
       if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerFormat)) {
+        const cleanSavedUrl =
+          matchedTrigger?.headerMediaUrl && !matchedTrigger.headerMediaUrl.startsWith('blob:')
+            ? matchedTrigger.headerMediaUrl.trim()
+            : '';
+        const cleanSavedId = matchedTrigger?.headerMediaId?.trim() || '';
+
         const mediaRef =
           mediaUrlStr ||
-          matchedTrigger?.headerMediaId ||
-          matchedTrigger?.headerMediaUrl ||
+          cleanSavedId ||
+          cleanSavedUrl ||
           headerComp?.example?.header_handle?.[0] ||
           '';
 
         if (mediaRef) {
           if (/^\d+$/.test(mediaRef)) {
+            usedStoredHeaderMediaId = !mediaUrlStr && mediaRef === cleanSavedId;
             resolvedHeaderMedia = {
               id: mediaRef,
               filename: matchedTrigger?.headerFileName || undefined,
@@ -931,7 +944,7 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
         }
       }
 
-      const formattedComponents = formatTemplateComponentsForSending(
+      let formattedComponents = formatTemplateComponentsForSending(
         templateComponents,
         finalVariableValues,
         resolvedHeaderMedia
@@ -956,8 +969,32 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
         },
       };
 
+      // Store helper metadata on request-scoped variables for auto-heal retry & rendered summary
+      (payload as any).__metaContext = {
+        templateComponents,
+        finalVariableValues,
+        headerFormat,
+        usedStoredHeaderMediaId,
+        fallbackMediaUrl:
+          matchedTrigger?.headerMediaUrl && !matchedTrigger.headerMediaUrl.startsWith('blob:')
+            ? matchedTrigger.headerMediaUrl.trim()
+            : '',
+        headerFileName: matchedTrigger?.headerFileName || undefined,
+      };
+
+      const bodyComp = templateComponents.find(
+        (c: any) => String(c.type || '').toUpperCase() === 'BODY'
+      );
+      const renderedBodyText = bodyComp?.text
+        ? String(bodyComp.text).replace(/\{\{(\d+)\}\}/g, (_m: string, idx: string) => {
+            return finalVariableValues[idx] || finalVariableValues[`body_${idx}`] || `{{${idx}}}`;
+          })
+        : '';
+
       detectedMediaType = 'template';
-      displaySummary = `[Template: ${resolvedTemplateName}]${matchedTrigger ? ` (${matchedTrigger.label || matchedTrigger.triggerKey})` : ''}`;
+      displaySummary = renderedBodyText
+        ? renderedBodyText
+        : `[Template: ${resolvedTemplateName}]${matchedTrigger ? ` (${matchedTrigger.label || matchedTrigger.triggerKey})` : ''}`;
     } else {
       // 6B. STANDARD TEXT / MEDIA MODE (backward compatible)
       const combinedCaption =
@@ -1047,6 +1084,11 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
     }
 
     // 7. Dispatch via Meta WhatsApp Cloud API
+    const templateMetaContext = (payload as any).__metaContext;
+    if (templateMetaContext) {
+      delete (payload as any).__metaContext;
+    }
+
     let sendRes = await fetch(sendUrl, {
       method: 'POST',
       headers: {
@@ -1057,6 +1099,57 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
     });
 
     let sendData = await sendRes.json();
+
+    // Auto-heal retry if Meta rejected an expired/mismatched headerMediaId on a saved Trigger
+    if (
+      (!sendRes.ok || sendData.error) &&
+      resolvedTemplateName &&
+      templateMetaContext?.usedStoredHeaderMediaId &&
+      templateMetaContext?.fallbackMediaUrl &&
+      ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(templateMetaContext.headerFormat)
+    ) {
+      try {
+        const reuploadedMedia = await resolveMetaMediaObject(
+          templateMetaContext.fallbackMediaUrl,
+          targetPhoneNumberId,
+          token,
+          templateMetaContext.headerFormat.toLowerCase() as 'image' | 'video' | 'document',
+          graphVersion
+        );
+        if (reuploadedMedia) {
+          if (templateMetaContext.headerFileName && !reuploadedMedia.filename) {
+            reuploadedMedia.filename = templateMetaContext.headerFileName;
+          }
+          const retryComponents = formatTemplateComponentsForSending(
+            templateMetaContext.templateComponents,
+            templateMetaContext.finalVariableValues,
+            reuploadedMedia
+          );
+          const retryPayload = {
+            ...payload,
+            template: {
+              ...payload.template,
+              ...(retryComponents.length > 0 ? { components: retryComponents } : {}),
+            },
+          };
+          const retryRes = await fetch(sendUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify(retryPayload),
+          });
+          const retryData = await retryRes.json();
+          if (retryRes.ok && !retryData.error) {
+            sendRes = retryRes;
+            sendData = retryData;
+          }
+        }
+      } catch (retryMediaErr) {
+        console.warn('[ExternalAPI] Header media auto-heal retry notice:', retryMediaErr);
+      }
+    }
 
     // If Meta rejected media attachment URL directly in non-template mode, retry once as clickable text link
     if (
@@ -1265,6 +1358,9 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
       status: 'sent',
       ...(resolvedTemplateName ? { templateName: resolvedTemplateName } : {}),
       ...(triggerKeyInput ? { trigger: triggerKeyInput } : {}),
+      ...(templateMetaContext?.finalVariableValues
+        ? { variablesSent: templateMetaContext.finalVariableValues }
+        : {}),
     });
   } catch (err: any) {
     const errorMsg = err?.message || 'Internal server error while sending WhatsApp message.';

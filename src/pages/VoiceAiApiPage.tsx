@@ -28,6 +28,10 @@ import {
   RotateCw,
   Save,
   ShieldCheck,
+  ExternalLink,
+  Phone,
+  CornerUpLeft,
+  BadgeCheck,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -104,28 +108,64 @@ function normalizeTriggerSlug(raw: string): string {
     .replace(/^_+|_+$/g, '');
 }
 
-function extractTemplateVariables(template: Template | null | undefined): string[] {
+interface DetectedTemplateVariable {
+  key: string;
+  label: string;
+  section: 'header' | 'body' | 'button';
+}
+
+function extractTemplateVariables(
+  template: Template | null | undefined
+): DetectedTemplateVariable[] {
   if (!template?.components) return [];
-  const found = new Set<string>();
+  const results: DetectedTemplateVariable[] = [];
+  const seen = new Set<string>();
+
   for (const comp of template.components) {
-    if (comp.text) {
+    const type = String(comp.type || '').toUpperCase();
+    if (type === 'HEADER' && String(comp.format || 'TEXT').toUpperCase() === 'TEXT' && comp.text) {
       const matches = comp.text.match(/\{\{(\d+)\}\}/g);
       if (matches) {
-        matches.forEach((m) => found.add(m.replace(/[{}]/g, '')));
+        matches.forEach((m) => {
+          const num = m.replace(/[{}]/g, '');
+          const key = `header_${num}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            results.push({ key, label: `Header {{${num}}}`, section: 'header' });
+          }
+        });
       }
-    }
-    if (Array.isArray(comp.buttons)) {
-      for (const btn of comp.buttons) {
-        if (btn.url) {
-          const urlMatches = btn.url.match(/\{\{(\d+)\}\}/g);
-          if (urlMatches) {
-            urlMatches.forEach((m) => found.add(m.replace(/[{}]/g, '')));
+    } else if (type === 'BODY' && comp.text) {
+      const matches = comp.text.match(/\{\{(\d+)\}\}/g);
+      if (matches) {
+        const nums = Array.from(new Set(matches.map((m) => m.replace(/[{}]/g, '')))).sort(
+          (a, b) => Number(a) - Number(b)
+        );
+        nums.forEach((num) => {
+          if (!seen.has(num)) {
+            seen.add(num);
+            results.push({ key: num, label: `{{${num}}}`, section: 'body' });
+          }
+        });
+      }
+    } else if (type === 'BUTTONS' && Array.isArray(comp.buttons)) {
+      comp.buttons.forEach((btn, idx) => {
+        if (btn?.type === 'URL' && btn.url && btn.url.includes('{{1}}')) {
+          const key = `button_${idx}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            results.push({
+              key,
+              label: `Button "${btn.text || idx + 1}" URL`,
+              section: 'button',
+            });
           }
         }
-      }
+      });
     }
   }
-  return Array.from(found).sort((a, b) => Number(a) - Number(b));
+
+  return results;
 }
 
 function getTemplateHeaderInfo(template: Template | null | undefined): {
@@ -238,6 +278,7 @@ export const VoiceAiApiPage: React.FC = () => {
   const [formVariableMappings, setFormVariableMappings] = useState<
     Record<string, TriggerVariableMapping>
   >({});
+  const [formLocalMediaPreview, setFormLocalMediaPreview] = useState('');
   const [formEnabled, setFormEnabled] = useState(true);
   const [uploadingMedia, setUploadingMedia] = useState(false);
   const [syncingTemplates, setSyncingTemplates] = useState(false);
@@ -393,8 +434,16 @@ export const VoiceAiApiPage: React.FC = () => {
     [selectedTemplate]
   );
 
+  const editingTriggerObj = useMemo(
+    () => (editingTriggerId ? triggers.find((t) => t.id === editingTriggerId) || null : null),
+    [editingTriggerId, triggers]
+  );
+
+  const effectiveHeaderFormat =
+    selectedHeaderInfo.format || editingTriggerObj?.headerFormat || '';
+
   const needsHeaderMedia = ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(
-    selectedHeaderInfo.format
+    effectiveHeaderFormat
   );
 
   // Keep variableMappings synchronized whenever template changes
@@ -402,19 +451,19 @@ export const VoiceAiApiPage: React.FC = () => {
     if (!selectedTemplate) return;
     setFormVariableMappings((prev) => {
       const next: Record<string, TriggerVariableMapping> = {};
-      detectedVars.forEach((varKey, idx) => {
-        if (prev[varKey]) {
-          next[varKey] = prev[varKey];
+      detectedVars.forEach((item, idx) => {
+        if (prev[item.key]) {
+          next[item.key] = prev[item.key];
         } else {
-          next[varKey] =
-            idx === 0
+          next[item.key] =
+            item.section === 'body' && idx === 0
               ? { mode: 'customer_name', value: 'Customer' }
-              : { mode: 'dynamic', value: '' };
+              : { mode: 'static', value: '' };
         }
       });
       return next;
     });
-  }, [selectedTemplate?.id, detectedVars.join(',')]);
+  }, [selectedTemplate?.id, detectedVars.map((d) => d.key).join(',')]);
 
   const handleSyncMetaTemplates = async () => {
     const targetAcc = selectedFormAccount || activeAccount || accounts[0];
@@ -459,6 +508,7 @@ export const VoiceAiApiPage: React.FC = () => {
     setFormHeaderMediaUrl('');
     setFormHeaderMediaId('');
     setFormHeaderFileName('');
+    setFormLocalMediaPreview('');
     setFormVariableMappings({});
     setFormEnabled(true);
     setIsTriggerModalOpen(true);
@@ -477,11 +527,16 @@ export const VoiceAiApiPage: React.FC = () => {
           t.name === trigger.templateName && t.language === trigger.templateLanguage
       );
     setFormTemplateId(matchedTpl?.id || trigger.templateId || '');
-    setFormHeaderMediaUrl(trigger.headerMediaUrl || '');
+    const savedUrl =
+      trigger.headerMediaUrl && !trigger.headerMediaUrl.startsWith('blob:')
+        ? trigger.headerMediaUrl
+        : '';
+    setFormHeaderMediaUrl(savedUrl);
     setFormHeaderMediaId(trigger.headerMediaId || '');
     setFormHeaderFileName(trigger.headerFileName || '');
+    setFormLocalMediaPreview('');
     setFormHeaderMediaMode(
-      trigger.headerMediaUrl && !trigger.headerMediaId ? 'url' : 'upload'
+      savedUrl && !trigger.headerMediaId ? 'url' : 'upload'
     );
     setFormVariableMappings(trigger.variableMappings || {});
     setFormEnabled(trigger.enabled !== false);
@@ -491,17 +546,25 @@ export const VoiceAiApiPage: React.FC = () => {
   const handleHeaderMediaUpload = async (file: File | undefined) => {
     if (!file) return;
     setUploadingMedia(true);
+    const instantBlobPreview = URL.createObjectURL(file);
+    setFormLocalMediaPreview(instantBlobPreview);
     try {
       const uploaded = await uploadMediaFile(
         file,
         selectedFormAccount?.customToken,
         selectedFormAccount?.phoneNumberId
       );
-      setFormHeaderMediaUrl(uploaded.fullUrl || uploaded.url || '');
+      const candidateUrl = uploaded.fullUrl || uploaded.url || '';
+      const durableUrl = candidateUrl.startsWith('blob:') ? '' : candidateUrl;
+      setFormHeaderMediaUrl(durableUrl);
       setFormHeaderMediaId(uploaded.metaMediaId || uploaded.id || '');
       setFormHeaderFileName(uploaded.originalName || file.name);
-      toast.showSuccess('Media Uploaded', `${file.name} is ready for this template trigger.`);
+      if (durableUrl) {
+        setFormLocalMediaPreview(durableUrl);
+      }
+      toast.showSuccess('Media Uploaded', `${file.name} is ready and will be delivered with this trigger.`);
     } catch (err: any) {
+      setFormLocalMediaPreview('');
       toast.showError('Upload Failed', err?.message || 'Failed to upload media file.');
     } finally {
       setUploadingMedia(false);
@@ -1830,414 +1893,616 @@ Body:
         </section>
       )}
 
-      {/* CREATE / EDIT TRIGGER MODAL */}
-      {isTriggerModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
-            <div className="px-6 py-4 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between shrink-0">
-              <div>
-                <h3 className="text-sm font-bold text-neutral-900 dark:text-white">
-                  {editingTriggerId ? 'Edit AI Call Template Trigger' : 'New AI Call Template Trigger'}
-                </h3>
-                <p className="text-xs text-neutral-500 dark:text-neutral-400">
-                  Bind a Voice AI trigger key to a specific WhatsApp number and Meta-approved template.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsTriggerModalOpen(false)}
-                className="p-1.5 rounded-lg text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
+      {/* CREATE / EDIT TRIGGER MODAL WITH LIVE WHATSAPP MOBILE PREVIEW */}
+      {isTriggerModalOpen && (() => {
+        const previewMediaSrc =
+          formLocalMediaPreview ||
+          (formHeaderMediaUrl && !formHeaderMediaUrl.startsWith('blob:')
+            ? formHeaderMediaUrl
+            : '') ||
+          (formHeaderMediaId && selectedFormAccount?.phoneNumberId
+            ? `/api/meta/media-proxy?mediaId=${encodeURIComponent(formHeaderMediaId)}&phoneNumberId=${encodeURIComponent(selectedFormAccount.phoneNumberId)}&organizationId=${encodeURIComponent(orgId)}`
+            : '');
 
-            <form
-              onSubmit={handleSaveTrigger}
-              className="flex-1 overflow-y-auto px-6 py-5 space-y-5 text-xs"
-            >
-              {/* Trigger Key & Label */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className="font-semibold text-neutral-700 dark:text-neutral-300 block">
-                    Trigger Key (Used by Voice AI)
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. send_catalog"
-                    value={formTriggerKey}
-                    onChange={(e) => setFormTriggerKey(e.target.value)}
-                    className="w-full px-3.5 py-2 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 font-mono text-xs text-neutral-900 dark:text-white"
-                  />
-                  {formTriggerKey && (
-                    <div className="flex items-center gap-1.5 text-[11px] text-neutral-500 dark:text-neutral-400">
-                      <span>
-                        Slug:{' '}
-                        <code className="font-mono text-emerald-700 dark:text-emerald-400 font-semibold">
-                          {normalizeTriggerSlug(formTriggerKey) || 'invalid'}
-                        </code>
-                      </span>
-                      {normalizeTriggerSlug(formTriggerKey) && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            copyText(
-                              normalizeTriggerSlug(formTriggerKey),
-                              'modal_trigger_slug',
-                              'Trigger Key Copied'
-                            )
-                          }
-                          title="Copy trigger key"
-                          aria-label="Copy trigger key"
-                          className="p-0.5 rounded text-neutral-400 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
-                        >
-                          {copiedId === 'modal_trigger_slug' ? (
-                            <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
-                          ) : (
-                            <Copy className="w-3 h-3" />
+        const resolvePreviewValue = (key: string, fallbackPlaceholder: string) => {
+          const map = formVariableMappings[key];
+          if (!map) return fallbackPlaceholder;
+          if (map.mode === 'customer_name') {
+            return map.value?.trim() || 'Rahul Sharma';
+          }
+          return map.value?.trim() || fallbackPlaceholder;
+        };
+
+        const rawBody = getTemplateBodyText(selectedTemplate);
+        const previewBodyText = rawBody
+          ? rawBody.replace(/\{\{(\d+)\}\}/g, (_m, idx) =>
+              resolvePreviewValue(idx, `{{${idx}}}`)
+            )
+          : '';
+
+        const previewHeaderText = selectedHeaderInfo.text
+          ? selectedHeaderInfo.text.replace(/\{\{(\d+)\}\}/g, (_m, idx) =>
+              resolvePreviewValue(`header_${idx}`, `{{${idx}}}`)
+            )
+          : '';
+
+        const previewFooterText = getTemplateFooterText(selectedTemplate);
+        const previewButtons = getTemplateButtons(selectedTemplate);
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-xs">
+            <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl w-full max-w-5xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
+              <div className="px-6 py-4 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between shrink-0">
+                <div>
+                  <h3 className="text-sm font-bold text-neutral-900 dark:text-white">
+                    {editingTriggerId ? 'Edit AI Call Template Trigger' : 'New AI Call Template Trigger'}
+                  </h3>
+                  <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                    Bind a Voice AI trigger key to a WhatsApp number, Meta-approved template, exact media, and variable values.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsTriggerModalOpen(false)}
+                  className="p-1.5 rounded-lg text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-hidden grid grid-cols-1 lg:grid-cols-12">
+                {/* LEFT COLUMN: Configuration Form */}
+                <form
+                  id="voice-ai-trigger-form"
+                  onSubmit={handleSaveTrigger}
+                  className="lg:col-span-7 overflow-y-auto px-6 py-5 space-y-5 text-xs lg:border-r border-neutral-200 dark:border-neutral-800"
+                >
+                  {/* Trigger Key & Label */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="font-semibold text-neutral-700 dark:text-neutral-300 block">
+                        Trigger Key (Used by Voice AI)
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="e.g. send_catalog"
+                        value={formTriggerKey}
+                        onChange={(e) => setFormTriggerKey(e.target.value)}
+                        className="w-full px-3.5 py-2 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 font-mono text-xs text-neutral-900 dark:text-white"
+                      />
+                      {formTriggerKey && (
+                        <div className="flex items-center gap-1.5 text-[11px] text-neutral-500 dark:text-neutral-400">
+                          <span>
+                            Slug:{' '}
+                            <code className="font-mono text-emerald-700 dark:text-emerald-400 font-semibold">
+                              {normalizeTriggerSlug(formTriggerKey) || 'invalid'}
+                            </code>
+                          </span>
+                          {normalizeTriggerSlug(formTriggerKey) && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                copyText(
+                                  normalizeTriggerSlug(formTriggerKey),
+                                  'modal_trigger_slug',
+                                  'Trigger Key Copied'
+                                )
+                              }
+                              title="Copy trigger key"
+                              aria-label="Copy trigger key"
+                              className="p-0.5 rounded text-neutral-400 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
+                            >
+                              {copiedId === 'modal_trigger_slug' ? (
+                                <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                              ) : (
+                                <Copy className="w-3 h-3" />
+                              )}
+                            </button>
                           )}
-                        </button>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="font-semibold text-neutral-700 dark:text-neutral-300 block">
+                        Display Label
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Send Product Brochure Link"
+                        value={formLabel}
+                        onChange={(e) => setFormLabel(e.target.value)}
+                        className="w-full px-3.5 py-2 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 text-xs text-neutral-900 dark:text-white"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Connected WhatsApp Sender */}
+                  <div className="space-y-1.5">
+                    <label className="font-semibold text-neutral-700 dark:text-neutral-300 block">
+                      Specific WhatsApp Business Sender Number
+                    </label>
+                    {accounts.length === 0 ? (
+                      <div className="p-3 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300 flex items-center gap-2">
+                        <Smartphone className="w-4 h-4 shrink-0" />
+                        <span>
+                          No WhatsApp number connected yet. Connect a number in the WhatsApp Numbers tab first.
+                        </span>
+                      </div>
+                    ) : (
+                      <select
+                        required
+                        value={formPhoneNumberId}
+                        onChange={(e) => setFormPhoneNumberId(e.target.value)}
+                        className="w-full px-3.5 py-2 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 text-xs text-neutral-900 dark:text-white"
+                      >
+                        <option value="">Select connected WhatsApp number...</option>
+                        {accounts.map((acc) => (
+                          <option key={acc.id} value={acc.phoneNumberId}>
+                            {acc.displayPhoneNumber} — {acc.verifiedName || 'WhatsApp Business'}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+
+                  {/* Approved Meta Template */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="font-semibold text-neutral-700 dark:text-neutral-300">
+                        Meta Approved Template
+                      </label>
+                      <button
+                        type="button"
+                        onClick={handleSyncMetaTemplates}
+                        disabled={syncingTemplates || accounts.length === 0}
+                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer disabled:opacity-50"
+                      >
+                        <RefreshCw className={`w-3 h-3 ${syncingTemplates ? 'animate-spin' : ''}`} />
+                        <span>Sync from Meta</span>
+                      </button>
+                    </div>
+                    <select
+                      required={!editingTriggerId}
+                      value={formTemplateId}
+                      onChange={(e) => setFormTemplateId(e.target.value)}
+                      className="w-full px-3.5 py-2 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 text-xs text-neutral-900 dark:text-white"
+                    >
+                      <option value="">
+                        {filteredApprovedTemplates.length > 0
+                          ? 'Choose an APPROVED WhatsApp template...'
+                          : 'No approved templates found (click Sync from Meta)'}
+                      </option>
+                      {filteredApprovedTemplates.map((tpl) => {
+                        const hdr = getTemplateHeaderInfo(tpl);
+                        return (
+                          <option key={tpl.id} value={tpl.id}>
+                            {tpl.name} ({tpl.language} · {tpl.category}
+                            {hdr.format ? ` · ${hdr.format}` : ''})
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+
+                  {/* Conditional Header Media */}
+                  {needsHeaderMedia && (
+                    <div className="space-y-2.5 pt-3 border-t border-neutral-200 dark:border-neutral-800">
+                      <div className="flex items-center justify-between">
+                        <label className="font-semibold text-neutral-700 dark:text-neutral-300">
+                          Template Header {effectiveHeaderFormat}
+                        </label>
+                        <div className="inline-flex items-center gap-1 p-0.5 rounded-lg bg-neutral-100 dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800">
+                          <button
+                            type="button"
+                            onClick={() => setFormHeaderMediaMode('upload')}
+                            className={`px-2.5 py-1 rounded-md text-[11px] font-semibold cursor-pointer ${
+                              formHeaderMediaMode === 'upload'
+                                ? 'bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white'
+                                : 'text-neutral-500'
+                            }`}
+                          >
+                            Upload PC
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setFormHeaderMediaMode('url')}
+                            className={`px-2.5 py-1 rounded-md text-[11px] font-semibold cursor-pointer ${
+                              formHeaderMediaMode === 'url'
+                                ? 'bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white'
+                                : 'text-neutral-500'
+                            }`}
+                          >
+                            Public URL
+                          </button>
+                        </div>
+                      </div>
+
+                      {formHeaderMediaMode === 'upload' ? (
+                        <div className="flex items-center gap-3">
+                          <input
+                            ref={fileInputRef}
+                            type="file"
+                            accept={
+                              effectiveHeaderFormat === 'IMAGE'
+                                ? 'image/*'
+                                : effectiveHeaderFormat === 'VIDEO'
+                                ? 'video/*'
+                                : '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx'
+                            }
+                            onChange={(e) => handleHeaderMediaUpload(e.target.files?.[0])}
+                            className="hidden"
+                          />
+                          <button
+                            type="button"
+                            disabled={uploadingMedia}
+                            onClick={() => fileInputRef.current?.click()}
+                            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 font-semibold text-neutral-800 dark:text-neutral-200 cursor-pointer shrink-0"
+                          >
+                            {uploadingMedia ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Upload className="w-3.5 h-3.5" />
+                            )}
+                            <span>{uploadingMedia ? 'Uploading...' : 'Choose File'}</span>
+                          </button>
+                          <div className="flex-1 min-w-0 flex items-center justify-between gap-2">
+                            <span className="text-[11px] text-neutral-600 dark:text-neutral-300 truncate font-mono">
+                              {formHeaderFileName || formHeaderMediaId || formHeaderMediaUrl || 'No file uploaded yet'}
+                            </span>
+                            {(formHeaderMediaId || formHeaderMediaUrl || formLocalMediaPreview) && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setFormHeaderMediaUrl('');
+                                  setFormHeaderMediaId('');
+                                  setFormHeaderFileName('');
+                                  setFormLocalMediaPreview('');
+                                }}
+                                className="text-[11px] font-semibold text-rose-600 hover:underline cursor-pointer shrink-0"
+                              >
+                                Clear
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <LinkIcon className="w-4 h-4 text-neutral-400 shrink-0" />
+                          <input
+                            type="url"
+                            placeholder="https://example.com/catalog.jpg"
+                            value={formHeaderMediaUrl}
+                            onChange={(e) => {
+                              setFormHeaderMediaUrl(e.target.value);
+                              setFormHeaderMediaId('');
+                              setFormLocalMediaPreview(e.target.value);
+                            }}
+                            className="flex-1 px-3 py-2 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 font-mono text-xs text-neutral-900 dark:text-white"
+                          />
+                        </div>
                       )}
                     </div>
                   )}
-                </div>
 
-                <div className="space-y-1.5">
-                  <label className="font-semibold text-neutral-700 dark:text-neutral-300 block">
-                    Display Label
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Send Product Brochure Link"
-                    value={formLabel}
-                    onChange={(e) => setFormLabel(e.target.value)}
-                    className="w-full px-3.5 py-2 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 text-xs text-neutral-900 dark:text-white"
-                  />
-                </div>
-              </div>
+                  {/* Variable Mappings */}
+                  {detectedVars.length > 0 && (
+                    <div className="space-y-3 pt-3 border-t border-neutral-200 dark:border-neutral-800">
+                      <div>
+                        <p className="font-semibold text-neutral-700 dark:text-neutral-300">
+                          Template Variable Values
+                        </p>
+                        <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                          Jo values aap yahan set karenge wahi exact values mobile preview me dikhengi aur call trigger hone par deliver hongi.
+                        </p>
+                      </div>
 
-              {/* Connected WhatsApp Sender */}
-              <div className="space-y-1.5">
-                <label className="font-semibold text-neutral-700 dark:text-neutral-300 block">
-                  Specific WhatsApp Business Sender Number
-                </label>
-                {accounts.length === 0 ? (
-                  <div className="p-3 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300 flex items-center gap-2">
-                    <Smartphone className="w-4 h-4 shrink-0" />
-                    <span>
-                      No WhatsApp number connected yet. Connect a number in the WhatsApp Numbers tab first.
-                    </span>
-                  </div>
-                ) : (
-                  <select
-                    required
-                    value={formPhoneNumberId}
-                    onChange={(e) => setFormPhoneNumberId(e.target.value)}
-                    className="w-full px-3.5 py-2 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 text-xs text-neutral-900 dark:text-white"
-                  >
-                    <option value="">Select connected WhatsApp number...</option>
-                    {accounts.map((acc) => (
-                      <option key={acc.id} value={acc.phoneNumberId}>
-                        {acc.displayPhoneNumber} — {acc.verifiedName || 'WhatsApp Business'}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </div>
-
-              {/* Approved Meta Template */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <label className="font-semibold text-neutral-700 dark:text-neutral-300">
-                    Meta Approved Template
-                  </label>
-                  <button
-                    type="button"
-                    onClick={handleSyncMetaTemplates}
-                    disabled={syncingTemplates || accounts.length === 0}
-                    className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer disabled:opacity-50"
-                  >
-                    <RefreshCw className={`w-3 h-3 ${syncingTemplates ? 'animate-spin' : ''}`} />
-                    <span>Sync from Meta</span>
-                  </button>
-                </div>
-                <select
-                  required={!editingTriggerId}
-                  value={formTemplateId}
-                  onChange={(e) => setFormTemplateId(e.target.value)}
-                  className="w-full px-3.5 py-2 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 text-xs text-neutral-900 dark:text-white"
-                >
-                  <option value="">
-                    {filteredApprovedTemplates.length > 0
-                      ? 'Choose an APPROVED WhatsApp template...'
-                      : 'No approved templates found (click Sync from Meta)'}
-                  </option>
-                  {filteredApprovedTemplates.map((tpl) => {
-                    const hdr = getTemplateHeaderInfo(tpl);
-                    return (
-                      <option key={tpl.id} value={tpl.id}>
-                        {tpl.name} ({tpl.language} · {tpl.category}
-                        {hdr.format ? ` · ${hdr.format}` : ''})
-                      </option>
-                    );
-                  })}
-                </select>
-              </div>
-
-              {/* Live Template Preview */}
-              {selectedTemplate && (
-                <div className="p-4 rounded-xl bg-neutral-50 dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 space-y-2">
-                  <div className="flex items-center justify-between text-[11px] text-neutral-500 dark:text-neutral-400">
-                    <span className="font-semibold text-neutral-700 dark:text-neutral-300">
-                      Template Preview
-                    </span>
-                    <span className="font-mono">
-                      {selectedTemplate.name} · {selectedTemplate.language}
-                    </span>
-                  </div>
-                  {selectedHeaderInfo.format && (
-                    <div className="text-[11px] font-semibold text-neutral-700 dark:text-neutral-300 flex items-center gap-1.5">
-                      {selectedHeaderInfo.format === 'IMAGE' && <ImageIcon className="w-3.5 h-3.5" />}
-                      {selectedHeaderInfo.format === 'VIDEO' && <Video className="w-3.5 h-3.5" />}
-                      {selectedHeaderInfo.format === 'DOCUMENT' && <FileText className="w-3.5 h-3.5" />}
-                      <span>
-                        {selectedHeaderInfo.format === 'TEXT'
-                          ? selectedHeaderInfo.text
-                          : `Header Media: ${selectedHeaderInfo.format}`}
-                      </span>
-                    </div>
-                  )}
-                  <p className="text-xs text-neutral-800 dark:text-neutral-200 whitespace-pre-wrap leading-relaxed">
-                    {getTemplateBodyText(selectedTemplate) || '(No body text)'}
-                  </p>
-                  {getTemplateFooterText(selectedTemplate) && (
-                    <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                      {getTemplateFooterText(selectedTemplate)}
-                    </p>
-                  )}
-                  {getTemplateButtons(selectedTemplate).length > 0 && (
-                    <div className="pt-1.5 flex flex-wrap gap-2 border-t border-neutral-200 dark:border-neutral-800">
-                      {getTemplateButtons(selectedTemplate).map((b, i) => (
-                        <span
-                          key={i}
-                          className="text-[11px] font-medium text-emerald-700 dark:text-emerald-400"
-                        >
-                          [{b.text}]
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Conditional Header Media */}
-              {needsHeaderMedia && (
-                <div className="space-y-2.5 pt-2 border-t border-neutral-200 dark:border-neutral-800">
-                  <div className="flex items-center justify-between">
-                    <label className="font-semibold text-neutral-700 dark:text-neutral-300">
-                      Template Header {selectedHeaderInfo.format}
-                    </label>
-                    <div className="inline-flex items-center gap-1 p-0.5 rounded-lg bg-neutral-100 dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800">
-                      <button
-                        type="button"
-                        onClick={() => setFormHeaderMediaMode('upload')}
-                        className={`px-2.5 py-1 rounded-md text-[11px] font-semibold cursor-pointer ${
-                          formHeaderMediaMode === 'upload'
-                            ? 'bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white'
-                            : 'text-neutral-500'
-                        }`}
-                      >
-                        Upload PC
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setFormHeaderMediaMode('url')}
-                        className={`px-2.5 py-1 rounded-md text-[11px] font-semibold cursor-pointer ${
-                          formHeaderMediaMode === 'url'
-                            ? 'bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white'
-                            : 'text-neutral-500'
-                        }`}
-                      >
-                        Public URL
-                      </button>
-                    </div>
-                  </div>
-
-                  {formHeaderMediaMode === 'upload' ? (
-                    <div className="flex items-center gap-3">
-                      <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept={
-                          selectedHeaderInfo.format === 'IMAGE'
-                            ? 'image/*'
-                            : selectedHeaderInfo.format === 'VIDEO'
-                            ? 'video/*'
-                            : '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx'
-                        }
-                        onChange={(e) => handleHeaderMediaUpload(e.target.files?.[0])}
-                        className="hidden"
-                      />
-                      <button
-                        type="button"
-                        disabled={uploadingMedia}
-                        onClick={() => fileInputRef.current?.click()}
-                        className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 font-semibold text-neutral-800 dark:text-neutral-200 cursor-pointer shrink-0"
-                      >
-                        {uploadingMedia ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <Upload className="w-3.5 h-3.5" />
-                        )}
-                        <span>{uploadingMedia ? 'Uploading...' : 'Choose File'}</span>
-                      </button>
-                      <div className="text-[11px] text-neutral-500 dark:text-neutral-400 truncate">
-                        {formHeaderFileName || formHeaderMediaId || formHeaderMediaUrl || 'No file uploaded yet'}
+                      <div className="space-y-2.5">
+                        {detectedVars.map((item) => {
+                          const mapping = formVariableMappings[item.key] || {
+                            mode: 'static',
+                            value: '',
+                          };
+                          return (
+                            <div
+                              key={item.key}
+                              className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center"
+                            >
+                              <div
+                                className="sm:col-span-3 font-mono font-semibold text-neutral-800 dark:text-neutral-200 truncate"
+                                title={item.label}
+                              >
+                                {item.label}
+                              </div>
+                              <div className="sm:col-span-4">
+                                <select
+                                  value={mapping.mode}
+                                  onChange={(e) =>
+                                    setFormVariableMappings((prev) => ({
+                                      ...prev,
+                                      [item.key]: {
+                                        ...mapping,
+                                        mode: e.target.value as TriggerVariableMapping['mode'],
+                                      },
+                                    }))
+                                  }
+                                  className="w-full px-2.5 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 text-xs text-neutral-900 dark:text-white"
+                                >
+                                  <option value="static">Fixed Exact Value</option>
+                                  <option value="customer_name">Customer Name (AI Call)</option>
+                                  <option value="dynamic">Dynamic (Fallback Below)</option>
+                                </select>
+                              </div>
+                              <div className="sm:col-span-5">
+                                <input
+                                  type="text"
+                                  placeholder={
+                                    mapping.mode === 'customer_name'
+                                      ? 'Fallback name (e.g. Customer)'
+                                      : mapping.mode === 'static'
+                                      ? 'Exact value to deliver (e.g. https://...)'
+                                      : 'Default value if AI does not pass'
+                                  }
+                                  value={mapping.value || ''}
+                                  onChange={(e) =>
+                                    setFormVariableMappings((prev) => ({
+                                      ...prev,
+                                      [item.key]: {
+                                        ...mapping,
+                                        value: e.target.value,
+                                      },
+                                    }))
+                                  }
+                                  className="w-full px-3 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 text-xs text-neutral-900 dark:text-white"
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
-                  ) : (
-                    <div className="flex items-center gap-2">
-                      <LinkIcon className="w-4 h-4 text-neutral-400 shrink-0" />
-                      <input
-                        type="url"
-                        placeholder="https://example.com/catalog.pdf"
-                        value={formHeaderMediaUrl}
-                        onChange={(e) => {
-                          setFormHeaderMediaUrl(e.target.value);
-                          setFormHeaderMediaId('');
-                        }}
-                        className="flex-1 px-3 py-2 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 font-mono text-xs text-neutral-900 dark:text-white"
-                      />
-                    </div>
                   )}
-                </div>
-              )}
 
-              {/* Variable Mappings */}
-              {detectedVars.length > 0 && (
-                <div className="space-y-3 pt-2 border-t border-neutral-200 dark:border-neutral-800">
-                  <div>
-                    <p className="font-semibold text-neutral-700 dark:text-neutral-300">
-                      Template Variable Mappings
-                    </p>
-                    <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                      Choose how each placeholder is filled when your Voice AI agent triggers this template.
-                    </p>
+                  {/* Active toggle */}
+                  <div className="pt-3 border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
+                    <div>
+                      <p className="font-semibold text-neutral-800 dark:text-neutral-200">
+                        Trigger Status
+                      </p>
+                      <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                        Paused triggers reject incoming Voice AI requests until re-enabled.
+                      </p>
+                    </div>
+                    <label className="inline-flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={formEnabled}
+                        onChange={(e) => setFormEnabled(e.target.checked)}
+                        className="rounded text-emerald-600 w-4 h-4"
+                      />
+                      <span className="font-semibold text-neutral-800 dark:text-neutral-200">
+                        {formEnabled ? 'Active' : 'Paused'}
+                      </span>
+                    </label>
                   </div>
+                </form>
 
-                  <div className="space-y-2.5">
-                    {detectedVars.map((varKey) => {
-                      const mapping = formVariableMappings[varKey] || {
-                        mode: 'dynamic',
-                        value: '',
-                      };
-                      return (
-                        <div
-                          key={varKey}
-                          className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center"
-                        >
-                          <div className="sm:col-span-2 font-mono font-semibold text-neutral-800 dark:text-neutral-200">
-                            {`{{${varKey}}}`}
-                          </div>
-                          <div className="sm:col-span-5">
-                            <select
-                              value={mapping.mode}
-                              onChange={(e) =>
-                                setFormVariableMappings((prev) => ({
-                                  ...prev,
-                                  [varKey]: {
-                                    ...mapping,
-                                    mode: e.target.value as TriggerVariableMapping['mode'],
-                                  },
-                                }))
-                              }
-                              className="w-full px-2.5 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 text-xs text-neutral-900 dark:text-white"
-                            >
-                              <option value="customer_name">Auto: Customer Name (AI Call)</option>
-                              <option value="dynamic">Dynamic from AI Call (with fallback)</option>
-                              <option value="static">Fixed Static Value (Link / Text)</option>
-                            </select>
-                          </div>
-                          <div className="sm:col-span-5">
-                            <input
-                              type="text"
-                              placeholder={
-                                mapping.mode === 'customer_name'
-                                  ? 'Fallback name (e.g. Customer)'
-                                  : mapping.mode === 'static'
-                                  ? 'Fixed value (e.g. https://...)'
-                                  : 'Fallback if AI omits value'
-                              }
-                              value={mapping.value || ''}
-                              onChange={(e) =>
-                                setFormVariableMappings((prev) => ({
-                                  ...prev,
-                                  [varKey]: {
-                                    ...mapping,
-                                    value: e.target.value,
-                                  },
-                                }))
-                              }
-                              className="w-full px-3 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 text-xs text-neutral-900 dark:text-white"
-                            />
-                          </div>
+                {/* RIGHT COLUMN: LIVE WHATSAPP MOBILE PREVIEW */}
+                <div className="lg:col-span-5 bg-neutral-50 dark:bg-neutral-950/60 p-5 flex flex-col items-center justify-start overflow-y-auto">
+                  <div className="w-full max-w-[300px] space-y-3">
+                    <div className="flex items-center justify-between text-[11px] text-neutral-500 dark:text-neutral-400">
+                      <span className="font-semibold text-neutral-800 dark:text-neutral-200">
+                        Live WhatsApp Mobile Preview
+                      </span>
+                      <span className="font-mono">
+                        {selectedTemplate?.language || 'en_US'}
+                      </span>
+                    </div>
+
+                    {/* Realistic Phone Frame */}
+                    <div className="rounded-[28px] border-[6px] border-neutral-900 dark:border-neutral-800 bg-neutral-900 shadow-lg overflow-hidden">
+                      {/* Phone Notch / Status Bar */}
+                      <div className="bg-[#075E54] text-white px-3.5 pt-2 pb-2.5 flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-full bg-white/15 flex items-center justify-center text-xs font-bold shrink-0">
+                          {(selectedFormAccount?.verifiedName || 'W').charAt(0).toUpperCase()}
                         </div>
-                      );
-                    })}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs font-semibold truncate">
+                              {selectedFormAccount?.verifiedName || 'WhatsApp Business'}
+                            </span>
+                            <BadgeCheck className="w-3.5 h-3.5 text-emerald-300 shrink-0" />
+                          </div>
+                          <p className="text-[10px] text-white/80 font-mono truncate">
+                            {selectedFormAccount?.displayPhoneNumber || '+91 00000 00000'}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Chat Wallpaper Canvas */}
+                      <div className="bg-[#EFEAE2] dark:bg-[#0B141A] p-3 min-h-[340px] flex flex-col justify-between">
+                        {!selectedTemplate ? (
+                          <div className="my-auto text-center px-3 py-8 rounded-xl bg-white/85 dark:bg-neutral-900/90 border border-neutral-200/70 dark:border-neutral-800 space-y-1.5">
+                            <Smartphone className="w-5 h-5 text-neutral-400 mx-auto" />
+                            <p className="text-xs font-semibold text-neutral-700 dark:text-neutral-200">
+                              Select an Approved Template
+                            </p>
+                            <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                              Your live WhatsApp message preview will appear here.
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="bg-white dark:bg-[#202C33] rounded-xl rounded-tl-xs shadow-xs overflow-hidden text-neutral-900 dark:text-neutral-100 border border-black/5 dark:border-white/5">
+                            {/* Header Media or Text */}
+                            {effectiveHeaderFormat === 'IMAGE' && (
+                              <div className="bg-neutral-100 dark:bg-neutral-800">
+                                {previewMediaSrc ? (
+                                  <img
+                                    src={previewMediaSrc}
+                                    alt="Header preview"
+                                    referrerPolicy="no-referrer"
+                                    className="w-full h-36 object-cover block"
+                                  />
+                                ) : (
+                                  <div className="h-32 flex flex-col items-center justify-center text-neutral-400 gap-1">
+                                    <ImageIcon className="w-6 h-6" />
+                                    <span className="text-[10px] font-medium">
+                                      Upload or paste image URL
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {effectiveHeaderFormat === 'VIDEO' && (
+                              <div className="bg-neutral-900">
+                                {previewMediaSrc ? (
+                                  <video
+                                    src={previewMediaSrc}
+                                    controls
+                                    className="w-full h-36 object-cover block"
+                                  />
+                                ) : (
+                                  <div className="h-32 flex flex-col items-center justify-center text-neutral-400 gap-1">
+                                    <Video className="w-6 h-6" />
+                                    <span className="text-[10px] font-medium">
+                                      Upload or paste video URL
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {effectiveHeaderFormat === 'DOCUMENT' && (
+                              <div className="p-2.5 bg-neutral-100/90 dark:bg-neutral-800/80 border-b border-neutral-200/70 dark:border-neutral-700/60 flex items-center gap-2.5">
+                                <div className="w-9 h-9 rounded-lg bg-rose-100 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">
+                                  <FileText className="w-4 h-4" />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-[11px] font-semibold truncate text-neutral-900 dark:text-white">
+                                    {formHeaderFileName || (previewMediaSrc ? 'Attached Document.pdf' : 'No document attached')}
+                                  </p>
+                                  <p className="text-[10px] text-neutral-500 dark:text-neutral-400">
+                                    PDF / Document Attachment
+                                  </p>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Body & Footer */}
+                            <div className="px-3 py-2.5 space-y-1.5">
+                              {effectiveHeaderFormat === 'TEXT' && previewHeaderText && (
+                                <p className="text-xs font-bold text-neutral-900 dark:text-white">
+                                  {previewHeaderText}
+                                </p>
+                              )}
+
+                              <p className="text-[12px] leading-[1.45] whitespace-pre-wrap break-words text-neutral-800 dark:text-neutral-100">
+                                {previewBodyText || '(No body text)'}
+                              </p>
+
+                              <div className="flex items-end justify-between gap-2 pt-0.5">
+                                <p className="text-[10px] text-neutral-500 dark:text-neutral-400">
+                                  {previewFooterText || ''}
+                                </p>
+                                <span className="text-[9px] text-neutral-400 font-mono tabular-nums shrink-0">
+                                  12:00 PM
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Interactive Template Buttons */}
+                            {previewButtons.length > 0 && (
+                              <div className="border-t border-neutral-200/80 dark:border-neutral-700/70 divide-y divide-neutral-200/80 dark:divide-neutral-700/70">
+                                {previewButtons.map((btn, idx) => (
+                                  <div
+                                    key={idx}
+                                    className="px-3 py-2 text-center text-[11px] font-semibold text-[#00A884] dark:text-[#53BDEB] flex items-center justify-center gap-1.5"
+                                  >
+                                    {btn.type === 'URL' && <ExternalLink className="w-3 h-3" />}
+                                    {btn.type === 'PHONE_NUMBER' && <Phone className="w-3 h-3" />}
+                                    {btn.type === 'QUICK_REPLY' && <CornerUpLeft className="w-3 h-3" />}
+                                    <span className="truncate">{btn.text}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        <div className="pt-3 text-[10px] text-center text-neutral-500 dark:text-neutral-400">
+                          Exact media &amp; values shown above will be delivered on WhatsApp
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Delivery Readiness Summary */}
+                    {selectedTemplate && (
+                      <div className="text-[11px] text-neutral-600 dark:text-neutral-400 space-y-1 pt-1">
+                        <div className="flex items-center justify-between">
+                          <span>Template</span>
+                          <span className="font-mono font-semibold text-neutral-900 dark:text-neutral-200 truncate max-w-[165px]">
+                            {selectedTemplate.name}
+                          </span>
+                        </div>
+                        {needsHeaderMedia && (
+                          <div className="flex items-center justify-between">
+                            <span>Header {effectiveHeaderFormat}</span>
+                            <span
+                              className={`font-semibold ${
+                                formHeaderMediaId || formHeaderMediaUrl
+                                  ? 'text-emerald-600 dark:text-emerald-400'
+                                  : 'text-amber-600 dark:text-amber-400'
+                              }`}
+                            >
+                              {formHeaderMediaId || formHeaderMediaUrl ? 'Attached' : 'Not set'}
+                            </span>
+                          </div>
+                        )}
+                        <div className="flex items-center justify-between">
+                          <span>Variables Set</span>
+                          <span className="font-mono tabular-nums font-semibold text-neutral-900 dark:text-neutral-200">
+                            {
+                              detectedVars.filter((v) =>
+                                Boolean(formVariableMappings[v.key]?.value?.trim())
+                              ).length
+                            }
+                            /{detectedVars.length}
+                          </span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
-              )}
-
-              {/* Active toggle */}
-              <div className="pt-2 border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
-                <div>
-                  <p className="font-semibold text-neutral-800 dark:text-neutral-200">
-                    Trigger Status
-                  </p>
-                  <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                    Paused triggers reject incoming Voice AI requests until re-enabled.
-                  </p>
-                </div>
-                <label className="inline-flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={formEnabled}
-                    onChange={(e) => setFormEnabled(e.target.checked)}
-                    className="rounded text-emerald-600 w-4 h-4"
-                  />
-                  <span className="font-semibold text-neutral-800 dark:text-neutral-200">
-                    {formEnabled ? 'Active' : 'Paused'}
-                  </span>
-                </label>
               </div>
-            </form>
 
-            <div className="px-6 py-3.5 border-t border-neutral-200 dark:border-neutral-800 bg-neutral-50/70 dark:bg-neutral-950/60 flex items-center justify-end gap-2.5 shrink-0">
-              <button
-                type="button"
-                onClick={() => setIsTriggerModalOpen(false)}
-                className="px-4 py-2 rounded-lg border border-neutral-300 dark:border-neutral-700 text-xs font-semibold text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleSaveTrigger}
-                disabled={savingTrigger}
-                className="inline-flex items-center gap-1.5 px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold cursor-pointer disabled:opacity-60"
-              >
-                {savingTrigger ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <Save className="w-3.5 h-3.5" />
-                )}
-                <span>{editingTriggerId ? 'Save Trigger' : 'Create Trigger'}</span>
-              </button>
+              <div className="px-6 py-3.5 border-t border-neutral-200 dark:border-neutral-800 bg-neutral-50/70 dark:bg-neutral-950/60 flex items-center justify-end gap-2.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setIsTriggerModalOpen(false)}
+                  className="px-4 py-2 rounded-lg border border-neutral-300 dark:border-neutral-700 text-xs font-semibold text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  form="voice-ai-trigger-form"
+                  disabled={savingTrigger || uploadingMedia}
+                  className="inline-flex items-center gap-1.5 px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold cursor-pointer disabled:opacity-60"
+                >
+                  {savingTrigger ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Save className="w-3.5 h-3.5" />
+                  )}
+                  <span>{editingTriggerId ? 'Save Trigger' : 'Create Trigger'}</span>
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* DELETE TRIGGER CONFIRM MODAL */}
       {deletingTrigger && (
