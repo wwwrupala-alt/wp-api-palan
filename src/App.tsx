@@ -23,6 +23,7 @@ import { AdminPage } from './pages/AdminPage.tsx';
 import { MasterAdminPage } from './pages/MasterAdminPage.tsx';
 import { TenantUsersPage } from './pages/TenantUsersPage.tsx';
 import { LegalPage } from './pages/LegalPage.tsx';
+import { FaqGuidePage } from './pages/FaqGuidePage.tsx';
 import { WalletPage } from './pages/WalletPage.tsx';
 import { CrmLeadsPage } from './pages/CrmLeadsPage.tsx';
 import { VoiceAiApiPage } from './pages/VoiceAiApiPage.tsx';
@@ -47,15 +48,16 @@ const AppContent: React.FC = () => {
     signOut,
   } = useAuth();
 
-  const getInitialLegalDoc = (): 'privacy' | 'terms' | null => {
+  const getInitialLegalDoc = (): 'privacy' | 'terms' | 'faq' | null => {
     const path = window.location.pathname.toLowerCase();
     if (path.includes('privacy')) return 'privacy';
     if (path.includes('term')) return 'terms';
+    if (path.includes('faq') || path === '/guide' || path === '/help') return 'faq';
     if (path === '/legal') return 'privacy';
     return null;
   };
 
-  const [legalDoc, setLegalDoc] = useState<'privacy' | 'terms' | null>(getInitialLegalDoc);
+  const [legalDoc, setLegalDoc] = useState<'privacy' | 'terms' | 'faq' | null>(getInitialLegalDoc);
 
   React.useEffect(() => {
     const onPopState = () => {
@@ -126,6 +128,21 @@ const AppContent: React.FC = () => {
     }
   }, [currentTab]);
 
+  if (legalDoc === 'faq') {
+    return (
+      <FaqGuidePage
+        onBack={() => {
+          setLegalDoc(null);
+          window.history.pushState({}, '', '/');
+        }}
+        onOpenLegal={(doc) => {
+          setLegalDoc(doc);
+          window.history.pushState({}, '', doc === 'privacy' ? '/privacy-policy' : '/terms-of-service');
+        }}
+      />
+    );
+  }
+
   if (legalDoc) {
     return (
       <LegalPage
@@ -154,7 +171,9 @@ const AppContent: React.FC = () => {
       <LoginPage
         onOpenLegal={(doc) => {
           setLegalDoc(doc);
-          window.history.pushState({}, '', doc === 'privacy' ? '/privacy-policy' : '/terms-of-service');
+          const nextPath =
+            doc === 'privacy' ? '/privacy-policy' : doc === 'terms' ? '/terms-of-service' : '/faq';
+          window.history.pushState({}, '', nextPath);
         }}
       />
     );

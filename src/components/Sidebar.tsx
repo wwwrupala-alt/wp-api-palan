@@ -442,9 +442,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
               }}
               className="hover:text-emerald-600 dark:hover:text-emerald-400 underline"
             >
-              Privacy Policy
+              Privacy
             </a>
-            <span>•</span>
+            <span>&bull;</span>
+            <a
+              href="/faq"
+              onClick={(e) => {
+                e.preventDefault();
+                window.history.pushState({}, '', '/faq');
+                window.dispatchEvent(new PopStateEvent('popstate'));
+              }}
+              className="hover:text-emerald-600 dark:hover:text-emerald-400 font-semibold text-neutral-600 dark:text-neutral-300 underline"
+            >
+              FAQ &amp; Guide
+            </a>
+            <span>&bull;</span>
             <a
               href="/terms-of-service"
               onClick={(e) => {
@@ -454,7 +466,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               }}
               className="hover:text-emerald-600 dark:hover:text-emerald-400 underline"
             >
-              Terms of Service
+              Terms
             </a>
           </div>
         </div>

@@ -18,6 +18,7 @@ import {
   Shield,
   FileText,
   Globe,
+  HelpCircle,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhiteLabel } from '../context/WhiteLabelContext.tsx';
@@ -27,18 +28,20 @@ import { PWAInstallButton } from './PWAInstallButton.tsx';
 import { LoginVectorBackground } from './LoginVectorBackground.tsx';
 
 interface LoginPageProps {
-  onOpenLegal?: (doc: 'privacy' | 'terms') => void;
+  onOpenLegal?: (doc: 'privacy' | 'terms' | 'faq') => void;
 }
 
 export const LoginPage: React.FC<LoginPageProps> = ({ onOpenLegal }) => {
   const { signInWithCredentials, dbConnected } = useAuth();
   const { branding, isPreviewMode, activeDomain, resetPreview } = useWhiteLabel();
 
-  const handleOpenLegal = (doc: 'privacy' | 'terms') => {
+  const handleOpenLegal = (doc: 'privacy' | 'terms' | 'faq') => {
     if (onOpenLegal) {
       onOpenLegal(doc);
     } else {
-      window.history.pushState({}, '', doc === 'privacy' ? '/privacy-policy' : '/terms-of-service');
+      const nextPath =
+        doc === 'privacy' ? '/privacy-policy' : doc === 'terms' ? '/terms-of-service' : '/faq';
+      window.history.pushState({}, '', nextPath);
       window.dispatchEvent(new PopStateEvent('popstate'));
     }
   };
@@ -525,22 +528,32 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onOpenLegal }) => {
             </button>
           </div>
 
-          {/* Public Legal Compliance Links (No Login Required) */}
-          <div className="pt-3 border-t border-neutral-100 dark:border-neutral-800/70 flex items-center justify-center space-x-3 text-xs text-neutral-500 dark:text-neutral-400">
+          {/* Public Legal Compliance & FAQ Guide Links (No Login Required) */}
+          <div className="pt-3 border-t border-neutral-100 dark:border-neutral-800/70 flex flex-wrap items-center justify-center gap-x-2.5 gap-y-1.5 text-xs text-neutral-500 dark:text-neutral-400">
             <button
               type="button"
               onClick={() => handleOpenLegal('privacy')}
-              className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors flex items-center space-x-1 cursor-pointer font-medium hover:underline underline-offset-4"
+              className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors inline-flex items-center space-x-1 cursor-pointer font-medium hover:underline underline-offset-4 whitespace-nowrap"
               title="View Public Privacy Policy"
             >
               <Shield className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
               <span>Privacy Policy</span>
             </button>
-            <span className="text-neutral-300 dark:text-neutral-700">•</span>
+            <span className="text-neutral-300 dark:text-neutral-700">&bull;</span>
+            <button
+              type="button"
+              onClick={() => handleOpenLegal('faq')}
+              className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors inline-flex items-center space-x-1 cursor-pointer font-semibold text-neutral-700 dark:text-neutral-200 hover:underline underline-offset-4 whitespace-nowrap"
+              title="View Platform Guidelines, Limits & FAQ"
+            >
+              <HelpCircle className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+              <span>FAQ &amp; Guide</span>
+            </button>
+            <span className="text-neutral-300 dark:text-neutral-700">&bull;</span>
             <button
               type="button"
               onClick={() => handleOpenLegal('terms')}
-              className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors flex items-center space-x-1 cursor-pointer font-medium hover:underline underline-offset-4"
+              className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors inline-flex items-center space-x-1 cursor-pointer font-medium hover:underline underline-offset-4 whitespace-nowrap"
               title="View Public Terms of Service"
             >
               <FileText className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
@@ -557,13 +570,21 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onOpenLegal }) => {
           </div>
 
           <div className="flex items-center justify-center flex-wrap gap-x-2 gap-y-1 text-[11px] text-neutral-400 dark:text-neutral-500">
-            <span>Meta Compliance Public URLs:</span>
+            <span>Public Resources:</span>
             <button
               type="button"
               onClick={() => handleOpenLegal('privacy')}
               className="text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer font-mono"
             >
               /privacy-policy
+            </button>
+            <span>&bull;</span>
+            <button
+              type="button"
+              onClick={() => handleOpenLegal('faq')}
+              className="text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer font-mono"
+            >
+              /faq
             </button>
             <span>&bull;</span>
             <button
