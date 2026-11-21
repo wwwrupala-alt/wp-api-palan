@@ -32,6 +32,11 @@ import {
   Phone,
   CornerUpLeft,
   BadgeCheck,
+  Calendar,
+  ChevronLeft,
+  ChevronRight,
+  Wallet,
+  RotateCcw,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useWhatsAppAccounts } from '../context/WhatsAppAccountsContext.tsx';
@@ -93,11 +98,46 @@ interface ExternalApiLog {
   caption?: string;
   triggerKey?: string;
   templateName?: string;
+  templateCategory?: string;
+  walletCost?: number;
+  walletBalanceAfter?: number;
   source: string;
   status: 'sent' | 'failed';
   messageId?: string | null;
   error?: string | null;
   timestamp: string;
+}
+
+type LogCategoryKey = 'UTILITY' | 'MARKETING' | 'AUTHENTICATION' | 'SERVICE';
+
+interface EnrichedExternalApiLog extends ExternalApiLog {
+  resolvedCategory: LogCategoryKey;
+}
+
+const LOGS_PER_PAGE = 10;
+
+function toLocalDateInputValue(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function normalizeLogCategory(raw?: string | null): LogCategoryKey | null {
+  if (!raw) return null;
+  const up = String(raw).trim().toUpperCase();
+  if (up.includes('MARKET')) return 'MARKETING';
+  if (up.includes('AUTH')) return 'AUTHENTICATION';
+  if (up.includes('SERV')) return 'SERVICE';
+  if (up.includes('UTIL')) return 'UTILITY';
+  return null;
+}
+
+function getCategoryTextClass(cat: LogCategoryKey): string {
+  if (cat === 'MARKETING') return 'text-amber-700 dark:text-amber-400';
+  if (cat === 'AUTHENTICATION') return 'text-indigo-700 dark:text-indigo-400';
+  if (cat === 'SERVICE') return 'text-neutral-600 dark:text-neutral-400';
+  return 'text-sky-700 dark:text-sky-400';
 }
 
 function normalizeTriggerSlug(raw: string): string {
@@ -302,9 +342,22 @@ export const VoiceAiApiPage: React.FC = () => {
     body: any;
   } | null>(null);
 
-  // Logs filter state
+  // Logs filter, pagination & reset state
   const [logSearch, setLogSearch] = useState('');
   const [logStatusFilter, setLogStatusFilter] = useState<'all' | 'sent' | 'failed'>('all');
+  const [logCategoryFilter, setLogCategoryFilter] = useState<'all' | LogCategoryKey>('all');
+  const [logTriggerFilter, setLogTriggerFilter] = useState<string>('all');
+  const [logDatePreset, setLogDatePreset] = useState<'all' | 'today' | '7d' | '30d' | 'custom'>('all');
+  const [logDateFrom, setLogDateFrom] = useState('');
+  const [logDateTo, setLogDateTo] = useState('');
+  const [logPage, setLogPage] = useState(1);
+  const [confirmResetLogsOpen, setConfirmResetLogsOpen] = useState(false);
+  const [resettingLogs, setResettingLogs] = useState(false);
+  const [walletInfo, setWalletInfo] = useState<{
+    balance: number;
+    totalSpent: number;
+    currency: string;
+  } | null>(null);
 
   const copyText = (text: string, id: string, label = 'Copied') => {
     navigator.clipboard.writeText(text).then(() => {
@@ -314,7 +367,7 @@ export const VoiceAiApiPage: React.FC = () => {
     });
   };
 
-  // Load config, triggers, and logs
+  // Load config, triggers, wallet, and logs
   const loadConfig = async () => {
     if (!orgId) return;
     setLoadingConfig(true);
@@ -354,6 +407,26 @@ export const VoiceAiApiPage: React.FC = () => {
     }
   };
 
+  const loadWallet = async () => {
+    if (!orgId) return;
+    try {
+      const res = await fetch(
+        `/api/wallet?organizationId=${encodeURIComponent(orgId)}`,
+        { headers: { 'x-organization-id': orgId } }
+      );
+      const data = await res.json();
+      if (res.ok && data.success && data.account) {
+        setWalletInfo({
+          balance: Number(data.account.balance || 0),
+          totalSpent: Number(data.account.totalSpent || 0),
+          currency: data.account.currency || 'INR',
+        });
+      }
+    } catch {
+      // silent
+    }
+  };
+
   const loadLogs = async () => {
     if (!orgId) return;
     setLoadingLogs(true);
@@ -373,10 +446,68 @@ export const VoiceAiApiPage: React.FC = () => {
     }
   };
 
+  const handleResetLogs = async () => {
+    if (!orgId) return;
+    setResettingLogs(true);
+    try {
+      const res = await fetch(
+        `/api/external-api/logs?organizationId=${encodeURIComponent(orgId)}`,
+        {
+          method: 'DELETE',
+          headers: { 'x-organization-id': orgId },
+        }
+      );
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        setLogs([]);
+        setLogPage(1);
+        setConfirmResetLogsOpen(false);
+        toast.showSuccess(
+          'Delivery Logs Cleared',
+          `${data.deletedCount ?? 0} log entries removed.`
+        );
+      } else {
+        toast.showError('Reset Failed', data.error || 'Could not clear delivery logs.');
+      }
+    } catch (err: any) {
+      toast.showError('Reset Failed', err?.message || 'Could not clear delivery logs.');
+    } finally {
+      setResettingLogs(false);
+    }
+  };
+
+  const applyDatePreset = (preset: 'all' | 'today' | '7d' | '30d') => {
+    setLogDatePreset(preset);
+    if (preset === 'all') {
+      setLogDateFrom('');
+      setLogDateTo('');
+      return;
+    }
+    const now = new Date();
+    const toStr = toLocalDateInputValue(now);
+    const fromDate = new Date(now);
+    if (preset === '7d') fromDate.setDate(now.getDate() - 6);
+    if (preset === '30d') fromDate.setDate(now.getDate() - 29);
+    setLogDateFrom(toLocalDateInputValue(fromDate));
+    setLogDateTo(toStr);
+  };
+
+  const clearAllLogFilters = () => {
+    setLogSearch('');
+    setLogStatusFilter('all');
+    setLogCategoryFilter('all');
+    setLogTriggerFilter('all');
+    setLogDatePreset('all');
+    setLogDateFrom('');
+    setLogDateTo('');
+    setLogPage(1);
+  };
+
   useEffect(() => {
     loadConfig();
     loadTriggers();
     loadLogs();
+    loadWallet();
   }, [orgId]);
 
   useEffect(() => {
@@ -845,11 +976,15 @@ export const VoiceAiApiPage: React.FC = () => {
       const data = await res.json();
       setTestResponse({ status: res.status, body: data });
       if (res.ok && data.ok) {
-        toast.showSuccess('WhatsApp Sent!', `Message ID: ${data.messageId}`);
+        const costNote =
+          typeof data.wallet?.deducted === 'number'
+            ? ` · Wallet -₹${Number(data.wallet.deducted).toFixed(2)}`
+            : '';
+        toast.showSuccess('WhatsApp Sent!', `Message ID: ${data.messageId}${costNote}`);
       } else {
         toast.showError('Send Failed', data.error || 'Meta API rejected test message.');
       }
-      await loadLogs();
+      await Promise.all([loadLogs(), loadWallet()]);
     } catch (err: any) {
       setTestResponse({ status: 500, body: { ok: false, error: err?.message || 'Request failed' } });
       toast.showError('Request Failed', err?.message || 'Could not reach endpoint.');
@@ -870,21 +1005,134 @@ export const VoiceAiApiPage: React.FC = () => {
     );
   }, [triggers, triggerSearch]);
 
+  const enrichedLogs = useMemo<EnrichedExternalApiLog[]>(() => {
+    const templateCatMap = new Map<string, LogCategoryKey>();
+    templates.forEach((tpl) => {
+      const norm = normalizeLogCategory(tpl.category);
+      if (tpl.name && norm) {
+        templateCatMap.set(tpl.name.toLowerCase(), norm);
+      }
+    });
+    const triggerCatMap = new Map<string, LogCategoryKey>();
+    triggers.forEach((tr) => {
+      const norm = normalizeLogCategory(tr.templateCategory);
+      if (tr.triggerKey && norm) {
+        triggerCatMap.set(tr.triggerKey.toLowerCase(), norm);
+      }
+    });
+
+    return logs.map((l) => {
+      const explicit = normalizeLogCategory(l.templateCategory);
+      const fromTpl = l.templateName
+        ? templateCatMap.get(l.templateName.toLowerCase()) || null
+        : null;
+      const fromTrig = l.triggerKey
+        ? triggerCatMap.get(l.triggerKey.toLowerCase()) || null
+        : null;
+      const resolvedCategory: LogCategoryKey =
+        explicit || fromTpl || fromTrig || (l.templateName || l.triggerKey ? 'UTILITY' : 'SERVICE');
+      return { ...l, resolvedCategory };
+    });
+  }, [logs, templates, triggers]);
+
+  const availableLogTriggers = useMemo(() => {
+    const keys = new Set<string>();
+    triggers.forEach((t) => {
+      if (t.triggerKey) keys.add(t.triggerKey);
+    });
+    logs.forEach((l) => {
+      if (l.triggerKey) keys.add(l.triggerKey);
+    });
+    return Array.from(keys).sort((a, b) => a.localeCompare(b));
+  }, [triggers, logs]);
+
   const filteredLogs = useMemo(() => {
     const q = logSearch.trim().toLowerCase();
-    return logs.filter((l) => {
+    const fromMs = logDateFrom ? new Date(`${logDateFrom}T00:00:00`).getTime() : null;
+    const toMs = logDateTo ? new Date(`${logDateTo}T23:59:59.999`).getTime() : null;
+
+    return enrichedLogs.filter((l) => {
       if (logStatusFilter !== 'all' && l.status !== logStatusFilter) return false;
+      if (logCategoryFilter !== 'all' && l.resolvedCategory !== logCategoryFilter) return false;
+      if (logTriggerFilter !== 'all' && (l.triggerKey || '') !== logTriggerFilter) return false;
+
+      if (fromMs !== null || toMs !== null) {
+        const ts = new Date(l.timestamp || 0).getTime();
+        if (isNaN(ts)) return false;
+        if (fromMs !== null && ts < fromMs) return false;
+        if (toMs !== null && ts > toMs) return false;
+      }
+
       if (!q) return true;
       return (
         (l.to || '').toLowerCase().includes(q) ||
         (l.name || '').toLowerCase().includes(q) ||
         (l.triggerKey || '').toLowerCase().includes(q) ||
         (l.templateName || '').toLowerCase().includes(q) ||
+        l.resolvedCategory.toLowerCase().includes(q) ||
         (l.source || '').toLowerCase().includes(q) ||
         (l.message || '').toLowerCase().includes(q)
       );
     });
-  }, [logs, logSearch, logStatusFilter]);
+  }, [
+    enrichedLogs,
+    logSearch,
+    logStatusFilter,
+    logCategoryFilter,
+    logTriggerFilter,
+    logDateFrom,
+    logDateTo,
+  ]);
+
+  const hasActiveLogFilters =
+    logStatusFilter !== 'all' ||
+    logCategoryFilter !== 'all' ||
+    logTriggerFilter !== 'all' ||
+    Boolean(logDateFrom) ||
+    Boolean(logDateTo) ||
+    Boolean(logSearch.trim());
+
+  const totalLogPages = Math.max(1, Math.ceil(filteredLogs.length / LOGS_PER_PAGE));
+
+  useEffect(() => {
+    setLogPage(1);
+  }, [logSearch, logStatusFilter, logCategoryFilter, logTriggerFilter, logDateFrom, logDateTo]);
+
+  useEffect(() => {
+    if (logPage > totalLogPages) {
+      setLogPage(totalLogPages);
+    }
+  }, [logPage, totalLogPages]);
+
+  const paginatedLogs = useMemo(() => {
+    const start = (logPage - 1) * LOGS_PER_PAGE;
+    return filteredLogs.slice(start, start + LOGS_PER_PAGE);
+  }, [filteredLogs, logPage]);
+
+  const logStats = useMemo(() => {
+    let sent = 0;
+    let failed = 0;
+    let utility = 0;
+    let marketing = 0;
+    let walletSpend = 0;
+    for (const l of filteredLogs) {
+      if (l.status === 'sent') sent++;
+      else failed++;
+      if (l.resolvedCategory === 'UTILITY') utility++;
+      else if (l.resolvedCategory === 'MARKETING') marketing++;
+      if (typeof l.walletCost === 'number' && !isNaN(l.walletCost)) {
+        walletSpend += l.walletCost;
+      }
+    }
+    return {
+      total: filteredLogs.length,
+      sent,
+      failed,
+      utility,
+      marketing,
+      walletSpend,
+    };
+  }, [filteredLogs]);
 
   const activeTestTrigger = useMemo(
     () => triggers.find((t) => t.triggerKey === testTriggerKey) || null,
@@ -975,6 +1223,15 @@ Body:
             <span className={config?.enabled !== false ? 'text-emerald-600 dark:text-emerald-400 font-semibold' : 'text-rose-600 dark:text-rose-400 font-semibold'}>
               API {config?.enabled !== false ? 'Enabled' : 'Disabled'}
             </span>
+            {walletInfo && (
+              <>
+                <span className="text-neutral-300 dark:text-neutral-700">&middot;</span>
+                <span className="inline-flex items-center gap-1 font-mono tabular-nums text-neutral-700 dark:text-neutral-300 font-semibold">
+                  <Wallet className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                  <span>Wallet ₹{walletInfo.balance.toFixed(2)}</span>
+                </span>
+              </>
+            )}
           </div>
         </div>
 
@@ -1742,17 +1999,58 @@ Body:
       {/* VIEW 4: ACTIVITY LOGS */}
       {activeView === 'logs' && (
         <section className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl overflow-hidden">
-          <div className="px-5 py-4 border-b border-neutral-200 dark:border-neutral-800 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+          {/* Header Row */}
+          <div className="px-5 py-4 border-b border-neutral-200 dark:border-neutral-800 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
               <h3 className="text-sm font-semibold text-neutral-900 dark:text-white">
                 External API Delivery Logs
               </h3>
               <p className="text-xs text-neutral-500 dark:text-neutral-400">
-                Latest 100 WhatsApp messages triggered via Voice AI webhooks.
+                Real-time Voice AI WhatsApp deliveries (10 entries per page) automatically billed to your Prepaid Wallet.
               </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
+              {walletInfo && (
+                <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 text-xs">
+                  <Wallet className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                  <span className="text-neutral-500 dark:text-neutral-400">Balance:</span>
+                  <span className="font-mono tabular-nums font-semibold text-neutral-900 dark:text-white">
+                    ₹{walletInfo.balance.toFixed(2)}
+                  </span>
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  loadLogs();
+                  loadWallet();
+                }}
+                disabled={loadingLogs}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-xs font-semibold text-neutral-700 dark:text-neutral-300 cursor-pointer disabled:opacity-50"
+                title="Refresh logs & wallet balance"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${loadingLogs ? 'animate-spin' : ''}`} />
+                <span>Refresh</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmResetLogsOpen(true)}
+                disabled={logs.length === 0 || resettingLogs}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-rose-200 dark:border-rose-900/60 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-xs font-semibold text-rose-600 dark:text-rose-400 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Reset all delivery logs"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Reset Logs</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Top Filter Bar & Date Range Filter */}
+          <div className="px-5 py-3.5 border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-950/30 space-y-3">
+            {/* Row 1: Status, Category, Trigger, Search */}
+            <div className="flex flex-wrap items-center gap-2.5">
+              {/* Status Segmented Control */}
               <div className="inline-flex items-center gap-1 p-1 rounded-lg bg-neutral-100 dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800">
                 {(['all', 'sent', 'failed'] as const).map((st) => (
                   <button
@@ -1762,38 +2060,156 @@ Body:
                     className={`px-2.5 py-1 rounded-md text-[11px] font-semibold capitalize cursor-pointer ${
                       logStatusFilter === st
                         ? 'bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white shadow-2xs'
-                        : 'text-neutral-500 dark:text-neutral-400'
+                        : 'text-neutral-500 dark:text-neutral-400 hover:text-neutral-800 dark:hover:text-neutral-200'
                     }`}
                   >
                     {st}
                   </button>
                 ))}
               </div>
-              <div className="relative w-48 sm:w-56">
+
+              {/* Category Filter */}
+              <select
+                value={logCategoryFilter}
+                onChange={(e) => setLogCategoryFilter(e.target.value as 'all' | LogCategoryKey)}
+                aria-label="Filter by category"
+                className="px-3 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 text-xs font-medium text-neutral-800 dark:text-neutral-200 cursor-pointer"
+              >
+                <option value="all">All Categories</option>
+                <option value="UTILITY">Utility</option>
+                <option value="MARKETING">Marketing</option>
+                <option value="AUTHENTICATION">Authentication</option>
+                <option value="SERVICE">Service (Direct)</option>
+              </select>
+
+              {/* Trigger Filter */}
+              <select
+                value={logTriggerFilter}
+                onChange={(e) => setLogTriggerFilter(e.target.value)}
+                aria-label="Filter by trigger"
+                className="px-3 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 text-xs font-medium text-neutral-800 dark:text-neutral-200 max-w-[200px] cursor-pointer"
+              >
+                <option value="all">All Triggers</option>
+                {availableLogTriggers.map((key) => (
+                  <option key={key} value={key}>
+                    {key}
+                  </option>
+                ))}
+              </select>
+
+              {/* Search Input */}
+              <div className="relative flex-1 min-w-[200px]">
                 <Search className="w-3.5 h-3.5 text-neutral-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
                   value={logSearch}
                   onChange={(e) => setLogSearch(e.target.value)}
-                  placeholder="Search phone or trigger..."
+                  placeholder="Search phone, customer, trigger, template..."
                   className="w-full pl-8 pr-3 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 text-xs text-neutral-900 dark:text-white"
                 />
               </div>
-              <button
-                type="button"
-                onClick={loadLogs}
-                disabled={loadingLogs}
-                className="p-2 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-600 dark:text-neutral-300 cursor-pointer"
-                title="Refresh logs"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${loadingLogs ? 'animate-spin' : ''}`} />
-              </button>
+            </div>
+
+            {/* Row 2: Date Range Filter + Presets + Inline Summary */}
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-1 border-t border-neutral-200/70 dark:border-neutral-800/70">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-neutral-500 dark:text-neutral-400">
+                  <Calendar className="w-3.5 h-3.5" />
+                  <span>Date Range</span>
+                </span>
+
+                <div className="inline-flex items-center gap-1 p-0.5 rounded-lg bg-neutral-100 dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800">
+                  {(
+                    [
+                      { id: 'all', label: 'All Time' },
+                      { id: 'today', label: 'Today' },
+                      { id: '7d', label: '7D' },
+                      { id: '30d', label: '30D' },
+                    ] as const
+                  ).map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => applyDatePreset(p.id)}
+                      className={`px-2 py-1 rounded-md text-[11px] font-semibold cursor-pointer ${
+                        logDatePreset === p.id
+                          ? 'bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white shadow-2xs'
+                          : 'text-neutral-500 dark:text-neutral-400 hover:text-neutral-800 dark:hover:text-neutral-200'
+                      }`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-1.5 text-xs">
+                  <input
+                    type="date"
+                    value={logDateFrom}
+                    onChange={(e) => {
+                      setLogDateFrom(e.target.value);
+                      setLogDatePreset('custom');
+                    }}
+                    aria-label="From date"
+                    className="px-2.5 py-1 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 text-[11px] font-mono text-neutral-800 dark:text-neutral-200"
+                  />
+                  <span className="text-[11px] text-neutral-400">to</span>
+                  <input
+                    type="date"
+                    value={logDateTo}
+                    onChange={(e) => {
+                      setLogDateTo(e.target.value);
+                      setLogDatePreset('custom');
+                    }}
+                    aria-label="To date"
+                    className="px-2.5 py-1 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 text-[11px] font-mono text-neutral-800 dark:text-neutral-200"
+                  />
+                </div>
+
+                {hasActiveLogFilters && (
+                  <button
+                    type="button"
+                    onClick={clearAllLogFilters}
+                    className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-neutral-600 dark:text-neutral-300 hover:text-rose-600 dark:hover:text-rose-400 cursor-pointer"
+                  >
+                    <X className="w-3 h-3" />
+                    <span>Clear Filters</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Compact Tabular Summary Strip */}
+              <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] font-mono tabular-nums text-neutral-600 dark:text-neutral-400">
+                <span>
+                  <strong className="text-neutral-900 dark:text-white">{logStats.total}</strong> total
+                </span>
+                <span className="text-neutral-300 dark:text-neutral-700">&middot;</span>
+                <span className="text-emerald-700 dark:text-emerald-400">
+                  <strong>{logStats.sent}</strong> sent
+                </span>
+                <span className="text-neutral-300 dark:text-neutral-700">&middot;</span>
+                <span className="text-rose-600 dark:text-rose-400">
+                  <strong>{logStats.failed}</strong> failed
+                </span>
+                <span className="text-neutral-300 dark:text-neutral-700">&middot;</span>
+                <span className="text-sky-700 dark:text-sky-400">
+                  <strong>{logStats.utility}</strong> Utility
+                </span>
+                <span className="text-neutral-300 dark:text-neutral-700">&middot;</span>
+                <span className="text-amber-700 dark:text-amber-400">
+                  <strong>{logStats.marketing}</strong> Marketing
+                </span>
+                <span className="text-neutral-300 dark:text-neutral-700">&middot;</span>
+                <span className="text-neutral-900 dark:text-white font-semibold">
+                  Spend ₹{logStats.walletSpend.toFixed(2)}
+                </span>
+              </div>
             </div>
           </div>
 
           {loadingLogs ? (
             <div className="p-6 space-y-3">
-              {[1, 2, 3, 4].map((i) => (
+              {[1, 2, 3, 4, 5].map((i) => (
                 <div
                   key={i}
                   className="h-10 rounded-lg bg-neutral-100 dark:bg-neutral-800/60 animate-pulse"
@@ -1803,92 +2219,178 @@ Body:
           ) : filteredLogs.length === 0 ? (
             <div className="px-6 py-14 text-center space-y-2">
               <p className="text-sm font-semibold text-neutral-900 dark:text-white">
-                No API delivery logs yet
+                {logs.length === 0 ? 'No API delivery logs yet' : 'No logs match your active filters'}
               </p>
               <p className="text-xs text-neutral-500 dark:text-neutral-400">
-                When your Voice AI agent triggers a template or you run a Live Test, delivery records will appear here.
+                {logs.length === 0
+                  ? 'When your Voice AI agent triggers a template or you run a Live Test, delivery records and wallet deductions will appear here.'
+                  : 'Try adjusting the category, trigger, status, or date range filter above.'}
               </p>
+              {hasActiveLogFilters && (
+                <button
+                  type="button"
+                  onClick={clearAllLogFilters}
+                  className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 text-xs font-semibold text-neutral-700 dark:text-neutral-200 hover:bg-neutral-50 dark:hover:bg-neutral-800 cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>Reset Filters</span>
+                </button>
+              )}
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50/70 dark:bg-neutral-950/40 text-[11px] font-semibold text-neutral-500 dark:text-neutral-400">
-                    <th className="py-3 px-5">Time</th>
-                    <th className="py-3 px-4">Recipient</th>
-                    <th className="py-3 px-4">Trigger / Template</th>
-                    <th className="py-3 px-4">Source</th>
-                    <th className="py-3 px-4">Status</th>
-                    <th className="py-3 px-5">Message ID / Error</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-neutral-200/80 dark:divide-neutral-800 text-xs">
-                  {filteredLogs.map((log) => (
-                    <tr
-                      key={log.id}
-                      className="hover:bg-neutral-50/70 dark:hover:bg-neutral-800/40 transition-colors"
-                    >
-                      <td className="py-3 px-5 font-mono tabular-nums text-[11px] text-neutral-500 dark:text-neutral-400 whitespace-nowrap">
-                        {formatShortDate(log.timestamp)}
-                      </td>
-                      <td className="py-3 px-4">
-                        <div className="font-mono tabular-nums text-neutral-900 dark:text-white">
-                          {log.to}
-                        </div>
-                        {log.name && (
-                          <div className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                            {log.name}
-                          </div>
-                        )}
-                      </td>
-                      <td className="py-3 px-4">
-                        <div className="font-mono text-neutral-900 dark:text-neutral-100">
-                          {log.triggerKey || log.templateName || 'Direct Message'}
-                        </div>
-                        {log.templateName && log.triggerKey && (
-                          <div className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                            {log.templateName}
-                          </div>
-                        )}
-                      </td>
-                      <td className="py-3 px-4 font-mono text-[11px] text-neutral-600 dark:text-neutral-400">
-                        {log.source || 'external-api'}
-                      </td>
-                      <td className="py-3 px-4">
-                        {log.status === 'sent' ? (
-                          <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400 font-semibold">
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span>Sent</span>
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 text-rose-700 dark:text-rose-400 font-semibold">
-                            <AlertCircle className="w-3.5 h-3.5" />
-                            <span>Failed</span>
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-3 px-5 max-w-[280px]">
-                        {log.status === 'sent' ? (
-                          <span
-                            className="font-mono text-[11px] text-neutral-500 dark:text-neutral-400 block truncate"
-                            title={log.messageId || ''}
-                          >
-                            {log.messageId || '—'}
-                          </span>
-                        ) : (
-                          <span
-                            className="text-[11px] text-rose-600 dark:text-rose-400 block truncate"
-                            title={log.error || ''}
-                          >
-                            {log.error || 'Failed to send'}
-                          </span>
-                        )}
-                      </td>
+            <>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50/70 dark:bg-neutral-950/40 text-[11px] font-semibold text-neutral-500 dark:text-neutral-400">
+                      <th className="py-3 px-5">Time</th>
+                      <th className="py-3 px-4">Recipient</th>
+                      <th className="py-3 px-4">Trigger / Template</th>
+                      <th className="py-3 px-4">Source</th>
+                      <th className="py-3 px-4">Status</th>
+                      <th className="py-3 px-4 text-right">Wallet</th>
+                      <th className="py-3 px-5">Message ID / Error</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-200/80 dark:divide-neutral-800 text-xs">
+                    {paginatedLogs.map((log) => (
+                      <tr
+                        key={log.id}
+                        className="hover:bg-neutral-50/70 dark:hover:bg-neutral-800/40 transition-colors"
+                      >
+                        <td className="py-3 px-5 font-mono tabular-nums text-[11px] text-neutral-500 dark:text-neutral-400 whitespace-nowrap">
+                          {formatShortDate(log.timestamp)}
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="font-mono tabular-nums text-neutral-900 dark:text-white">
+                            {log.to}
+                          </div>
+                          {log.name && (
+                            <div className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                              {log.name}
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="font-mono text-neutral-900 dark:text-neutral-100">
+                            {log.triggerKey || log.templateName || 'Direct Message'}
+                          </div>
+                          <div className="flex items-center gap-1.5 text-[11px] mt-0.5">
+                            {log.templateName && log.triggerKey && (
+                              <>
+                                <span className="text-neutral-500 dark:text-neutral-400">
+                                  {log.templateName}
+                                </span>
+                                <span className="text-neutral-300 dark:text-neutral-700">&middot;</span>
+                              </>
+                            )}
+                            <span
+                              className={`font-semibold tracking-wide text-[10px] ${getCategoryTextClass(
+                                log.resolvedCategory
+                              )}`}
+                            >
+                              {log.resolvedCategory}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="py-3 px-4 font-mono text-[11px] text-neutral-600 dark:text-neutral-400 whitespace-nowrap">
+                          {log.source || 'external-api'}
+                        </td>
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          {log.status === 'sent' ? (
+                            <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400 font-semibold">
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>Sent</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-rose-700 dark:text-rose-400 font-semibold">
+                              <AlertCircle className="w-3.5 h-3.5" />
+                              <span>Failed</span>
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 text-right font-mono tabular-nums whitespace-nowrap">
+                          {log.status === 'sent' && typeof log.walletCost === 'number' ? (
+                            <span
+                              className="text-[11px] font-semibold text-neutral-800 dark:text-neutral-200"
+                              title={
+                                typeof log.walletBalanceAfter === 'number'
+                                  ? `Balance after: ₹${log.walletBalanceAfter.toFixed(2)}`
+                                  : undefined
+                              }
+                            >
+                              -₹{log.walletCost.toFixed(2)}
+                            </span>
+                          ) : (
+                            <span className="text-[11px] text-neutral-400 dark:text-neutral-600">
+                              —
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3 px-5 max-w-[260px]">
+                          {log.status === 'sent' ? (
+                            <span
+                              className="font-mono text-[11px] text-neutral-500 dark:text-neutral-400 block truncate"
+                              title={log.messageId || ''}
+                            >
+                              {log.messageId || '—'}
+                            </span>
+                          ) : (
+                            <span
+                              className="text-[11px] text-rose-600 dark:text-rose-400 block truncate"
+                              title={log.error || ''}
+                            >
+                              {log.error || 'Failed to send'}
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* 10-Entries-Per-Page Pagination Footer */}
+              <div className="px-5 py-3 border-t border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-950/30 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs">
+                <div className="font-mono tabular-nums text-[11px] text-neutral-500 dark:text-neutral-400">
+                  Showing{' '}
+                  <strong className="text-neutral-800 dark:text-neutral-200">
+                    {(logPage - 1) * LOGS_PER_PAGE + 1}–
+                    {Math.min(logPage * LOGS_PER_PAGE, filteredLogs.length)}
+                  </strong>{' '}
+                  of{' '}
+                  <strong className="text-neutral-800 dark:text-neutral-200">
+                    {filteredLogs.length}
+                  </strong>{' '}
+                  entries (10 per page)
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setLogPage((p) => Math.max(1, p - 1))}
+                    disabled={logPage <= 1}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-[11px] font-semibold text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                    <span>Prev</span>
+                  </button>
+                  <span className="px-2.5 py-1 font-mono tabular-nums text-[11px] text-neutral-600 dark:text-neutral-400">
+                    Page <strong className="text-neutral-900 dark:text-white">{logPage}</strong> of{' '}
+                    {totalLogPages}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setLogPage((p) => Math.min(totalLogPages, p + 1))}
+                    disabled={logPage >= totalLogPages}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-[11px] font-semibold text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <span>Next</span>
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            </>
           )}
         </section>
       )}
@@ -2565,6 +3067,42 @@ Body:
               >
                 {regeneratingKey && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                 <span>Rotate Key</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* RESET DELIVERY LOGS CONFIRM MODAL */}
+      {confirmResetLogsOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center gap-2 text-rose-600 dark:text-rose-400">
+              <RotateCcw className="w-5 h-5 shrink-0" />
+              <h3 className="text-sm font-bold text-neutral-900 dark:text-white">
+                Reset All Delivery Logs?
+              </h3>
+            </div>
+            <p className="text-xs text-neutral-600 dark:text-neutral-400 leading-relaxed">
+              This will permanently clear all <strong className="text-neutral-900 dark:text-white">{logs.length}</strong> External API delivery log entries for this workspace. Your Prepaid Wallet balance, wallet transaction ledger, and configured triggers will remain untouched.
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setConfirmResetLogsOpen(false)}
+                disabled={resettingLogs}
+                className="px-4 py-2 rounded-lg border border-neutral-300 dark:border-neutral-700 text-xs font-semibold text-neutral-700 dark:text-neutral-300 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={resettingLogs}
+                onClick={handleResetLogs}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold cursor-pointer disabled:opacity-60"
+              >
+                {resettingLogs && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>Clear All Logs</span>
               </button>
             </div>
           </div>

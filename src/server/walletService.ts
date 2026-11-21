@@ -204,6 +204,7 @@ export async function deductWalletForCampaign(params: {
   count: number;
   campaignId?: string;
   campaignName?: string;
+  description?: string;
 }): Promise<{
   success: boolean;
   deducted: number;
@@ -211,7 +212,7 @@ export async function deductWalletForCampaign(params: {
   newBalance: number;
   isLowBalance: boolean;
 }> {
-  const { organizationId, userId, category, count, campaignId, campaignName } = params;
+  const { organizationId, userId, category, count, campaignId, campaignName, description } = params;
   if (!count || count <= 0) {
     const current = await getWalletAccount(organizationId, userId);
     return {
@@ -263,7 +264,11 @@ export async function deductWalletForCampaign(params: {
     amount: totalDeduction,
     balanceAfter: newBalance,
     category: normalizedCategory as any,
-    description: campaignName ? `Campaign: ${campaignName} (${count} msgs)` : `Outbound ${normalizedCategory} messages (${count} msgs)`,
+    description:
+      description ||
+      (campaignName
+        ? `Campaign: ${campaignName} (${count} msgs)`
+        : `Outbound ${normalizedCategory} messages (${count} msgs)`),
     campaignId: campaignId || undefined,
     campaignName: campaignName || undefined,
     messageCount: count,

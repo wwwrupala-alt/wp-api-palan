@@ -18,6 +18,7 @@ import {
 } from './metaService.ts';
 import { resolveMetaMediaObject } from './metaMediaManager.ts';
 import { formatTemplateComponentsForSending } from './templateUtils.ts';
+import { deductWalletForCampaign } from './walletService.ts';
 
 export interface ExternalApiKeyRecord {
   apiKey: string;
@@ -72,6 +73,9 @@ export interface ExternalApiLogRecord {
   caption?: string;
   triggerKey?: string;
   templateName?: string;
+  templateCategory?: string;
+  walletCost?: number;
+  walletBalanceAfter?: number;
   source: string;
   status: 'sent' | 'failed';
   messageId?: string | null;
@@ -576,7 +580,7 @@ export async function handleGetExternalApiLogs(req: Request, res: Response) {
     const logs: ExternalApiLogRecord[] = snap.docs
       .map((d) => ({ id: d.id, ...(d.data() as any) }))
       .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())
-      .slice(0, 100);
+      .slice(0, 500);
 
     return res.json({
       ok: true,
@@ -584,6 +588,42 @@ export async function handleGetExternalApiLogs(req: Request, res: Response) {
     });
   } catch (err: any) {
     return res.status(500).json({ ok: false, error: err?.message || 'Failed to fetch External API logs.' });
+  }
+}
+
+/**
+ * DELETE /api/external-api/logs
+ * Clears all External API delivery logs for the organization.
+ */
+export async function handleResetExternalApiLogs(req: Request, res: Response) {
+  try {
+    const organizationId = resolveOrgIdFromManagementRequest(req);
+    if (!organizationId) {
+      return res.status(400).json({ ok: false, error: 'organizationId is required' });
+    }
+
+    const colRef = collection(serverDb, `organizations/${organizationId}/externalApiLogs`);
+    const snap = await getDocs(colRef);
+    const docs = snap.docs;
+
+    const CHUNK_SIZE = 25;
+    let deletedCount = 0;
+    for (let i = 0; i < docs.length; i += CHUNK_SIZE) {
+      const batch = docs.slice(i, i + CHUNK_SIZE);
+      await Promise.all(
+        batch.map((d) =>
+          deleteDoc(doc(serverDb, `organizations/${organizationId}/externalApiLogs`, d.id))
+        )
+      );
+      deletedCount += batch.length;
+    }
+
+    return res.json({
+      ok: true,
+      deletedCount,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ ok: false, error: err?.message || 'Failed to reset External API logs.' });
   }
 }
 
@@ -824,20 +864,30 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
     };
 
     let resolvedTemplateName = '';
+    let resolvedCategory: 'MARKETING' | 'UTILITY' | 'AUTHENTICATION' | 'SERVICE' = 'SERVICE';
     let detectedMediaType: 'image' | 'video' | 'document' | 'audio' | 'template' | null = null;
     let usedTextFallbackForMedia = false;
     let displaySummary = '';
 
+    const normalizeTemplateCategory = (rawCat: unknown): 'MARKETING' | 'UTILITY' | 'AUTHENTICATION' | 'SERVICE' => {
+      const up = String(rawCat || '').trim().toUpperCase();
+      if (up.includes('MARKET')) return 'MARKETING';
+      if (up.includes('AUTH')) return 'AUTHENTICATION';
+      if (up.includes('SERV')) return 'SERVICE';
+      return 'UTILITY';
+    };
+
     // 6A. TEMPLATE MODE (Named Trigger OR Direct templateName)
     if (matchedTrigger || directTemplateName) {
       resolvedTemplateName = matchedTrigger?.templateName || directTemplateName;
+      resolvedCategory = normalizeTemplateCategory(matchedTrigger?.templateCategory || 'UTILITY');
       let resolvedLanguage =
         matchedTrigger?.templateLanguage ||
         (typeof requestedTemplateLanguage === 'string' && requestedTemplateLanguage.trim()) ||
         'en_US';
       let templateComponents: any[] = matchedTrigger?.templateComponents || [];
 
-      // Look up live template definition in Firestore so components/language stay accurate
+      // Look up live template definition in Firestore so components/language/category stay accurate
       try {
         const templatesSnap = await getDocs(collection(serverDb, `organizations/${organizationId}/templates`));
         const matchedTplDoc = templatesSnap.docs.find((d) => {
@@ -857,6 +907,9 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
           }
           if (!requestedTemplateLanguage && td.language) {
             resolvedLanguage = td.language;
+          }
+          if (td.category) {
+            resolvedCategory = normalizeTemplateCategory(td.category);
           }
         }
       } catch (tplErr) {
@@ -1044,6 +1097,7 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
               mediaUrl: mediaUrlStr,
               mediaType: detectedMediaType,
               caption: captionStr,
+              templateCategory: resolvedCategory,
               source: sourceStr,
               status: 'failed',
               error: errMsg,
@@ -1203,6 +1257,7 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
         caption: captionStr,
         triggerKey: triggerKeyInput || undefined,
         templateName: resolvedTemplateName || undefined,
+        templateCategory: resolvedCategory,
         source: sourceStr,
         status: 'failed',
         error: errorMsg,
@@ -1245,6 +1300,37 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
       } catch {}
     }
 
+    // 7B. Deduct from Organization Prepaid Wallet based on exact WhatsApp message category
+    let walletCharge: {
+      deducted: number;
+      ratePerMessage: number;
+      newBalance: number;
+      isLowBalance: boolean;
+    } | null = null;
+    try {
+      const voiceWalletDesc = triggerKeyInput
+        ? `Voice AI Trigger: ${triggerKeyInput} → ${phoneNorm.e164}${resolvedTemplateName ? ` (${resolvedTemplateName})` : ''}`
+        : resolvedTemplateName
+        ? `Voice AI Template: ${resolvedTemplateName} → ${phoneNorm.e164}`
+        : `Voice AI Direct Message → ${phoneNorm.e164}`;
+      const deduction = await deductWalletForCampaign({
+        organizationId,
+        category: resolvedCategory,
+        count: 1,
+        campaignId: triggerKeyInput ? `voice_ai_${triggerKeyInput}` : 'voice_ai_api',
+        campaignName: triggerKeyInput || resolvedTemplateName || 'Voice AI WhatsApp API',
+        description: voiceWalletDesc,
+      });
+      walletCharge = {
+        deducted: deduction.deducted,
+        ratePerMessage: deduction.ratePerMessage,
+        newBalance: deduction.newBalance,
+        isLowBalance: deduction.isLowBalance,
+      };
+    } catch (walletErr) {
+      console.warn('[ExternalAPI] Wallet deduction notice:', walletErr);
+    }
+
     // 8. Persist logs, Inbox conversation/message, contact & wamidTracker
     const convId = `conv_${phoneNorm.phone}`;
 
@@ -1262,6 +1348,9 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
       caption: captionStr,
       triggerKey: triggerKeyInput || undefined,
       templateName: resolvedTemplateName || undefined,
+      templateCategory: resolvedCategory,
+      walletCost: walletCharge ? walletCharge.deducted : undefined,
+      walletBalanceAfter: walletCharge ? walletCharge.newBalance : undefined,
       source: sourceStr,
       status: 'sent',
       messageId: metaMessageId,
@@ -1356,11 +1445,13 @@ export async function handleExternalWhatsAppSend(req: Request, res: Response) {
       ok: true,
       messageId: metaMessageId,
       status: 'sent',
+      category: resolvedCategory,
       ...(resolvedTemplateName ? { templateName: resolvedTemplateName } : {}),
       ...(triggerKeyInput ? { trigger: triggerKeyInput } : {}),
       ...(templateMetaContext?.finalVariableValues
         ? { variablesSent: templateMetaContext.finalVariableValues }
         : {}),
+      ...(walletCharge ? { wallet: walletCharge } : {}),
     });
   } catch (err: any) {
     const errorMsg = err?.message || 'Internal server error while sending WhatsApp message.';

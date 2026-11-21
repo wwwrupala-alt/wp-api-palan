@@ -117,6 +117,7 @@ import {
   handleSaveExternalApiConfig,
   handleRegenerateExternalApiKey,
   handleGetExternalApiLogs,
+  handleResetExternalApiLogs,
   handleGetExternalApiTriggers,
   handleSaveExternalApiTrigger,
   handleDeleteExternalApiTrigger,
@@ -480,6 +481,7 @@ apiApp.get('/api/external-api/config', handleGetExternalApiConfig);
 apiApp.post('/api/external-api/config', handleSaveExternalApiConfig);
 apiApp.post('/api/external-api/regenerate', handleRegenerateExternalApiKey);
 apiApp.get('/api/external-api/logs', handleGetExternalApiLogs);
+apiApp.delete('/api/external-api/logs', handleResetExternalApiLogs);
 apiApp.get('/api/external-api/triggers', handleGetExternalApiTriggers);
 apiApp.post('/api/external-api/triggers', handleSaveExternalApiTrigger);
 apiApp.delete('/api/external-api/triggers/:triggerId', handleDeleteExternalApiTrigger);
