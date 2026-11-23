@@ -373,25 +373,52 @@ export async function checkAndExecuteDripCampaigns(): Promise<void> {
         };
 
         if (dispatchedWamid) {
-          await setDoc(
-            doc(serverDb, 'wamidTracker', dispatchedWamid),
-            {
-              wamid: dispatchedWamid,
-              organizationId: orgId,
-              campaignId: `${campaignId}_step_${currentStepNum}`,
-              parentDripId: campaignId,
-              isDrip: true,
-              stepNumber: currentStepNum,
-              subscriberId: sub.id,
-              phoneNumber: sub.phone,
-              customerName: sub.name || 'Contact',
-              status: dispatchSuccess ? 'delivered' : 'failed',
-              sentAt: nowIso,
-              deliveredAt: dispatchSuccess ? deliveryTimestamp : undefined,
-              updatedAt: nowIso,
-            },
-            { merge: true }
-          ).catch(() => {});
+          const cleanSubDigits = String(sub.phone || '').replace(/[^0-9]/g, '');
+          const dripPhoneKey = cleanSubDigits.length >= 10 ? cleanSubDigits.slice(-10) : cleanSubDigits;
+          const dripTrackOps: Promise<any>[] = [
+            setDoc(
+              doc(serverDb, 'wamidTracker', dispatchedWamid),
+              {
+                wamid: dispatchedWamid,
+                organizationId: orgId,
+                campaignId: `${campaignId}_step_${currentStepNum}`,
+                parentDripId: campaignId,
+                isDrip: true,
+                stepNumber: currentStepNum,
+                subscriberId: sub.id,
+                phoneNumber: sub.phone,
+                customerName: sub.name || 'Contact',
+                status: dispatchSuccess ? 'delivered' : 'failed',
+                sentAt: nowIso,
+                deliveredAt: dispatchSuccess ? deliveryTimestamp : undefined,
+                updatedAt: nowIso,
+              },
+              { merge: true }
+            ).catch(() => {}),
+          ];
+          if (dripPhoneKey && dispatchSuccess) {
+            dripTrackOps.push(
+              setDoc(
+                doc(serverDb, `organizations/${orgId}/lastCampaignByPhone`, dripPhoneKey),
+                {
+                  phoneKey: dripPhoneKey,
+                  phoneNumber: cleanSubDigits,
+                  campaignId: `${campaignId}_step_${currentStepNum}`,
+                  parentDripId: campaignId,
+                  isDrip: true,
+                  stepNumber: currentStepNum,
+                  subscriberId: sub.id,
+                  campaignName: camp.name || currentStep.templateName || 'Drip Campaign',
+                  templateName: currentStep.templateName || undefined,
+                  wamid: dispatchedWamid,
+                  sentAt: nowIso,
+                  updatedAt: nowIso,
+                },
+                { merge: true }
+              ).catch(() => {})
+            );
+          }
+          await Promise.all(dripTrackOps);
         }
 
         const updatedHistory = [...(sub.stepHistory || []), newHistoryItem];

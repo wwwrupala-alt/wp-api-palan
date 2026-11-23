@@ -1843,7 +1843,14 @@ export async function executeCampaignDispatchCore(params: {
           try {
             const recDocRef = doc(serverDb, `organizations/${organizationId}/campaigns/${campaignId}/recipients`, recipientId);
             const trackerRef = doc(serverDb, 'wamidTracker', wamid);
-            await Promise.all([
+            const phoneKey = getPhoneIndexKey(cleanPhone);
+            const lastCampRef = phoneKey
+              ? doc(serverDb, `organizations/${organizationId}/lastCampaignByPhone`, phoneKey)
+              : null;
+            if (phoneKey) {
+              noCampaignPhoneCache.delete(`${organizationId}:${phoneKey}`);
+            }
+            const writeOps: Promise<any>[] = [
               setDoc(recDocRef, cleanFirestoreData(recItem), { merge: true }),
               setDoc(
                 trackerRef,
@@ -1860,7 +1867,27 @@ export async function executeCampaignDispatchCore(params: {
                 }),
                 { merge: true }
               ),
-            ]);
+            ];
+            if (lastCampRef) {
+              writeOps.push(
+                setDoc(
+                  lastCampRef,
+                  cleanFirestoreData({
+                    phoneKey,
+                    phoneNumber: cleanPhone,
+                    campaignId,
+                    recipientId,
+                    campaignName: campaignName || template.name || 'WhatsApp Campaign',
+                    templateName: template.name || undefined,
+                    wamid,
+                    sentAt: itemIso,
+                    updatedAt: itemIso,
+                  }),
+                  { merge: true }
+                )
+              );
+            }
+            await Promise.all(writeOps);
           } catch (saveErr) {
             console.warn('[Broadcast] Error writing recipient/tracker to Firestore:', saveErr);
           }
@@ -2882,6 +2909,151 @@ export function handleWebhookVerification(req: Request, res: Response) {
  * Automatically marks the recipient as 'read' and 'replied', persists read receipts to Firestore,
  * and synchronizes parent Drip Campaign and step statistics in real time!
  */
+function getPhoneIndexKey(phone: string): string {
+  const digits = String(phone || '').replace(/[^0-9]/g, '');
+  if (!digits) return '';
+  return digits.length >= 10 ? digits.slice(-10) : digits;
+}
+
+// Negative cache for ordinary chatbot contacts who haven't received a recent campaign (prevents repeated scans)
+const NO_CAMPAIGN_CACHE_TTL_MS = 15 * 60_000; // 15 minutes
+const noCampaignPhoneCache = new Map<string, number>();
+
+// Short cache of an org's recent 7-day campaigns for legacy pre-index fallback (max 5 campaigns)
+const RECENT_CAMPS_CACHE_TTL_MS = 5 * 60_000; // 5 minutes
+const recentOrgCampaignsCache = new Map<string, { camps: any[]; cachedAt: number }>();
+
+async function syncParentDripStepStats(
+  organizationId: string,
+  campId: string,
+  stats: { total: number; sent: number; delivered: number; read: number; failed: number; replied: number },
+  nowIso: string
+) {
+  if (!campId.includes('_step_')) return;
+  try {
+    const parts = campId.split('_step_');
+    const parentDripId = parts[0];
+    const stepNum = parseInt(parts[1], 10) || 1;
+
+    const dripDocRef = doc(serverDb, `organizations/${organizationId}/drip_campaigns`, parentDripId);
+    const dripSnap = await getDoc(dripDocRef);
+    if (!dripSnap.exists()) return;
+
+    const dripData = dripSnap.data();
+    const updatedSteps = (dripData.steps || []).map((st: any) => {
+      if (st.stepNumber === stepNum) {
+        return {
+          ...st,
+          stats: {
+            total: stats.total,
+            sent: stats.sent,
+            delivered: stats.delivered,
+            read: stats.read,
+            failed: stats.failed,
+            replied: stats.replied,
+          },
+        };
+      }
+      return st;
+    });
+
+    let dripTotalSent = 0;
+    let dripTotalDelivered = 0;
+    let dripTotalRead = 0;
+    let dripTotalFailed = 0;
+
+    updatedSteps.forEach((st: any) => {
+      const s = st.stats || {};
+      dripTotalSent += s.sent || 0;
+      dripTotalDelivered += s.delivered || 0;
+      dripTotalRead += s.read || 0;
+      dripTotalFailed += s.failed || 0;
+    });
+
+    await updateDoc(dripDocRef, {
+      steps: updatedSteps,
+      stats: {
+        totalMessagesSent: dripTotalSent,
+        delivered: dripTotalDelivered,
+        read: dripTotalRead,
+        failed: dripTotalFailed,
+      },
+      updatedAt: nowIso,
+    });
+    console.log(`[correlateInboundReply] Updated Drip ${parentDripId} Step ${stepNum}: read=${stats.read}`);
+  } catch (dripErr) {
+    console.warn('[correlateInboundReply] Drip sync warning:', dripErr);
+  }
+}
+
+async function incrementCampaignStatsForReply(
+  organizationId: string,
+  campId: string,
+  flags: { wasDelivered: boolean; wasRead: boolean; wasReplied: boolean; isBtn: boolean },
+  nowIso: string
+) {
+  try {
+    const campRef = doc(serverDb, `organizations/${organizationId}/campaigns`, campId);
+    const campSnap = await getDoc(campRef);
+    if (!campSnap.exists()) return;
+
+    const campData: any = campSnap.data() || {};
+    const prev = campData.stats || {};
+
+    const totalCount = Math.max(Number(prev.total || 0), 1);
+    const prevDelivered = Number(prev.delivered || 0);
+    const prevRead = Number(prev.read || 0);
+    const prevReplied = Number(prev.replied || 0);
+    const prevBtnClicks = Number(prev.buttonClicks || 0);
+    const prevSent = Number(prev.sent || 0);
+    const failedCount = Number(prev.failed || 0);
+
+    const deliveredCount = Math.min(totalCount, prevDelivered + (flags.wasDelivered ? 0 : 1));
+    const readCount = Math.min(totalCount, prevRead + (flags.wasRead ? 0 : 1));
+    const repliedCount = Math.min(totalCount, prevReplied + (flags.wasReplied ? 0 : 1));
+    const buttonClicksCount = prevBtnClicks + (flags.isBtn ? 1 : 0);
+    const sentCount = Math.min(totalCount, Math.max(prevSent, deliveredCount, readCount));
+
+    const deliveryRate = totalCount > 0 ? Number(((deliveredCount / totalCount) * 100).toFixed(1)) : 0;
+    const readRate = deliveredCount > 0 ? Number(((readCount / deliveredCount) * 100).toFixed(1)) : 0;
+    const failureRate = totalCount > 0 ? Number(((failedCount / totalCount) * 100).toFixed(1)) : 0;
+    const replyRate = deliveredCount > 0 ? Number(((repliedCount / deliveredCount) * 100).toFixed(1)) : 0;
+
+    await updateDoc(campRef, {
+      stats: {
+        total: totalCount,
+        sent: sentCount,
+        delivered: deliveredCount,
+        read: readCount,
+        failed: failedCount,
+        replied: repliedCount,
+        buttonClicks: buttonClicksCount,
+        deliveryRate,
+        readRate,
+        failureRate,
+        replyRate,
+      },
+      updatedAt: nowIso,
+    }).catch(() => {});
+
+    await syncParentDripStepStats(
+      organizationId,
+      campId,
+      {
+        total: totalCount,
+        sent: sentCount,
+        delivered: deliveredCount,
+        read: readCount,
+        failed: failedCount,
+        replied: repliedCount,
+      },
+      nowIso
+    );
+  } catch (err) {
+    console.warn('[correlateInboundReply] Incremental campaign stats notice:', err);
+  }
+}
+
 export async function correlateInboundReplyToCampaignsAndDrips(
   organizationId: string,
   cleanPhone: string,
@@ -2899,43 +3071,152 @@ export async function correlateInboundReplyToCampaignsAndDrips(
     const eventTimeIso = timestampSeconds
       ? new Date(Number(timestampSeconds) * 1000).toISOString()
       : nowIso;
-
-    // Search campaigns in this organization
-    const campsSnap = await getDocs(collection(serverDb, `organizations/${organizationId}/campaigns`));
-    const campList: any[] = [];
-    campsSnap.forEach((d) => campList.push({ id: d.id, ...d.data() }));
-    // Sort recent first
-    campList.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
-
     const isBtn = Boolean(options?.isButtonClick);
     const btnDisplay = (options?.buttonText || replyText || '').slice(0, 60);
+    const phoneKey = getPhoneIndexKey(cleanPhone);
 
-    const recentCamps = campList.slice(0, 30);
-    // Pre-fetch recipient collections in small parallel batches instead of 30 sequential round-trips
-    const campSnaps: Array<{ camp: any; recsSnap: any }> = [];
-    const CORR_BATCH = 6;
-    for (let i = 0; i < recentCamps.length; i += CORR_BATCH) {
-      const slice = recentCamps.slice(i, i + CORR_BATCH);
-      const batchSnaps = await Promise.all(
-        slice.map(async (camp) => {
-          try {
-            const recsSnap = await getDocs(
-              collection(serverDb, `organizations/${organizationId}/campaigns/${camp.id}/recipients`)
-            );
-            return { camp, recsSnap };
-          } catch {
-            return { camp, recsSnap: null };
+    const buildTimelineEntry = () =>
+      isBtn
+        ? {
+            status: 'replied',
+            timestamp: eventTimeIso,
+            description: `Button clicked: "${btnDisplay}"`,
+            details: `Button clicked: ${options?.buttonText || replyText || ''}`,
           }
-        })
-      );
-      campSnaps.push(...batchSnaps);
+        : {
+            status: 'replied',
+            timestamp: eventTimeIso,
+            description: `Customer read & replied: "${(replyText || '').slice(0, 60)}"`,
+            details: replyText || '',
+          };
+
+    // 1. O(1) DIRECT 1-READ FAST PATH via organizations/{orgId}/lastCampaignByPhone/{phoneKey}
+    if (phoneKey) {
+      try {
+        const lastCampSnap = await getDoc(
+          doc(serverDb, `organizations/${organizationId}/lastCampaignByPhone`, phoneKey)
+        );
+        if (lastCampSnap.exists()) {
+          const idx: any = lastCampSnap.data() || {};
+          if (idx.campaignId) {
+            matchedCampaignInfo = {
+              campaignId: idx.campaignId,
+              campaignName: idx.campaignName || idx.templateName || 'WhatsApp Campaign',
+              templateName: idx.templateName,
+            };
+
+            // If this index points to a direct broadcast campaign recipient, update that 1 doc + incremental stats
+            if (idx.recipientId) {
+              const recRef = doc(
+                serverDb,
+                `organizations/${organizationId}/campaigns/${idx.campaignId}/recipients`,
+                idx.recipientId
+              );
+              const recSnap = await getDoc(recRef);
+              if (recSnap.exists()) {
+                const rData: any = recSnap.data() || {};
+                const wasDelivered = Boolean(rData.deliveredAt || rData.currentStatus === 'delivered' || rData.currentStatus === 'read');
+                const wasRead = Boolean(rData.readAt || rData.currentStatus === 'read');
+                const wasReplied = Boolean(rData.hasReplied || rData.repliedAt);
+                const existingTimeline: any[] = Array.isArray(rData.timeline) ? rData.timeline : [];
+
+                const updateOps: Promise<any>[] = [
+                  updateDoc(recRef, {
+                    currentStatus: 'read',
+                    readAt: rData.readAt || eventTimeIso,
+                    deliveredAt: rData.deliveredAt || eventTimeIso,
+                    hasReplied: true,
+                    repliedAt: rData.repliedAt || eventTimeIso,
+                    updatedAt: nowIso,
+                    timeline: [...existingTimeline, buildTimelineEntry()],
+                  }).catch(() => {}),
+                ];
+
+                const wamid = rData.whatsappMessageId || idx.wamid;
+                if (wamid) {
+                  updateOps.push(
+                    setDoc(
+                      doc(serverDb, 'wamidTracker', wamid),
+                      { status: 'read', updatedAt: nowIso },
+                      { merge: true }
+                    ).catch(() => {})
+                  );
+                }
+
+                await Promise.all([
+                  ...updateOps,
+                  incrementCampaignStatsForReply(
+                    organizationId,
+                    idx.campaignId,
+                    { wasDelivered, wasRead, wasReplied, isBtn },
+                    nowIso
+                  ),
+                ]);
+              }
+            }
+            return matchedCampaignInfo;
+          }
+        }
+      } catch (idxErr) {
+        console.warn('[correlateInboundReply] Direct index lookup notice:', idxErr);
+      }
     }
+
+    // 2. ZERO-WASTE LEGACY FALLBACK (only for pre-index campaigns sent in last 7 days, cached to avoid repeat scans)
+    const negKey = `${organizationId}:${phoneKey}`;
+    const nowMs = Date.now();
+    if (phoneKey) {
+      const negTs = noCampaignPhoneCache.get(negKey);
+      if (negTs && nowMs - negTs < NO_CAMPAIGN_CACHE_TTL_MS) {
+        return null;
+      }
+    }
+
+    // Load at most 5 recent campaigns from the last 7 days (cached 5 min per org)
+    let recentCamps: any[] = [];
+    const cachedCamps = recentOrgCampaignsCache.get(organizationId);
+    if (cachedCamps && nowMs - cachedCamps.cachedAt < RECENT_CAMPS_CACHE_TTL_MS) {
+      recentCamps = cachedCamps.camps;
+    } else {
+      const campsSnap = await getDocs(collection(serverDb, `organizations/${organizationId}/campaigns`));
+      const sevenDaysAgoMs = nowMs - 7 * 24 * 60 * 60 * 1000;
+      const campList: any[] = [];
+      campsSnap.forEach((d) => {
+        const data: any = d.data();
+        const createdMs = new Date(data.createdAt || 0).getTime();
+        if (!isNaN(createdMs) && createdMs >= sevenDaysAgoMs) {
+          campList.push({ id: d.id, ...data });
+        }
+      });
+      campList.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+      recentCamps = campList.slice(0, 5);
+      recentOrgCampaignsCache.set(organizationId, { camps: recentCamps, cachedAt: nowMs });
+    }
+
+    if (recentCamps.length === 0) {
+      if (phoneKey) {
+        if (noCampaignPhoneCache.size > 5000) noCampaignPhoneCache.clear();
+        noCampaignPhoneCache.set(negKey, nowMs);
+      }
+      return null;
+    }
+
+    const campSnaps = await Promise.all(
+      recentCamps.map(async (camp) => {
+        try {
+          const recsSnap = await getDocs(
+            collection(serverDb, `organizations/${organizationId}/campaigns/${camp.id}/recipients`)
+          );
+          return { camp, recsSnap };
+        } catch {
+          return { camp, recsSnap: null };
+        }
+      })
+    );
 
     for (const { camp, recsSnap } of campSnaps) {
       if (!recsSnap) continue;
       const campId = camp.id;
-
-      let recipientMatched = false;
 
       for (const rDoc of recsSnap.docs) {
         const rData: any = rDoc.data();
@@ -2947,164 +3228,75 @@ export async function correlateInboundReplyToCampaignsAndDrips(
           (rPhone.length >= 10 && cleanPhone.length >= 10 && rPhone.slice(-10) === cleanPhone.slice(-10));
 
         if (isPhoneMatch) {
-          recipientMatched = true;
-          if (!matchedCampaignInfo) {
-            matchedCampaignInfo = {
-              campaignId: campId,
-              campaignName: camp.name || camp.templateName || 'WhatsApp Campaign',
-              templateName: camp.templateName,
-            };
-          }
-
-          const existingTimeline: any[] = Array.isArray(rData.timeline) ? rData.timeline : [];
-          const timelineEntry = isBtn
-            ? {
-                status: 'replied',
-                timestamp: eventTimeIso,
-                description: `Button clicked: "${btnDisplay}"`,
-                details: `Button clicked: ${options?.buttonText || replyText || ''}`,
-              }
-            : {
-                status: 'replied',
-                timestamp: eventTimeIso,
-                description: `Customer read & replied: "${(replyText || '').slice(0, 60)}"`,
-                details: replyText || '',
-              };
-
-          const updateFields: any = {
-            currentStatus: 'read',
-            readAt: rData.readAt || eventTimeIso,
-            deliveredAt: rData.deliveredAt || eventTimeIso,
-            hasReplied: true,
-            repliedAt: rData.repliedAt || eventTimeIso,
-            updatedAt: nowIso,
-            timeline: [...existingTimeline, timelineEntry],
+          matchedCampaignInfo = {
+            campaignId: campId,
+            campaignName: camp.name || camp.templateName || 'WhatsApp Campaign',
+            templateName: camp.templateName,
           };
 
-          await updateDoc(rDoc.ref, updateFields).catch(() => {});
+          const wasDelivered = Boolean(rData.deliveredAt || rData.currentStatus === 'delivered' || rData.currentStatus === 'read');
+          const wasRead = Boolean(rData.readAt || rData.currentStatus === 'read');
+          const wasReplied = Boolean(rData.hasReplied || rData.repliedAt);
+          const existingTimeline: any[] = Array.isArray(rData.timeline) ? rData.timeline : [];
+
+          const ops: Promise<any>[] = [
+            updateDoc(rDoc.ref, {
+              currentStatus: 'read',
+              readAt: rData.readAt || eventTimeIso,
+              deliveredAt: rData.deliveredAt || eventTimeIso,
+              hasReplied: true,
+              repliedAt: rData.repliedAt || eventTimeIso,
+              updatedAt: nowIso,
+              timeline: [...existingTimeline, buildTimelineEntry()],
+            }).catch(() => {}),
+            incrementCampaignStatsForReply(
+              organizationId,
+              campId,
+              { wasDelivered, wasRead, wasReplied, isBtn },
+              nowIso
+            ),
+          ];
 
           if (rData.whatsappMessageId) {
-            await setDoc(
-              doc(serverDb, 'wamidTracker', rData.whatsappMessageId),
-              { status: 'read', updatedAt: nowIso },
-              { merge: true }
-            ).catch(() => {});
+            ops.push(
+              setDoc(
+                doc(serverDb, 'wamidTracker', rData.whatsappMessageId),
+                { status: 'read', updatedAt: nowIso },
+                { merge: true }
+              ).catch(() => {})
+            );
           }
-          break;
+
+          // Auto-backfill lastCampaignByPhone so all future replies from this customer use the 1-read fast path!
+          if (phoneKey) {
+            ops.push(
+              setDoc(
+                doc(serverDb, `organizations/${organizationId}/lastCampaignByPhone`, phoneKey),
+                cleanFirestoreData({
+                  phoneKey,
+                  phoneNumber: cleanPhone,
+                  campaignId: campId,
+                  recipientId: rDoc.id,
+                  campaignName: matchedCampaignInfo.campaignName,
+                  templateName: matchedCampaignInfo.templateName,
+                  wamid: rData.whatsappMessageId || undefined,
+                  sentAt: rData.sentAt || camp.createdAt || nowIso,
+                  updatedAt: nowIso,
+                }),
+                { merge: true }
+              ).catch(() => {})
+            );
+          }
+
+          await Promise.all(ops);
+          return matchedCampaignInfo;
         }
       }
+    }
 
-      if (recipientMatched) {
-        // Recalculate campaign stats
-        const refreshedRecsSnap = await getDocs(collection(serverDb, `organizations/${organizationId}/campaigns/${campId}/recipients`));
-        let sentCount = 0;
-        let deliveredCount = 0;
-        let readCount = 0;
-        let failedCount = 0;
-        let repliedCount = 0;
-        let buttonClicksCount = 0;
-        let totalCount = 0;
-
-        refreshedRecsSnap.forEach((d) => {
-          totalCount++;
-          const r: any = d.data();
-          if (r.currentStatus === 'sent' || r.sentAt) sentCount++;
-          if (r.currentStatus === 'delivered' || r.deliveredAt) deliveredCount++;
-          if (r.currentStatus === 'read' || r.readAt) {
-            readCount++;
-            if (!r.deliveredAt) deliveredCount++;
-          }
-          if (r.currentStatus === 'failed') failedCount++;
-          if (r.hasReplied || r.repliedAt) repliedCount++;
-          if (
-            Array.isArray(r.timeline) &&
-            r.timeline.some((t: any) => t.details?.includes('Button clicked') || t.description?.includes('Button'))
-          ) {
-            buttonClicksCount++;
-          }
-        });
-
-        const deliveryRate = totalCount > 0 ? Number(((deliveredCount / totalCount) * 100).toFixed(1)) : 0;
-        const readRate = deliveredCount > 0 ? Number(((readCount / deliveredCount) * 100).toFixed(1)) : 0;
-        const failureRate = totalCount > 0 ? Number(((failedCount / totalCount) * 100).toFixed(1)) : 0;
-        const replyRate = deliveredCount > 0 ? Number(((repliedCount / deliveredCount) * 100).toFixed(1)) : 0;
-
-        await updateDoc(doc(serverDb, `organizations/${organizationId}/campaigns`, campId), {
-          stats: {
-            total: totalCount,
-            sent: Math.max(sentCount, deliveredCount, readCount),
-            delivered: deliveredCount,
-            read: readCount,
-            failed: failedCount,
-            replied: repliedCount,
-            buttonClicks: buttonClicksCount,
-            deliveryRate,
-            readRate,
-            failureRate,
-            replyRate,
-          },
-          updatedAt: nowIso,
-        }).catch(() => {});
-
-        // If this campaign is a step of a Drip Campaign (e.g. drip_1792744674024_step_1)
-        if (campId.includes('_step_')) {
-          try {
-            const parts = campId.split('_step_');
-            const parentDripId = parts[0];
-            const stepNum = parseInt(parts[1], 10) || 1;
-
-            const dripDocRef = doc(serverDb, `organizations/${organizationId}/drip_campaigns`, parentDripId);
-            const dripSnap = await getDoc(dripDocRef);
-
-            if (dripSnap.exists()) {
-              const dripData = dripSnap.data();
-              const updatedSteps = (dripData.steps || []).map((st: any) => {
-                if (st.stepNumber === stepNum) {
-                  return {
-                    ...st,
-                    stats: {
-                      total: totalCount,
-                      sent: Math.max(sentCount, deliveredCount, readCount),
-                      delivered: deliveredCount,
-                      read: readCount,
-                      failed: failedCount,
-                      replied: repliedCount,
-                    },
-                  };
-                }
-                return st;
-              });
-
-              let dripTotalSent = 0;
-              let dripTotalDelivered = 0;
-              let dripTotalRead = 0;
-              let dripTotalFailed = 0;
-
-              updatedSteps.forEach((st: any) => {
-                const s = st.stats || {};
-                dripTotalSent += s.sent || 0;
-                dripTotalDelivered += s.delivered || 0;
-                dripTotalRead += s.read || 0;
-                dripTotalFailed += s.failed || 0;
-              });
-
-              await updateDoc(dripDocRef, {
-                steps: updatedSteps,
-                stats: {
-                  totalMessagesSent: dripTotalSent,
-                  delivered: dripTotalDelivered,
-                  read: dripTotalRead,
-                  failed: dripTotalFailed,
-                },
-                updatedAt: nowIso,
-              });
-              console.log(`[correlateInboundReply] Updated Drip ${parentDripId} Step ${stepNum}: read=${readCount}`);
-            }
-          } catch (dripErr) {
-            console.warn('[correlateInboundReply] Drip sync warning:', dripErr);
-          }
-        }
-      }
+    if (!matchedCampaignInfo && phoneKey) {
+      if (noCampaignPhoneCache.size > 5000) noCampaignPhoneCache.clear();
+      noCampaignPhoneCache.set(negKey, nowMs);
     }
   } catch (err) {
     console.warn('[correlateInboundReplyToCampaignsAndDrips] Error:', err);
