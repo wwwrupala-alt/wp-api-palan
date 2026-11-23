@@ -2910,9 +2910,30 @@ export async function correlateInboundReplyToCampaignsAndDrips(
     const isBtn = Boolean(options?.isButtonClick);
     const btnDisplay = (options?.buttonText || replyText || '').slice(0, 60);
 
-    for (const camp of campList.slice(0, 30)) {
+    const recentCamps = campList.slice(0, 30);
+    // Pre-fetch recipient collections in small parallel batches instead of 30 sequential round-trips
+    const campSnaps: Array<{ camp: any; recsSnap: any }> = [];
+    const CORR_BATCH = 6;
+    for (let i = 0; i < recentCamps.length; i += CORR_BATCH) {
+      const slice = recentCamps.slice(i, i + CORR_BATCH);
+      const batchSnaps = await Promise.all(
+        slice.map(async (camp) => {
+          try {
+            const recsSnap = await getDocs(
+              collection(serverDb, `organizations/${organizationId}/campaigns/${camp.id}/recipients`)
+            );
+            return { camp, recsSnap };
+          } catch {
+            return { camp, recsSnap: null };
+          }
+        })
+      );
+      campSnaps.push(...batchSnaps);
+    }
+
+    for (const { camp, recsSnap } of campSnaps) {
+      if (!recsSnap) continue;
       const campId = camp.id;
-      const recsSnap = await getDocs(collection(serverDb, `organizations/${organizationId}/campaigns/${campId}/recipients`));
 
       let recipientMatched = false;
 
@@ -3092,37 +3113,98 @@ export async function correlateInboundReplyToCampaignsAndDrips(
 }
 
 // Helper: Process incoming WhatsApp messages, persist to Firestore Inbox and trigger active Bot Flow
+// Fast multi-tenant-safe caches for sub-second chatbot webhook replies
+const PHONE_ORG_CACHE_TTL_MS = 60_000; // 60s TTL
+const phoneOrgCache = new Map<
+  string,
+  { targetOrgId: string; matchedAccount: any; cachedAt: number }
+>();
+
+const BOT_FLOWS_CACHE_TTL_MS = 15_000; // 15s short TTL so flow edits reflect quickly while live chats stay instant
+const orgBotFlowsCache = new Map<string, { flows: any[]; cachedAt: number }>();
+
+async function resolveOrgByPhoneNumberId(
+  phoneNumberId?: string
+): Promise<{ targetOrgId: string; matchedAccount: any }> {
+  const cleanKey = String(phoneNumberId || '').trim();
+  const nowMs = Date.now();
+  if (cleanKey) {
+    const cached = phoneOrgCache.get(cleanKey);
+    if (cached && nowMs - cached.cachedAt < PHONE_ORG_CACHE_TTL_MS) {
+      return { targetOrgId: cached.targetOrgId, matchedAccount: cached.matchedAccount };
+    }
+  }
+
+  const orgsSnap = await getDocs(collection(serverDb, 'organizations'));
+  let targetOrgId = '';
+  let matchedAccount: any = null;
+
+  // Fetch all organizations' whatsappAccounts in parallel (1 round-trip instead of N sequential calls)
+  const orgAccountsResults = await Promise.all(
+    orgsSnap.docs.map(async (orgDoc) => {
+      try {
+        const accsSnap = await getDocs(
+          collection(serverDb, `organizations/${orgDoc.id}/whatsappAccounts`)
+        );
+        return { orgId: orgDoc.id, docs: accsSnap.docs };
+      } catch {
+        return { orgId: orgDoc.id, docs: [] };
+      }
+    })
+  );
+
+  for (const { orgId, docs } of orgAccountsResults) {
+    for (const aDoc of docs) {
+      const a = aDoc.data();
+      if (a.phoneNumberId === phoneNumberId || a.id === phoneNumberId) {
+        if (
+          !matchedAccount ||
+          (!matchedAccount.customToken && a.customToken) ||
+          (orgId !== 'org_master_platform' && targetOrgId === 'org_master_platform')
+        ) {
+          targetOrgId = orgId;
+          matchedAccount = { id: aDoc.id, ...a };
+        }
+      }
+    }
+  }
+
+  if (!targetOrgId && orgsSnap.docs.length > 0) {
+    targetOrgId = orgsSnap.docs[0].id;
+  }
+
+  if (cleanKey && targetOrgId) {
+    phoneOrgCache.set(cleanKey, { targetOrgId, matchedAccount, cachedAt: nowMs });
+  }
+
+  return { targetOrgId, matchedAccount };
+}
+
+async function getOrgBotFlowsCached(targetOrgId: string): Promise<any[]> {
+  const nowMs = Date.now();
+  const cached = orgBotFlowsCache.get(targetOrgId);
+  if (cached && nowMs - cached.cachedAt < BOT_FLOWS_CACHE_TTL_MS) {
+    return cached.flows;
+  }
+
+  const targetFlowsSnap = await getDocs(
+    collection(serverDb, `organizations/${targetOrgId}/botFlows`)
+  );
+  const flows: any[] = [];
+  targetFlowsSnap.forEach((d) => {
+    flows.push({ id: d.id, ...d.data(), orgId: targetOrgId });
+  });
+  orgBotFlowsCache.set(targetOrgId, { flows, cachedAt: nowMs });
+  return flows;
+}
+
 async function processIncomingWhatsAppWebhookPayload(value: any) {
   try {
     const phoneNumberId = value.metadata?.phone_number_id;
     if (!value.messages || !Array.isArray(value.messages)) return;
 
-    // 1. Find organization owning this phoneNumberId (prefer actual tenant organizations with active customToken)
-    const orgsSnap = await getDocs(collection(serverDb, 'organizations'));
-    let targetOrgId = '';
-    let matchedAccount: any = null;
-
-    for (const orgDoc of orgsSnap.docs) {
-      const accsSnap = await getDocs(collection(serverDb, `organizations/${orgDoc.id}/whatsappAccounts`));
-      for (const aDoc of accsSnap.docs) {
-        const a = aDoc.data();
-        if (a.phoneNumberId === phoneNumberId || a.id === phoneNumberId) {
-          // If we haven't found an account yet, or if current candidate has a customToken, or if previous candidate was org_master_platform
-          if (
-            !matchedAccount ||
-            (!matchedAccount.customToken && a.customToken) ||
-            (orgDoc.id !== 'org_master_platform' && targetOrgId === 'org_master_platform')
-          ) {
-            targetOrgId = orgDoc.id;
-            matchedAccount = { id: aDoc.id, ...a };
-          }
-        }
-      }
-    }
-
-    if (!targetOrgId && orgsSnap.docs.length > 0) {
-      targetOrgId = orgsSnap.docs[0].id;
-    }
+    // 1. Resolve organization owning this phoneNumberId (0ms on cache hit, 1 parallel RTT on miss)
+    const { targetOrgId, matchedAccount } = await resolveOrgByPhoneNumberId(phoneNumberId);
 
     if (!targetOrgId) {
       console.warn('[Webhook] No organization found for incoming message on phone_number_id:', phoneNumberId);
@@ -3130,6 +3212,9 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
     }
 
     const token = matchedAccount?.customToken || getMetaConfig().systemToken;
+
+    // Pre-fetch org botFlows once for this webhook batch (0ms on cache hit)
+    const orgBotFlowsPromise = getOrgBotFlowsCached(targetOrgId).catch(() => [] as any[]);
 
     for (const msg of value.messages) {
       const contactInfo = value.contacts?.[0] || {};
@@ -3161,138 +3246,141 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
         textBody = `[${(msg.type || 'message').toUpperCase()}]`;
       }
 
-      // Save Contact with real WhatsApp profile name
       const contactRef = doc(serverDb, `organizations/${targetOrgId}/contacts`, `cnt_${cleanPhone}`);
-      await setDoc(
-        contactRef,
-        {
-          id: `cnt_${cleanPhone}`,
-          name: senderName,
-          phone: `+${cleanPhone}`,
-          optInStatus: 'opted_in',
-          updatedAt: now,
-          createdAt: now,
-        },
-        { merge: true }
-      );
-
-      // Save inbound message in Firestore Inbox
       const msgRef = doc(serverDb, `organizations/${targetOrgId}/messages`, msgId);
-      await setDoc(msgRef, {
-        id: msgId,
-        whatsAppAccountId: matchedAccount?.id || phoneNumberId,
-        contactId: cleanPhone,
-        conversationId: convId,
-        direction: 'inbound',
-        messageType: msg.type || 'text',
-        messageStatus: 'delivered',
-        metaMessageId: msgId,
-        body: textBody,
-        timestamp: now,
-      });
-
-      // Update Conversation Thread in Firestore
       const convRef = doc(serverDb, `organizations/${targetOrgId}/conversations`, convId);
-      await setDoc(
-        convRef,
-        {
-          id: convId,
-          contactId: cleanPhone,
-          contactPhone: `+${cleanPhone}`,
-          contactName: senderName,
-          whatsAppAccountId: matchedAccount?.id || phoneNumberId,
-          lastMessage: textBody,
-          lastMessageAt: now,
-          unreadCount: 1,
-          status: 'open',
-        },
-        { merge: true }
-      );
-
-      addWebhookLog({
-        event: 'Inbox Real Message Stored',
-        origin: `WhatsApp: +${cleanPhone} (${senderName})`,
-        details: `Saved to Inbox: "${textBody}"`,
-        status: 'success',
-      });
-
-      // Correlate with campaign delivery: mark recipient as replied, button-clicked & read in real-time
       const isButtonClick = msg.type === 'button' || msg.type === 'interactive';
-      const matchedCampaign = await correlateInboundReplyToCampaignsAndDrips(
-        targetOrgId,
-        cleanPhone,
-        textBody,
-        msg.timestamp,
-        {
-          isButtonClick,
+
+      // TRACK B (CONCURRENT): Save Inbox contact/message/conversation + Campaign/Drip/CRM analytics in parallel
+      // Does NOT block Chatbot reply dispatch!
+      const inboxAndAnalyticsTrack = (async () => {
+        await Promise.allSettled([
+          setDoc(
+            contactRef,
+            {
+              id: `cnt_${cleanPhone}`,
+              name: senderName,
+              phone: `+${cleanPhone}`,
+              optInStatus: 'opted_in',
+              updatedAt: now,
+              createdAt: now,
+            },
+            { merge: true }
+          ),
+          setDoc(msgRef, {
+            id: msgId,
+            whatsAppAccountId: matchedAccount?.id || phoneNumberId,
+            contactId: cleanPhone,
+            conversationId: convId,
+            direction: 'inbound',
+            messageType: msg.type || 'text',
+            messageStatus: 'delivered',
+            metaMessageId: msgId,
+            body: textBody,
+            timestamp: now,
+          }),
+          setDoc(
+            convRef,
+            {
+              id: convId,
+              contactId: cleanPhone,
+              contactPhone: `+${cleanPhone}`,
+              contactName: senderName,
+              whatsAppAccountId: matchedAccount?.id || phoneNumberId,
+              lastMessage: textBody,
+              lastMessageAt: now,
+              unreadCount: 1,
+              status: 'open',
+            },
+            { merge: true }
+          ),
+        ]);
+
+        addWebhookLog({
+          event: 'Inbox Real Message Stored',
+          origin: `WhatsApp: +${cleanPhone} (${senderName})`,
+          details: `Saved to Inbox: "${textBody}"`,
+          status: 'success',
+        });
+
+        // Run Campaign correlation and Drip reply tracking in parallel
+        const [matchedCampaign] = await Promise.all([
+          correlateInboundReplyToCampaignsAndDrips(
+            targetOrgId,
+            cleanPhone,
+            textBody,
+            msg.timestamp,
+            {
+              isButtonClick,
+              buttonText: isButtonClick ? textBody : undefined,
+              buttonPayload: interactiveButtonId || undefined,
+            }
+          ).catch((err) => {
+            console.warn('[Webhook] correlateInboundReplyToCampaignsAndDrips error:', err);
+            return null;
+          }),
+          processIncomingCustomerReply({
+            fromPhone: cleanPhone,
+            messageText: textBody,
+            timestampSeconds: msg.timestamp,
+            wamid: msg.id,
+            organizationId: targetOrgId,
+            isButtonClick,
+            buttonText: isButtonClick ? textBody : undefined,
+          }).catch((err) => {
+            console.warn('[Webhook] processIncomingCustomerReply error:', err);
+          }),
+        ]);
+
+        // Capture & update in CRM Leads & Retargeting Funnel with matched Campaign & WhatsApp Number metadata
+        await recordCrmLeadFromInteraction({
+          organizationId: targetOrgId,
+          whatsAppAccountId: matchedAccount?.id || phoneNumberId,
+          phoneNumberId: phoneNumberId || matchedAccount?.phoneNumberId,
+          displayPhoneNumber: matchedAccount?.displayPhoneNumber,
+          phone: `+${cleanPhone}`,
+          customerName: senderName,
+          interactionType: isButtonClick ? 'button_click' : 'text_reply',
           buttonText: isButtonClick ? textBody : undefined,
           buttonPayload: interactiveButtonId || undefined,
-        }
-      ).catch((err) => {
-        console.warn('[Webhook] correlateInboundReplyToCampaignsAndDrips error:', err);
-        return null;
-      });
+          replyText: !isButtonClick ? textBody : undefined,
+          campaignId: matchedCampaign?.campaignId,
+          campaignName: matchedCampaign?.campaignName,
+          templateName: matchedCampaign?.templateName,
+        }).catch((err) => {
+          console.warn('[Webhook] recordCrmLeadFromInteraction error:', err);
+        });
+      })();
 
-      await processIncomingCustomerReply({
-        fromPhone: cleanPhone,
-        messageText: textBody,
-        timestampSeconds: msg.timestamp,
-        wamid: msg.id,
-        organizationId: targetOrgId,
-        isButtonClick,
-        buttonText: isButtonClick ? textBody : undefined,
-      }).catch((err) => {
-        console.warn('[Webhook] processIncomingCustomerReply error:', err);
-      });
+      // TRACK A (FAST TRACK): CHATBOT ENGINE — executes IMMEDIATELY without waiting for Campaign/Drip/CRM scans!
+      const chatbotFastTrack = (async () => {
+        // Strictly isolate to the target organization (never cross-pollinate flows across tenants!)
+        const activeFlows: any[] = [];
+        const matchedPhoneNum = matchedAccount?.displayPhoneNumber?.replace(/[^0-9]/g, '');
 
-      // Automatically capture & update in CRM Leads & Retargeting Funnel with matched Campaign & WhatsApp Number metadata
-      await recordCrmLeadFromInteraction({
-        organizationId: targetOrgId,
-        whatsAppAccountId: matchedAccount?.id || phoneNumberId,
-        phoneNumberId: phoneNumberId || matchedAccount?.phoneNumberId,
-        displayPhoneNumber: matchedAccount?.displayPhoneNumber,
-        phone: `+${cleanPhone}`,
-        customerName: senderName,
-        interactionType: isButtonClick ? 'button_click' : 'text_reply',
-        buttonText: isButtonClick ? textBody : undefined,
-        buttonPayload: interactiveButtonId || undefined,
-        replyText: !isButtonClick ? textBody : undefined,
-        campaignId: matchedCampaign?.campaignId,
-        campaignName: matchedCampaign?.campaignName,
-        templateName: matchedCampaign?.templateName,
-      }).catch((err) => {
-        console.warn('[Webhook] recordCrmLeadFromInteraction error:', err);
-      });
+        const allOrgFlows = await orgBotFlowsPromise;
+        for (const f of allOrgFlows) {
+          const isFlowEnabled = f.enabled === true || f.enabled === 'true';
+          const isNotPaused = f.status !== 'paused';
+          if (isFlowEnabled && isNotPaused) {
+            const flowPhone = f.phoneNumberId?.trim();
+            const cleanFlowPhone = flowPhone ? flowPhone.replace(/[^0-9]/g, '') : '';
+            const cleanDisplayPhone = f.displayPhoneNumber ? f.displayPhoneNumber.replace(/[^0-9]/g, '') : '';
+            const isPhoneMatch =
+              !flowPhone ||
+              flowPhone === 'all' ||
+              flowPhone === phoneNumberId ||
+              flowPhone === matchedPhoneNum ||
+              flowPhone === `+${matchedPhoneNum}` ||
+              cleanFlowPhone === matchedPhoneNum ||
+              cleanFlowPhone === phoneNumberId ||
+              (cleanDisplayPhone && cleanDisplayPhone === matchedPhoneNum);
 
-      // CHATBOT ENGINE: Collect active bot flows for this incoming message
-      // Strictly isolate to the target organization (never cross-pollinate flows across tenants!)
-      const activeFlows: any[] = [];
-      const matchedPhoneNum = matchedAccount?.displayPhoneNumber?.replace(/[^0-9]/g, '');
-
-      const targetFlowsSnap = await getDocs(collection(serverDb, `organizations/${targetOrgId}/botFlows`));
-      targetFlowsSnap.forEach((d) => {
-        const f = d.data();
-        const isFlowEnabled = f.enabled === true || f.enabled === 'true';
-        const isNotPaused = f.status !== 'paused';
-        if (isFlowEnabled && isNotPaused) {
-          const flowPhone = f.phoneNumberId?.trim();
-          const cleanFlowPhone = flowPhone ? flowPhone.replace(/[^0-9]/g, '') : '';
-          const cleanDisplayPhone = f.displayPhoneNumber ? f.displayPhoneNumber.replace(/[^0-9]/g, '') : '';
-          const isPhoneMatch =
-            !flowPhone ||
-            flowPhone === 'all' ||
-            flowPhone === phoneNumberId ||
-            flowPhone === matchedPhoneNum ||
-            flowPhone === `+${matchedPhoneNum}` ||
-            cleanFlowPhone === matchedPhoneNum ||
-            cleanFlowPhone === phoneNumberId ||
-            (cleanDisplayPhone && cleanDisplayPhone === matchedPhoneNum);
-
-          if (isPhoneMatch) {
-            activeFlows.push({ id: d.id, ...f, orgId: targetOrgId });
+            if (isPhoneMatch) {
+              activeFlows.push(f);
+            }
           }
         }
-      });
 
       const upperText = textBody.trim().toUpperCase();
       const cleanSearchText = textBody.trim().toLowerCase();
@@ -3622,12 +3710,23 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
               if (targetStep.mediaFileName?.trim()) botMsgData.mediaFileName = targetStep.mediaFileName.trim();
               if (targetStep.buttons && Array.isArray(targetStep.buttons)) botMsgData.buttons = targetStep.buttons;
 
-              await setDoc(doc(serverDb, `organizations/${targetOrgId}/messages`, botMsgId), botMsgData);
-
-              await updateDoc(convRef, {
-                lastMessage: targetStep.body || 'Chatbot Response',
-                lastMessageAt: botNow,
-              });
+              await Promise.allSettled([
+                setDoc(doc(serverDb, `organizations/${targetOrgId}/messages`, botMsgId), botMsgData),
+                setDoc(
+                  convRef,
+                  {
+                    id: convId,
+                    contactId: cleanPhone,
+                    contactPhone: `+${cleanPhone}`,
+                    contactName: senderName,
+                    whatsAppAccountId: matchedAccount?.id || phoneNumberId,
+                    lastMessage: targetStep.body || 'Chatbot Response',
+                    lastMessageAt: botNow,
+                    status: 'open',
+                  },
+                  { merge: true }
+                ),
+              ]);
 
               addWebhookLog({
                 event: 'Chatbot Reply Sent',
@@ -3658,6 +3757,7 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
               details: `Network error: ${sendErr?.message || 'Failed to connect to Meta API'}`,
               status: 'error',
             });
+            }
           }
         }
       }
@@ -3670,9 +3770,12 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
           status: 'warning',
         });
       }
+      })();
+
+      // Wait for both Chatbot Fast Track & Inbox/Analytics/CRM Track to complete safely (zero data loss)
+      await Promise.allSettled([chatbotFastTrack, inboxAndAnalyticsTrack]);
     }
-  }
-} catch (err: any) {
+  } catch (err: any) {
     console.error('[Webhook] Error processing incoming WhatsApp webhook:', err);
   }
 }
@@ -4152,32 +4255,15 @@ export async function handleWebhookPost(req: Request, res: Response) {
     return res.status(200).send('EVENT_RECEIVED'); // Always respond with 200 so Meta doesn't error
   }
 
+  // Run incoming customer messages (Chatbot Fast Track) concurrently with status updates so statuses never block chatbot replies
+  const webhookTasks: Promise<any>[] = [];
+
   for (const item of valuesToProcess) {
     const value = item.value;
     const field = item.field;
     if (!value) continue;
 
-    // 1. Handle incoming message statuses (sent, delivered, read, failed)
-    if (value.statuses && Array.isArray(value.statuses)) {
-      for (const statusObj of value.statuses) {
-        addWebhookLog({
-          event: `Status: ${(statusObj.status || '').toUpperCase()}`,
-          origin: 'WhatsApp Message Status',
-          details: `Meta ID: ${statusObj.id} - Status: ${statusObj.status} - Recipient: ${statusObj.recipient_id}`,
-          status: statusObj.status === 'failed' ? 'error' : 'success',
-          rawPayload: statusObj,
-        });
-
-        // Process status update into Firestore and Campaign Analytics
-        try {
-          await processIncomingWhatsAppStatusUpdate(statusObj, value.metadata);
-        } catch (err) {
-          console.error('[Webhook] Failed to process status update:', err);
-        }
-      }
-    }
-
-    // 2. Handle incoming WhatsApp customer messages
+    // 1. Prioritize incoming WhatsApp customer messages first
     if (value.messages && Array.isArray(value.messages)) {
       for (const msg of value.messages) {
         const contactInfo = value.contacts?.[0] || {};
@@ -4199,17 +4285,37 @@ export async function handleWebhookPost(req: Request, res: Response) {
         });
       }
 
-      // Process real incoming WhatsApp messages into Firestore Inbox & run Bot
-      try {
-        await processIncomingWhatsAppWebhookPayload(value);
-      } catch (err: any) {
-        console.error('[Webhook] Failed to process incoming WhatsApp messages:', err);
+      // Process real incoming WhatsApp messages into Chatbot Fast Track + Firestore Inbox concurrently
+      webhookTasks.push(
+        processIncomingWhatsAppWebhookPayload(value).catch((err: any) => {
+          console.error('[Webhook] Failed to process incoming WhatsApp messages:', err);
+          addWebhookLog({
+            event: 'Chatbot Processing Exception',
+            origin: 'Webhook Engine',
+            details: `Error processing incoming message: ${err?.message || String(err)}`,
+            status: 'error',
+          });
+        })
+      );
+    }
+
+    // 2. Handle incoming message statuses (sent, delivered, read, failed) concurrently
+    if (value.statuses && Array.isArray(value.statuses)) {
+      for (const statusObj of value.statuses) {
         addWebhookLog({
-          event: 'Chatbot Processing Exception',
-          origin: 'Webhook Engine',
-          details: `Error processing incoming message: ${err?.message || String(err)}`,
-          status: 'error',
+          event: `Status: ${(statusObj.status || '').toUpperCase()}`,
+          origin: 'WhatsApp Message Status',
+          details: `Meta ID: ${statusObj.id} - Status: ${statusObj.status} - Recipient: ${statusObj.recipient_id}`,
+          status: statusObj.status === 'failed' ? 'error' : 'success',
+          rawPayload: statusObj,
         });
+
+        // Process status update into Firestore and Campaign Analytics concurrently
+        webhookTasks.push(
+          processIncomingWhatsAppStatusUpdate(statusObj, value.metadata).catch((err) => {
+            console.error('[Webhook] Failed to process status update:', err);
+          })
+        );
       }
     }
 
@@ -4227,6 +4333,10 @@ export async function handleWebhookPost(req: Request, res: Response) {
         rawPayload: value,
       });
     }
+  }
+
+  if (webhookTasks.length > 0) {
+    await Promise.allSettled(webhookTasks);
   }
 
   return res.status(200).send('EVENT_RECEIVED');
