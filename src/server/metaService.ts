@@ -3676,10 +3676,50 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
               }
             }
 
+            const resolveFlowInitialSteps = (f: any): any[] => {
+              const allSteps: any[] = Array.isArray(f.steps) ? f.steps : [];
+              const stepById = new Map<string, any>(allSteps.map((s: any) => [s.id, s]));
+              const seedIds: string[] =
+                Array.isArray(f.initialStepIds) && f.initialStepIds.length > 0
+                  ? f.initialStepIds
+                  : f.initialStepId
+                  ? [f.initialStepId]
+                  : allSteps[0]?.id
+                  ? [allSteps[0].id]
+                  : [];
+
+              const resolved: any[] = [];
+              const visited = new Set<string>();
+              const queue = [...seedIds];
+              while (queue.length > 0 && resolved.length < 15) {
+                const nextId = queue.shift()!;
+                if (!nextId || visited.has(nextId)) continue;
+                const st = stepById.get(nextId);
+                if (!st) continue;
+                visited.add(nextId);
+                resolved.push(st);
+                // Also follow chained autoNextStepIds on non-interactive steps (e.g. Media -> Media -> Text)
+                if (st.type !== 'interactive_button' && st.type !== 'interactive_list') {
+                  const autoIds: string[] =
+                    Array.isArray(st.autoNextStepIds) && st.autoNextStepIds.length > 0
+                      ? st.autoNextStepIds
+                      : st.autoNextStepId
+                      ? [st.autoNextStepId]
+                      : [];
+                  for (const aid of autoIds) {
+                    if (aid && !visited.has(aid)) queue.push(aid);
+                  }
+                }
+              }
+              if (resolved.length === 0 && allSteps[0]) {
+                resolved.push(allSteps[0]);
+              }
+              return resolved;
+            };
+
             if (condition === 'anything_else') {
               matchedFlow = flow;
-              const initStep = flow.steps?.find((s: any) => s.id === flow.initialStepId) || flow.steps?.[0];
-              if (initStep) targetSteps = [initStep];
+              targetSteps = resolveFlowInitialSteps(flow);
               break;
             }
 
@@ -3729,12 +3769,38 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
 
             if (isMatch) {
               matchedFlow = flow;
-              const initStep = flow.steps?.find((s: any) => s.id === flow.initialStepId) || flow.steps?.[0];
-              if (initStep) targetSteps = [initStep];
+              targetSteps = resolveFlowInitialSteps(flow);
               break;
             }
           }
         }
+      }
+
+      // Also expand any autoNextStepIds chains when matched via button click
+      if (matchedFlow && targetSteps.length > 0 && Array.isArray(matchedFlow.steps)) {
+        const stepById = new Map<string, any>(matchedFlow.steps.map((s: any) => [s.id, s]));
+        const expanded: any[] = [];
+        const visited = new Set<string>();
+        const queue = [...targetSteps];
+        while (queue.length > 0 && expanded.length < 15) {
+          const st = queue.shift();
+          if (!st || !st.id || visited.has(st.id)) continue;
+          visited.add(st.id);
+          expanded.push(st);
+          if (st.type !== 'interactive_button' && st.type !== 'interactive_list') {
+            const autoIds: string[] =
+              Array.isArray(st.autoNextStepIds) && st.autoNextStepIds.length > 0
+                ? st.autoNextStepIds
+                : st.autoNextStepId
+                ? [st.autoNextStepId]
+                : [];
+            for (const aid of autoIds) {
+              const nextSt = stepById.get(aid);
+              if (nextSt && !visited.has(nextSt.id)) queue.push(nextSt);
+            }
+          }
+        }
+        targetSteps = expanded;
       }
 
       if (matchedFlow && targetSteps.length > 0) {

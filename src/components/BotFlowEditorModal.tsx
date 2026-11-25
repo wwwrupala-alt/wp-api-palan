@@ -128,6 +128,8 @@ export const BotFlowEditorModal: React.FC<BotFlowEditorModalProps> = ({
         triggerScope,
         keywords: finalKeywords,
         initialStepId: initialFlow?.initialStepId || 'step_1',
+        initialStepIds: initialFlow?.initialStepIds,
+        startNodePosition: initialFlow?.startNodePosition,
         steps: defaultSteps,
         enabled: initialFlow?.enabled ?? true,
         status: initialFlow?.status || ((initialFlow?.enabled ?? true) ? 'active' : 'paused'),

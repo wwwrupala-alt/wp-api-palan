@@ -51,30 +51,64 @@ export const BotFlowSimulator: React.FC<BotFlowSimulatorProps> = ({
   businessName = 'CloudWABA Business',
   displayPhoneNumber = '',
 }) => {
-  const [messages, setMessages] = useState<ChatMessage[]>(() => {
-    const firstStep = flow.steps.find((s) => s.id === flow.initialStepId) || flow.steps[0];
-    if (!firstStep) return [];
+  const resolveInitialSteps = () => {
+    const stepById = new Map(flow.steps.map((s) => [s.id, s]));
+    const seedIds =
+      Array.isArray(flow.initialStepIds) && flow.initialStepIds.length > 0
+        ? flow.initialStepIds
+        : flow.initialStepId
+        ? [flow.initialStepId]
+        : flow.steps[0]?.id
+        ? [flow.steps[0].id]
+        : [];
+    const result: typeof flow.steps = [];
+    const visited = new Set<string>();
+    const queue = [...seedIds];
+    while (queue.length > 0 && result.length < 15) {
+      const id = queue.shift()!;
+      if (!id || visited.has(id)) continue;
+      const st = stepById.get(id);
+      if (!st) continue;
+      visited.add(id);
+      result.push(st);
+      if (st.type !== 'interactive_button' && st.type !== 'interactive_list') {
+        const autoIds =
+          Array.isArray(st.autoNextStepIds) && st.autoNextStepIds.length > 0
+            ? st.autoNextStepIds
+            : st.autoNextStepId
+            ? [st.autoNextStepId]
+            : [];
+        for (const aid of autoIds) {
+          if (aid && !visited.has(aid)) queue.push(aid);
+        }
+      }
+    }
+    if (result.length === 0 && flow.steps[0]) result.push(flow.steps[0]);
+    return result;
+  };
 
-    return [
-      {
-        id: `sim_${Date.now()}`,
-        sender: 'bot',
-        type: firstStep.type,
-        body: firstStep.body,
-        headerType: firstStep.headerType,
-        headerText: firstStep.headerText,
-        headerMediaUrl: firstStep.headerMediaUrl,
-        footer: firstStep.footer,
-        buttons: firstStep.buttons,
-        listButtonText: firstStep.listButtonText,
-        listSections: firstStep.listSections,
-        mediaType: firstStep.mediaType,
-        mediaUrl: firstStep.mediaUrl,
-        mediaCaption: firstStep.mediaCaption,
-        mediaFileName: firstStep.mediaFileName,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      },
-    ];
+  const mapStepToChatMsg = (step: typeof flow.steps[number], idx: number): ChatMessage => ({
+    id: `sim_${Date.now()}_${idx}_${step.id}`,
+    sender: 'bot',
+    type: step.type,
+    body: step.body,
+    headerType: step.headerType,
+    headerText: step.headerText,
+    headerMediaUrl: step.headerMediaUrl,
+    footer: step.footer,
+    buttons: step.buttons,
+    listButtonText: step.listButtonText,
+    listSections: step.listSections,
+    mediaType: step.mediaType,
+    mediaUrl: step.mediaUrl,
+    mediaCaption: step.mediaCaption,
+    mediaFileName: step.mediaFileName,
+    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+  });
+
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    const initialSteps = resolveInitialSteps();
+    return initialSteps.map((st, idx) => mapStepToChatMsg(st, idx));
   });
 
   const [inputText, setInputText] = useState('');
@@ -82,36 +116,12 @@ export const BotFlowSimulator: React.FC<BotFlowSimulatorProps> = ({
   const [activeListMenu, setActiveListMenu] = useState<string | null>(null);
 
   const resetSimulator = () => {
-    const firstStep = flow.steps.find((s) => s.id === flow.initialStepId) || flow.steps[0];
-    const initialId = firstStep?.id || flow.initialStepId || '';
+    const initialSteps = resolveInitialSteps();
+    const initialId = initialSteps[0]?.id || flow.initialStepId || '';
     setActiveStepId(initialId);
     setActiveListMenu(null);
     setInputText('');
-
-    if (firstStep) {
-      setMessages([
-        {
-          id: `sim_${Date.now()}`,
-          sender: 'bot',
-          type: firstStep.type,
-          body: firstStep.body,
-          headerType: firstStep.headerType,
-          headerText: firstStep.headerText,
-          headerMediaUrl: firstStep.headerMediaUrl,
-          footer: firstStep.footer,
-          buttons: firstStep.buttons,
-          listButtonText: firstStep.listButtonText,
-          listSections: firstStep.listSections,
-          mediaType: firstStep.mediaType,
-          mediaUrl: firstStep.mediaUrl,
-          mediaCaption: firstStep.mediaCaption,
-          mediaFileName: firstStep.mediaFileName,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        },
-      ]);
-    } else {
-      setMessages([]);
-    }
+    setMessages(initialSteps.map((st, idx) => mapStepToChatMsg(st, idx)));
   };
 
   useEffect(() => {
@@ -256,30 +266,13 @@ export const BotFlowSimulator: React.FC<BotFlowSimulatorProps> = ({
     );
 
     if (isKeyword) {
-      const firstStep = flow.steps.find((s) => s.id === flow.initialStepId) || flow.steps[0];
-      if (firstStep) {
-        setActiveStepId(firstStep.id);
+      const initialSteps = resolveInitialSteps();
+      if (initialSteps.length > 0) {
+        setActiveStepId(initialSteps[0].id);
         setTimeout(() => {
           setMessages((prev) => [
             ...prev,
-            {
-              id: `sim_${Date.now()}`,
-              sender: 'bot',
-              type: firstStep.type,
-              body: firstStep.body,
-              headerType: firstStep.headerType,
-              headerText: firstStep.headerText,
-              headerMediaUrl: firstStep.headerMediaUrl,
-              footer: firstStep.footer,
-              buttons: firstStep.buttons,
-              listButtonText: firstStep.listButtonText,
-              listSections: firstStep.listSections,
-              mediaType: firstStep.mediaType,
-              mediaUrl: firstStep.mediaUrl,
-              mediaCaption: firstStep.mediaCaption,
-              mediaFileName: firstStep.mediaFileName,
-              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            },
+            ...initialSteps.map((st, idx) => mapStepToChatMsg(st, idx)),
           ]);
         }, 400);
         return;

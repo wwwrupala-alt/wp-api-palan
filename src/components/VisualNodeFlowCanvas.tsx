@@ -182,21 +182,38 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
     if (initialFlow.steps && initialFlow.steps.length > 0) {
       const mappedNodes: VisualNode[] = [];
 
-      // 1. Always create a Start Trigger node
+      // 1. Always create a Start Trigger node (preserving ALL multi-node connections!)
+      const validStepIds = new Set(initialFlow.steps.map((s) => s.id));
+      const initialIdsRaw =
+        Array.isArray(initialFlow.initialStepIds) && initialFlow.initialStepIds.length > 0
+          ? initialFlow.initialStepIds.filter((id) => validStepIds.has(id))
+          : initialFlow.initialStepId && validStepIds.has(initialFlow.initialStepId)
+          ? [initialFlow.initialStepId]
+          : initialFlow.steps[0]?.id
+          ? [initialFlow.steps[0].id]
+          : [];
+
       mappedNodes.push({
         id: 'node_start',
         type: 'start',
         title: 'Start Trigger',
         body: 'Tap below to add or edit event action.',
-        x: 100,
-        y: 200,
-        targetNodeId: initialFlow.initialStepId || initialFlow.steps[0]?.id,
+        x: initialFlow.startNodePosition?.x ?? 100,
+        y: initialFlow.startNodePosition?.y ?? 200,
+        targetNodeId: initialIdsRaw[0],
+        targetNodeIds: initialIdsRaw,
       });
 
       // 2. Map steps
       initialFlow.steps.forEach((st, idx) => {
         const col = Math.floor(idx / 2) + 1;
         const row = idx % 2;
+        const stepAutoTargets =
+          Array.isArray(st.autoNextStepIds) && st.autoNextStepIds.length > 0
+            ? st.autoNextStepIds.filter((id) => validStepIds.has(id))
+            : st.autoNextStepId && validStepIds.has(st.autoNextStepId)
+            ? [st.autoNextStepId]
+            : [];
         mappedNodes.push({
           id: st.id,
           type:
@@ -209,8 +226,8 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
               : 'message',
           title: st.title || `Step ${idx + 1}`,
           body: st.body || '',
-          x: 100 + col * 360,
-          y: 140 + row * 240,
+          x: st.position?.x ?? 100 + col * 360,
+          y: st.position?.y ?? 140 + row * 240,
           headerText: st.headerText,
           footer: st.footer,
           buttons: st.buttons?.map((b) => ({
@@ -222,8 +239,8 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
           mediaType: st.mediaType || 'document',
           mediaUrl: st.mediaUrl,
           mediaFileName: st.mediaFileName,
-          targetNodeId: st.autoNextStepId,
-          targetNodeIds: st.autoNextStepIds || (st.autoNextStepId ? [st.autoNextStepId] : []),
+          targetNodeId: stepAutoTargets[0],
+          targetNodeIds: stepAutoTargets,
         });
       });
 
@@ -842,6 +859,7 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
       y: source.y + 35,
       buttons: clonedButtons,
       targetNodeId: undefined,
+      targetNodeIds: [],
     };
 
     setNodes((prev) => [...prev, newNode]);
@@ -861,49 +879,73 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
   const handleSaveAndDeploy = async () => {
     setSaving(true);
     try {
-      // 1. Find start node and its initial target
+      // 1. Find start node and ALL its connected initial targets
       const startNode = nodes.find((n) => n.type === 'start');
-      const initialStepId = startNode?.targetNodeId || nodes.find((n) => n.id !== 'node_start')?.id || 'step_1';
+      const existingStepIds = new Set(nodes.filter((n) => n.type !== 'start').map((n) => n.id));
+      const startTargets = (
+        startNode?.targetNodeIds && startNode.targetNodeIds.length > 0
+          ? startNode.targetNodeIds
+          : startNode?.targetNodeId
+          ? [startNode.targetNodeId]
+          : []
+      ).filter((id) => existingStepIds.has(id));
+      const fallbackFirstId = nodes.find((n) => n.id !== 'node_start')?.id || 'step_1';
+      const initialStepIds = startTargets.length > 0 ? startTargets : [fallbackFirstId];
+      const initialStepId = initialStepIds[0];
 
       // 2. Map visual nodes back to BotStep[]
       const steps: BotStep[] = nodes
         .filter((n) => n.type !== 'start')
-        .map((n) => ({
-          id: n.id,
-          title: n.title,
-          type:
-            n.type === 'question_button'
-              ? 'interactive_button'
-              : n.type === 'media'
-              ? 'media'
-              : n.type === 'agent'
-              ? 'agent_transfer'
-              : 'text',
-          headerType: n.headerText ? 'text' : 'none',
-          headerText: n.headerText,
-          body: n.body,
-          footer: n.footer,
-          buttons: n.buttons?.map((b) => {
-            const targets = b.targetNodeIds || (b.targetNodeId ? [b.targetNodeId] : []);
-            return {
-              id: b.id,
-              title: b.title,
-              action: targets.length > 0 ? 'next_step' : 'none',
-              targetStepId: targets[0],
-              targetStepIds: targets,
-            };
-          }),
-          mediaType: n.mediaType,
-          mediaUrl: n.mediaUrl,
-          mediaFileName: n.mediaFileName,
-          autoNextStepId: (n.targetNodeIds || (n.targetNodeId ? [n.targetNodeId] : []))[0],
-          autoNextStepIds: n.targetNodeIds || (n.targetNodeId ? [n.targetNodeId] : []),
-        }));
+        .map((n) => {
+          const nodeAutoTargets = (
+            n.targetNodeIds && n.targetNodeIds.length > 0
+              ? n.targetNodeIds
+              : n.targetNodeId
+              ? [n.targetNodeId]
+              : []
+          ).filter((id) => existingStepIds.has(id));
+          return {
+            id: n.id,
+            title: n.title,
+            type:
+              n.type === 'question_button'
+                ? 'interactive_button'
+                : n.type === 'media'
+                ? 'media'
+                : n.type === 'agent'
+                ? 'agent_transfer'
+                : 'text',
+            headerType: n.headerText ? 'text' : 'none',
+            headerText: n.headerText,
+            body: n.body,
+            footer: n.footer,
+            buttons: n.buttons?.map((b) => {
+              const targets = (b.targetNodeIds || (b.targetNodeId ? [b.targetNodeId] : [])).filter((id) =>
+                existingStepIds.has(id)
+              );
+              return {
+                id: b.id,
+                title: b.title,
+                action: targets.length > 0 ? 'next_step' : 'none',
+                targetStepId: targets[0],
+                targetStepIds: targets,
+              };
+            }),
+            mediaType: n.mediaType,
+            mediaUrl: n.mediaUrl,
+            mediaFileName: n.mediaFileName,
+            autoNextStepId: nodeAutoTargets[0],
+            autoNextStepIds: nodeAutoTargets,
+            position: { x: Math.round(n.x), y: Math.round(n.y) },
+          };
+        });
 
       const updatedFlow: BotFlow = {
         ...initialFlow,
         name: flowName.trim(),
         initialStepId,
+        initialStepIds,
+        startNodePosition: startNode ? { x: Math.round(startNode.x), y: Math.round(startNode.y) } : undefined,
         steps,
         enabled: isLive,
         isFinal: initialFlow.isFinal ?? true,
@@ -999,10 +1041,17 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
               onClick={() => {
                 if (onTestInSimulator) {
                   const startNode = nodes.find((n) => n.type === 'start');
-                  const initialStepId =
-                    startNode?.targetNodeId ||
-                    nodes.find((n) => n.id !== 'node_start')?.id ||
-                    'step_1';
+                  const existingIds = new Set(nodes.filter((n) => n.type !== 'start').map((n) => n.id));
+                  const startTargets = (
+                    startNode?.targetNodeIds && startNode.targetNodeIds.length > 0
+                      ? startNode.targetNodeIds
+                      : startNode?.targetNodeId
+                      ? [startNode.targetNodeId]
+                      : []
+                  ).filter((id) => existingIds.has(id));
+                  const fallbackId = nodes.find((n) => n.id !== 'node_start')?.id || 'step_1';
+                  const initialStepIds = startTargets.length > 0 ? startTargets : [fallbackId];
+                  const initialStepId = initialStepIds[0];
                   const mappedSteps: BotStep[] = nodes
                     .filter((n) => n.type !== 'start')
                     .map((n) => ({
@@ -1035,12 +1084,14 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
                       mediaFileName: n.mediaFileName,
                       autoNextStepId: (n.targetNodeIds || (n.targetNodeId ? [n.targetNodeId] : []))[0],
                       autoNextStepIds: n.targetNodeIds || (n.targetNodeId ? [n.targetNodeId] : []),
+                      position: { x: Math.round(n.x), y: Math.round(n.y) },
                     }));
 
                   onTestInSimulator({
                     ...initialFlow,
                     name: flowName,
                     initialStepId,
+                    initialStepIds,
                     steps: mappedSteps,
                   });
                 }

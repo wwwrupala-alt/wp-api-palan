@@ -585,6 +585,8 @@ export interface BotStep {
   // Fallback / Auto-delay
   autoNextStepId?: string;
   autoNextStepIds?: string[];
+  // Visual canvas node coordinates
+  position?: { x: number; y: number };
 }
 
 export type TriggerCondition =
@@ -612,6 +614,8 @@ export interface BotFlow {
   triggerScope?: TriggerScope;
   keywords: string[]; // e.g. ['HI', 'HELLO', 'MENU', 'START']
   initialStepId: string;
+  initialStepIds?: string[];
+  startNodePosition?: { x: number; y: number };
   steps: BotStep[];
   enabled: boolean;
   totalTriggeredCount?: number;
