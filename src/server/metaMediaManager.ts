@@ -150,8 +150,15 @@ export async function resolveMetaMediaObject(
     !trimmed.includes('scontent.whatsapp.net') &&
     !trimmed.includes('lookaside.fbsbx.com')
   ) {
-    const filename = path.basename(trimmed.split('?')[0]) || undefined;
-    return { link: trimmed, filename };
+    let resolvedLink = trimmed;
+    const driveFileMatch =
+      trimmed.match(/^https:\/\/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]{10,120})/i) ||
+      trimmed.match(/^https:\/\/drive\.google\.com\/open\?id=([a-zA-Z0-9_-]{10,120})/i);
+    if (driveFileMatch?.[1]) {
+      resolvedLink = `https://drive.google.com/uc?export=download&id=${driveFileMatch[1]}`;
+    }
+    const filename = path.basename(resolvedLink.split('?')[0]) || undefined;
+    return { link: resolvedLink, filename };
   }
 
   // 4. Local file path or relative URL (e.g. "/uploads/aa11_1791101223567.png" or "https://ais-dev-.../uploads/...")

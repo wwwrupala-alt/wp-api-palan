@@ -590,20 +590,34 @@ export const AutomationsPage: React.FC = () => {
       )}
 
       {/* FULL-SCREEN VISUAL NODE CANVAS MODAL (Exact match to Reference Image) */}
-      {canvasModalFlow && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/70 backdrop-blur-xs animate-fadeIn">
-          <div className="w-full h-full max-w-[98vw] max-h-[96vh] rounded-3xl overflow-hidden shadow-2xl relative flex flex-col">
-            <VisualNodeFlowCanvas
-              initialFlow={canvasModalFlow}
-              onSaveFlow={handleSaveBotFlow}
-              onTestInSimulator={(flow) => {
-                setTestingPhoneFlow(flow);
-              }}
-              onClose={() => setCanvasModalFlow(null)}
-            />
+      {canvasModalFlow && (() => {
+        const flowBoundAccount =
+          accounts.find(
+            (a) =>
+              canvasModalFlow.phoneNumberId &&
+              canvasModalFlow.phoneNumberId !== 'all' &&
+              (a.id === canvasModalFlow.phoneNumberId ||
+                a.phoneNumberId === canvasModalFlow.phoneNumberId)
+          ) ||
+          activeAccount ||
+          accounts[0];
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/70 backdrop-blur-xs animate-fadeIn">
+            <div className="w-full h-full max-w-[98vw] max-h-[96vh] rounded-3xl overflow-hidden shadow-2xl relative flex flex-col">
+              <VisualNodeFlowCanvas
+                initialFlow={canvasModalFlow}
+                whatsAppPhoneNumberId={flowBoundAccount?.phoneNumberId}
+                whatsAppAccessToken={flowBoundAccount?.customToken}
+                onSaveFlow={handleSaveBotFlow}
+                onTestInSimulator={(flow) => {
+                  setTestingPhoneFlow(flow);
+                }}
+                onClose={() => setCanvasModalFlow(null)}
+              />
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* LIVE WHATSAPP PHONE SIMULATOR MODAL (Exact Bot Preview & Pipeline View) */}
       {testingPhoneFlow && (

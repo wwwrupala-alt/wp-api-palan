@@ -49,7 +49,7 @@ async function parseJsonResponse<T = any>(res: Response, fallbackError: string):
         throw new Error('API server route not found (404). Please ensure the backend server is running and deployed properly.');
       }
       if (res.status === 413) {
-        throw new Error('Cloud Server Error 413 (Payload Too Large): File size server limit (4.5 MB) se bada hai. Image ko auto-optimize karke upload kiya ja raha hai.');
+        throw new Error('File size server request limit (4.5 MB) se bada hai. Large PDF (up to 100 MB) upload karne ke liye apna WhatsApp number select karein (Direct Meta Cloud upload) ya direct HTTPS / Google Drive PDF link paste karein.');
       }
       throw new Error(`Server returned status ${res.status}. Could not parse response as JSON.`);
     }
@@ -2166,7 +2166,8 @@ export async function compressImageIfNeeded(file: File): Promise<File> {
 export async function uploadMediaFile(
   file: File,
   customToken?: string,
-  phoneNumberId?: string
+  phoneNumberId?: string,
+  onProgress?: (percent: number) => void
 ): Promise<{
   success: boolean;
   filename: string;
@@ -2178,99 +2179,166 @@ export async function uploadMediaFile(
   headerHandle?: string;
   size: number;
   contentType: string;
+  uploadedVia?: 'meta_direct' | 'server';
 }> {
-  // 1. Direct Meta Cloud API Upload (Same Enterprise Architecture as Wati & Aisensy)
-  // Sends binary file directly from browser to Meta WhatsApp Cloud API without passing through web server limits.
-  // Supports up to 5 MB for images, 16 MB for videos, and 100 MB for documents at 100% original quality!
-  if (customToken && phoneNumberId && file.size <= 16 * 1024 * 1024) {
+  const lowerName = (file.name || '').toLowerCase();
+  const isImage = file.type.startsWith('image/') || /\.(png|jpe?g|webp)$/i.test(lowerName);
+  const isVideo = file.type.startsWith('video/') || /\.(mp4|3gp)$/i.test(lowerName);
+  const isAudio = file.type.startsWith('audio/') || /\.(mp3|ogg|aac|amr|m4a)$/i.test(lowerName);
+  const isDocument = !isImage && !isVideo && !isAudio;
+
+  // Official Meta WhatsApp Cloud API Media Size Limits:
+  // Image: 5 MB | Video / Audio: 16 MB | Document (PDF, DOC, XLS, PPT, TXT): 100 MB
+  const maxMetaBytes = isDocument
+    ? 100 * 1024 * 1024
+    : isVideo || isAudio
+    ? 16 * 1024 * 1024
+    : 5 * 1024 * 1024;
+  const maxMetaLabel = isDocument ? '100 MB' : isVideo || isAudio ? '16 MB' : '5 MB';
+
+  // For non-images, enforce Meta's official size cap upfront (images > 2.8MB are auto-compressed below)
+  if (!isImage && file.size > maxMetaBytes) {
+    throw new Error(
+      `File size (${(file.size / (1024 * 1024)).toFixed(1)} MB) Meta WhatsApp official limit (${maxMetaLabel}) se bada hai. Kripya ${maxMetaLabel} se kam size ki file upload karein.`
+    );
+  }
+
+  const effectiveMime =
+    file.type ||
+    (lowerName.endsWith('.pdf')
+      ? 'application/pdf'
+      : lowerName.endsWith('.mp4')
+      ? 'video/mp4'
+      : isImage
+      ? 'image/jpeg'
+      : 'application/octet-stream');
+
+  // 1. Direct Meta Cloud API Binary Upload (Bypasses Vercel 4.5 MB & Cloud Run 32 MB proxy limits!)
+  // Supports up to 5 MB for images, 16 MB for videos/audio, and 100 MB for PDF/documents directly from browser to Meta!
+  const cleanPhoneId = (phoneNumberId || '').trim();
+  const cleanToken = (customToken || '').trim();
+  let directMetaFailureReason = '';
+
+  if (cleanToken && /^\d+$/.test(cleanPhoneId) && file.size <= maxMetaBytes) {
     try {
       const formData = new FormData();
       formData.append('messaging_product', 'whatsapp');
       formData.append('file', file, file.name);
-      formData.append('type', file.type || 'image/jpeg');
+      formData.append('type', effectiveMime);
 
-      const metaRes = await fetch(`https://graph.facebook.com/v22.0/${phoneNumberId}/media`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${customToken}`,
-        },
-        body: formData,
+      const uploadUrl = `https://graph.facebook.com/v22.0/${cleanPhoneId}/media`;
+      const metaResult = await new Promise<{ ok: boolean; status: number; data: any }>((resolveXhr, rejectXhr) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', uploadUrl, true);
+        xhr.setRequestHeader('Authorization', `Bearer ${cleanToken}`);
+        xhr.upload.onprogress = (evt) => {
+          if (onProgress && evt.lengthComputable && evt.total > 0) {
+            onProgress(Math.min(99, Math.round((evt.loaded / evt.total) * 100)));
+          }
+        };
+        xhr.onload = () => {
+          let parsed: any = {};
+          try {
+            parsed = xhr.responseText ? JSON.parse(xhr.responseText) : {};
+          } catch {
+            parsed = {};
+          }
+          resolveXhr({ ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status, data: parsed });
+        };
+        xhr.onerror = () => rejectXhr(new Error('Network error while uploading directly to Meta WhatsApp Cloud.'));
+        xhr.onabort = () => rejectXhr(new Error('Media upload was cancelled.'));
+        xhr.send(formData);
       });
 
-      if (metaRes.ok) {
-        const metaData = await metaRes.json();
-        if (metaData && metaData.id) {
-          const localBlobUrl = URL.createObjectURL(file);
-          console.log('[DirectMetaUpload] Uploaded directly to Meta Cloud API. Media ID:', metaData.id);
+      if (metaResult.ok && metaResult.data?.id) {
+        const metaMediaId = String(metaResult.data.id);
+        if (onProgress) onProgress(100);
+        console.log('[DirectMetaUpload] Uploaded directly to Meta Cloud API. Media ID:', metaMediaId);
 
-          // Best-effort persist local copy on server (/uploads/...) so preview & clone work permanently even without blob URL
-          let durableUrl = '';
-          let durableFullUrl = '';
-          try {
-            const fileToPersist = file.type.startsWith('image/') ? await compressImageIfNeeded(file) : file;
-            if (fileToPersist.size <= 4 * 1024 * 1024) {
-              const base64: string = await new Promise((resolveB64, rejectB64) => {
-                const reader = new FileReader();
-                reader.onload = () => resolveB64(reader.result as string);
-                reader.onerror = () => rejectB64(new Error('read error'));
-                reader.readAsDataURL(fileToPersist);
-              });
-              const persistRes = await fetch('/api/media/upload', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  filename: fileToPersist.name,
-                  base64,
-                  contentType: fileToPersist.type,
-                  phoneNumberId,
-                  metaMediaId: String(metaData.id),
-                  skipMetaUpload: true,
-                }),
-              });
-              if (persistRes.ok) {
-                const persistData = await persistRes.json();
-                if (persistData?.url) durableUrl = persistData.url;
-                if (persistData?.fullUrl) durableFullUrl = persistData.fullUrl;
-              }
+        // Durable URL referencing Meta Media ID (never expires on tab reload like blob: URLs)
+        const metaProxyUrl = `/api/meta/media-proxy?mediaId=${encodeURIComponent(metaMediaId)}&phoneNumberId=${encodeURIComponent(cleanPhoneId)}`;
+
+        // Best-effort persist local copy on server (/uploads/...) ONLY for <= 3 MB files (safe under 4.5 MB Base64 gateway limit)
+        let durableUrl = '';
+        let durableFullUrl = '';
+        try {
+          const fileToPersist = isImage ? await compressImageIfNeeded(file) : file;
+          if (fileToPersist.size <= 3 * 1024 * 1024) {
+            const base64: string = await new Promise((resolveB64, rejectB64) => {
+              const reader = new FileReader();
+              reader.onload = () => resolveB64(reader.result as string);
+              reader.onerror = () => rejectB64(new Error('read error'));
+              reader.readAsDataURL(fileToPersist);
+            });
+            const persistRes = await fetch('/api/media/upload', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                filename: fileToPersist.name,
+                base64,
+                contentType: fileToPersist.type || effectiveMime,
+                phoneNumberId: cleanPhoneId,
+                metaMediaId,
+                skipMetaUpload: true,
+              }),
+            });
+            if (persistRes.ok) {
+              const persistData = await persistRes.json();
+              if (persistData?.url) durableUrl = persistData.url;
+              if (persistData?.fullUrl) durableFullUrl = persistData.fullUrl;
             }
-          } catch (persistErr) {
-            console.warn('[DirectMetaUpload] Persistent /uploads save notice:', persistErr);
           }
-
-          return {
-            success: true,
-            filename: file.name,
-            originalName: file.name,
-            url: durableUrl || localBlobUrl,
-            fullUrl: durableFullUrl || durableUrl || localBlobUrl,
-            id: metaData.id,
-            metaMediaId: metaData.id,
-            headerHandle: metaData.id,
-            size: file.size,
-            contentType: file.type,
-          };
+        } catch (persistErr) {
+          console.warn('[DirectMetaUpload] Persistent /uploads save notice:', persistErr);
         }
+
+        return {
+          success: true,
+          filename: file.name,
+          originalName: file.name,
+          url: durableUrl || metaProxyUrl,
+          fullUrl: durableFullUrl || durableUrl || metaProxyUrl,
+          id: metaMediaId,
+          metaMediaId,
+          headerHandle: metaMediaId,
+          size: file.size,
+          contentType: effectiveMime,
+          uploadedVia: 'meta_direct',
+        };
+      } else {
+        directMetaFailureReason =
+          metaResult.data?.error?.error_user_msg ||
+          metaResult.data?.error?.message ||
+          `Meta API status ${metaResult.status}`;
+        console.warn('[DirectMetaUpload] Meta API rejected direct upload:', directMetaFailureReason);
       }
-    } catch (metaErr) {
-      console.warn('[DirectMetaUpload] Direct upload notice, falling back to server route:', metaErr);
+    } catch (metaErr: any) {
+      directMetaFailureReason = metaErr?.message || 'Network error during direct Meta upload';
+      console.warn('[DirectMetaUpload] Direct upload notice, evaluating fallback:', directMetaFailureReason);
     }
   }
 
-  // 2. Server Fallback Route
-  // Check non-image files for Vercel 4.2 MB hard limit
-  if (!file.type.startsWith('image/') && file.size > 4.2 * 1024 * 1024) {
+  // 2. Server Fallback Route (safe up to 3.1 MB raw -> ~4.1 MB Base64 JSON under Vercel's 4.5 MB gateway cap)
+  const SERVER_SAFE_RAW_LIMIT = 3.1 * 1024 * 1024;
+  const processedFile = isImage ? await compressImageIfNeeded(file) : file;
+
+  if (processedFile.size > SERVER_SAFE_RAW_LIMIT) {
+    const sizeMb = (processedFile.size / (1024 * 1024)).toFixed(1);
+    if (directMetaFailureReason) {
+      throw new Error(
+        `Direct Meta Cloud Upload (${sizeMb} MB) failed: ${directMetaFailureReason}. Kripya Meta token verify karein ya "Advanced: Direct URL" me Google Drive / HTTPS PDF link paste karein.`
+      );
+    }
     throw new Error(
-      `File size (${(file.size / (1024 * 1024)).toFixed(1)} MB) cloud server limit (4.5 MB) se bada hai. Kripya 4 MB se kam size ki file upload karein ya direct URL option use karein.`
+      `File size (${sizeMb} MB) server direct limit (3 MB) se bada hai. Large PDF (up to 100 MB) direct upload karne ke liye pehle WhatsApp Business Account (active Meta token) connect/select karein, ya "Advanced: Direct URL" me direct HTTPS / Google Drive PDF link paste karein.`
     );
   }
-
-  // If image is larger than 2.8MB, optimize gently to prevent HTTP 413 while keeping 100% crisp sharpness
-  const processedFile = await compressImageIfNeeded(file);
 
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = async () => {
       try {
+        if (onProgress) onProgress(50);
         const base64 = reader.result as string;
         const res = await fetch('/api/media/upload', {
           method: 'POST',
@@ -2280,13 +2348,14 @@ export async function uploadMediaFile(
           body: JSON.stringify({
             filename: processedFile.name,
             base64,
-            contentType: processedFile.type,
-            customToken,
-            phoneNumberId,
+            contentType: processedFile.type || effectiveMime,
+            customToken: cleanToken || undefined,
+            phoneNumberId: cleanPhoneId || undefined,
           }),
         });
         const data = await parseJsonResponse(res, 'Failed to upload media file from device.');
-        resolve(data);
+        if (onProgress) onProgress(100);
+        resolve({ ...data, uploadedVia: 'server' });
       } catch (err) {
         reject(err);
       }

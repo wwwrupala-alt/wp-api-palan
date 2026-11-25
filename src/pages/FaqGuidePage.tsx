@@ -58,8 +58,8 @@ const QUICK_LIMITS: Array<{
   {
     area: 'Campaign & Template Media',
     item: 'PDF / Document Attachment',
-    limit: 'Max 25 MB',
-    details: 'PDF documents for brochures, catalogues & invoices',
+    limit: 'Up to 100 MB',
+    details: 'Meta official PDF limit via Direct Cloud Upload (5–15 MB recommended for fast mobile downloads)',
   },
   {
     area: 'Template Builder',
@@ -104,8 +104,8 @@ const FAQ_ITEMS: FaqItem[] = [
     bullets: [
       'Image (JPG, PNG, WEBP): Maximum 5 MB tak upload kar sakte hain.',
       'Video (MP4, 3GP): Maximum 16 MB tak support hota hai.',
-      'Document / Brochure (PDF): Maximum 25 MB tak upload kar sakte hain.',
-      'Best Practice: Fast delivery aur low customer data usage ke liye images ko 1–2 MB aur PDF catalogues ko 5–10 MB ke andar compress rakhna sabse best hota hai.',
+      'Document / Brochure (PDF): Direct Meta WhatsApp Cloud Upload se 100 MB tak PDF upload kar sakte hain.',
+      'Best Practice: Fast delivery aur low customer data usage ke liye images ko 1–2 MB aur PDF catalogues ko 5–15 MB ke andar compress rakhna sabse best hota hai.',
     ],
   },
   {

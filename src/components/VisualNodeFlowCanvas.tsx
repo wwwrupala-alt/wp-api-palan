@@ -35,6 +35,29 @@ import {
   Image as ImageIcon,
 } from 'lucide-react';
 import type { BotFlow, BotStep, BotButton } from '../types/index.ts';
+import { uploadMediaFile } from '../lib/services.ts';
+
+function isSafeMediaHref(url?: string): boolean {
+  if (!url) return false;
+  const trimmed = url.trim();
+  return (
+    trimmed.startsWith('https://') ||
+    trimmed.startsWith('http://') ||
+    trimmed.startsWith('/uploads/') ||
+    trimmed.startsWith('/api/meta/media-proxy')
+  );
+}
+
+function normalizeDirectMediaInput(raw: string): string {
+  const trimmed = raw.trim();
+  const driveMatch =
+    trimmed.match(/^https:\/\/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]{10,120})/i) ||
+    trimmed.match(/^https:\/\/drive\.google\.com\/open\?id=([a-zA-Z0-9_-]{10,120})/i);
+  if (driveMatch?.[1]) {
+    return `https://drive.google.com/uc?export=download&id=${driveMatch[1]}`;
+  }
+  return raw;
+}
 
 export interface VisualNode {
   id: string;
@@ -126,6 +149,8 @@ export const BUTTON_PALETTES: ButtonPalette[] = [
 
 interface VisualNodeFlowCanvasProps {
   initialFlow: BotFlow;
+  whatsAppPhoneNumberId?: string;
+  whatsAppAccessToken?: string;
   onSaveFlow: (flow: BotFlow) => Promise<void>;
   onTestInSimulator?: (flow: BotFlow) => void;
   onClose?: () => void;
@@ -133,6 +158,8 @@ interface VisualNodeFlowCanvasProps {
 
 export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
   initialFlow,
+  whatsAppPhoneNumberId,
+  whatsAppAccessToken,
   onSaveFlow,
   onTestInSimulator,
   onClose,
@@ -256,62 +283,46 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isUploadingMedia, setIsUploadingMedia] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
-  // File Upload Handler for PC Media Selection
+  // File Upload Handler for PC Media Selection (supports Direct Meta Cloud binary upload up to 100 MB PDF)
   const handleSelectMediaFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !editingNode) return;
 
     setIsUploadingMedia(true);
+    setUploadProgress(5);
     setUploadError(null);
 
     try {
-      const reader = new FileReader();
-      reader.onload = async () => {
-        try {
-          const base64 = reader.result as string;
-          const res = await fetch('/api/media/upload', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              filename: file.name,
-              base64,
-              contentType: file.type || 'application/pdf',
-            }),
-          });
+      const data = await uploadMediaFile(
+        file,
+        whatsAppAccessToken,
+        whatsAppPhoneNumberId,
+        (pct) => setUploadProgress(pct)
+      );
 
-          const data = await res.json();
-          if (!res.ok || data.error) {
-            throw new Error(data.error || 'Failed to upload media file');
-          }
+      if (!data?.success) {
+        throw new Error('Failed to upload media file');
+      }
 
-          const isImg = file.type.startsWith('image/');
-          const isVid = file.type.startsWith('video/');
-          const mediaType: 'image' | 'video' | 'document' = isImg ? 'image' : isVid ? 'video' : 'document';
+      const lowerName = file.name.toLowerCase();
+      const isImg = file.type.startsWith('image/') || /\.(png|jpe?g|webp)$/i.test(lowerName);
+      const isVid = file.type.startsWith('video/') || /\.(mp4|3gp)$/i.test(lowerName);
+      const mediaType: 'image' | 'video' | 'document' = isImg ? 'image' : isVid ? 'video' : 'document';
 
-          updateEditingNode({
-            mediaFileName: file.name,
-            mediaUrl: data.url || data.fullUrl,
-            mediaType,
-          });
-        } catch (uploadErr: any) {
-          setUploadError(uploadErr?.message || 'Upload error');
-        } finally {
-          setIsUploadingMedia(false);
-          if (fileInputRef.current) fileInputRef.current.value = '';
-        }
-      };
-      reader.onerror = () => {
-        setUploadError('Failed to read file from your computer');
-        setIsUploadingMedia(false);
-      };
-      reader.readAsDataURL(file);
-    } catch (err: any) {
-      setUploadError(err?.message || 'Error processing selected file');
+      updateEditingNode({
+        mediaFileName: file.name,
+        mediaUrl: data.url || data.fullUrl || data.metaMediaId || '',
+        mediaType,
+      });
+    } catch (uploadErr: any) {
+      setUploadError(uploadErr?.message || 'Upload error');
+    } finally {
       setIsUploadingMedia(false);
+      setUploadProgress(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -1646,10 +1657,16 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
                           {node.mediaUrl ? (
                             <div className="flex items-center justify-between text-[9px]">
                               <span className="px-1.5 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 font-bold">
-                                {node.mediaUrl.startsWith('/uploads/') ? 'PC File Ready ✓' : 'Link Attached'}
+                                {node.mediaUrl.includes('mediaId=') || /^\d+$/.test(node.mediaUrl.trim())
+                                  ? 'WhatsApp Cloud Ready ✓'
+                                  : node.mediaUrl.startsWith('/uploads/')
+                                  ? 'PC File Ready ✓'
+                                  : 'Link Attached'}
                               </span>
                               <span className="truncate max-w-[90px] text-neutral-400 font-mono">
-                                {node.mediaUrl.split('/').pop()}
+                                {node.mediaUrl.includes('mediaId=')
+                                  ? `ID: ${node.mediaUrl.match(/mediaId=(\d+)/)?.[1]?.slice(-6) || 'Meta'}`
+                                  : node.mediaUrl.split('/').pop()}
                               </span>
                             </div>
                           ) : (
@@ -2091,7 +2108,7 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
                 {/* Primary: Select File from PC Box */}
                 {!editingNode.mediaUrl ? (
                   <div
-                    onClick={() => fileInputRef.current?.click()}
+                    onClick={() => !isUploadingMedia && fileInputRef.current?.click()}
                     className="p-4 rounded-2xl border-2 border-dashed border-emerald-400/80 dark:border-emerald-600/60 bg-emerald-50/40 dark:bg-emerald-950/20 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition-all cursor-pointer flex flex-col items-center justify-center text-center space-y-2 group"
                   >
                     <div className="w-10 h-10 rounded-2xl bg-emerald-100 dark:bg-emerald-900/60 text-emerald-600 dark:text-emerald-300 flex items-center justify-center group-hover:scale-110 transition-transform">
@@ -2103,19 +2120,33 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
                     </div>
                     <div>
                       <p className="font-bold text-neutral-800 dark:text-neutral-200 text-xs">
-                        {isUploadingMedia ? 'Uploading from PC...' : 'Select File from PC (PDF, Image, Catalog)'}
+                        {isUploadingMedia
+                          ? `Uploading directly to WhatsApp Cloud... ${uploadProgress ?? 0}%`
+                          : 'Select File from PC (PDF, Image, Catalog)'}
                       </p>
                       <p className="text-[11px] text-neutral-500 mt-0.5">
-                        Click to browse PDF documents, catalogs, or images from your computer
+                        PDF / Docs up to 100 MB · Video up to 16 MB · Image up to 5 MB
                       </p>
                     </div>
+                    {isUploadingMedia && uploadProgress !== null && (
+                      <div className="w-full max-w-[220px] h-1.5 rounded-full bg-emerald-200/70 dark:bg-emerald-900 overflow-hidden">
+                        <div
+                          className="h-full bg-emerald-600 transition-all duration-200"
+                          style={{ width: `${Math.max(5, uploadProgress)}%` }}
+                        />
+                      </div>
+                    )}
                     <button
                       type="button"
                       disabled={isUploadingMedia}
-                      className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] flex items-center space-x-1.5 shadow-xs cursor-pointer"
+                      className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-bold text-[11px] flex items-center space-x-1.5 shadow-xs cursor-pointer"
                     >
                       <Paperclip className="w-3.5 h-3.5" />
-                      <span>{isUploadingMedia ? 'Uploading...' : 'Choose File from PC'}</span>
+                      <span>
+                        {isUploadingMedia
+                          ? `Uploading ${uploadProgress ?? 0}%...`
+                          : 'Choose File from PC'}
+                      </span>
                     </button>
                   </div>
                 ) : (
@@ -2136,7 +2167,11 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
                           </p>
                           <div className="flex items-center space-x-1.5 text-[10px] text-emerald-700 dark:text-emerald-300 font-semibold">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-                            <span>File ready to send via WhatsApp</span>
+                            <span>
+                              {editingNode.mediaUrl.includes('mediaId=') || /^\d+$/.test(editingNode.mediaUrl.trim())
+                                ? 'Uploaded directly to Meta WhatsApp Cloud'
+                                : 'File ready to send via WhatsApp'}
+                            </span>
                           </div>
                         </div>
                       </div>
@@ -2154,7 +2189,7 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
                     </div>
 
                     {/* Image Thumbnail Preview if image */}
-                    {editingNode.mediaType === 'image' && editingNode.mediaUrl && (
+                    {editingNode.mediaType === 'image' && isSafeMediaHref(editingNode.mediaUrl) && (
                       <div className="rounded-xl overflow-hidden border border-neutral-200 dark:border-neutral-700 max-h-36 bg-neutral-100 flex items-center justify-center">
                         <img
                           src={editingNode.mediaUrl}
@@ -2167,17 +2202,28 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
                       </div>
                     )}
 
+                    {(editingNode.mediaUrl.includes('mediaId=') || /^\d+$/.test(editingNode.mediaUrl.trim())) && (
+                      <p className="text-[10px] text-neutral-600 dark:text-neutral-400 bg-white/70 dark:bg-neutral-900/50 rounded-lg px-2.5 py-1.5 border border-emerald-200/70 dark:border-emerald-800/50">
+                        Meta Cloud Media ID stays active for 30 days on this WhatsApp number. For permanent catalogues, you can also paste a direct HTTPS / Google Drive link below.
+                      </p>
+                    )}
+
                     <div className="flex items-center justify-between pt-1 border-t border-emerald-200/60 dark:border-emerald-800/60 text-[11px]">
                       <button
                         type="button"
+                        disabled={isUploadingMedia}
                         onClick={() => fileInputRef.current?.click()}
                         className="text-emerald-700 dark:text-emerald-300 hover:underline font-bold cursor-pointer flex items-center space-x-1"
                       >
                         <UploadCloud className="w-3.5 h-3.5" />
-                        <span>Change File from PC</span>
+                        <span>
+                          {isUploadingMedia
+                            ? `Uploading ${uploadProgress ?? 0}%...`
+                            : 'Change File from PC'}
+                        </span>
                       </button>
 
-                      {editingNode.mediaUrl && (
+                      {isSafeMediaHref(editingNode.mediaUrl) && !editingNode.mediaUrl.includes('mediaId=') && (
                         <a
                           href={editingNode.mediaUrl}
                           target="_blank"
@@ -2209,16 +2255,21 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
 
                   <details className="text-[11px] text-neutral-500 pt-1">
                     <summary className="cursor-pointer hover:text-emerald-600 font-semibold select-none">
-                      ⚙ Advanced: Edit direct URL manually
+                      ⚙ Advanced: Edit direct URL manually (HTTPS / Google Drive)
                     </summary>
                     <div className="pt-1.5 space-y-1">
                       <input
                         type="text"
                         value={editingNode.mediaUrl || ''}
-                        onChange={(e) => updateEditingNode({ mediaUrl: e.target.value })}
-                        placeholder="https://example.com/catalog.pdf or /uploads/..."
+                        onChange={(e) =>
+                          updateEditingNode({ mediaUrl: normalizeDirectMediaInput(e.target.value) })
+                        }
+                        placeholder="https://example.com/catalog.pdf or Google Drive share link"
                         className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white font-mono text-[10px]"
                       />
+                      <p className="text-[10px] text-neutral-400">
+                        Google Drive links (&ldquo;Anyone with the link&rdquo;) are automatically converted to direct PDF download URLs for WhatsApp.
+                      </p>
                     </div>
                   </details>
                 </div>
