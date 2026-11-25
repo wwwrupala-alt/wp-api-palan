@@ -87,28 +87,54 @@ export const BotFlowSimulator: React.FC<BotFlowSimulatorProps> = ({
     return result;
   };
 
-  const mapStepToChatMsg = (step: typeof flow.steps[number], idx: number): ChatMessage => ({
-    id: `sim_${Date.now()}_${idx}_${step.id}`,
-    sender: 'bot',
-    type: step.type,
-    body: step.body,
-    headerType: step.headerType,
-    headerText: step.headerText,
-    headerMediaUrl: step.headerMediaUrl,
-    footer: step.footer,
-    buttons: step.buttons,
-    listButtonText: step.listButtonText,
-    listSections: step.listSections,
-    mediaType: step.mediaType,
-    mediaUrl: step.mediaUrl,
-    mediaCaption: step.mediaCaption,
-    mediaFileName: step.mediaFileName,
-    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-  });
+  const mapStepsToChatMsgs = (stepsToRender: BotStep[]): ChatMessage[] => {
+    const out: ChatMessage[] = [];
+    const nowLabel = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    stepsToRender.forEach((step, idx) => {
+      if (step.type === 'multi_media' && Array.isArray(step.mediaItems) && step.mediaItems.length > 0) {
+        step.mediaItems
+          .filter((it) => it && it.mediaUrl)
+          .slice(0, 10)
+          .forEach((it, mIdx) => {
+            out.push({
+              id: `sim_${Date.now()}_${idx}_${mIdx}_${it.id}`,
+              sender: 'bot',
+              type: 'media',
+              body: it.caption || (mIdx === 0 ? step.body : '') || '',
+              mediaType: it.mediaType || 'document',
+              mediaUrl: it.mediaUrl,
+              mediaCaption: it.caption,
+              mediaFileName: it.mediaFileName || 'Catalog.pdf',
+              timestamp: nowLabel,
+            });
+          });
+      } else {
+        out.push({
+          id: `sim_${Date.now()}_${idx}_${step.id}`,
+          sender: 'bot',
+          type: step.type === 'multi_media' ? 'media' : step.type,
+          body: step.body,
+          headerType: step.headerType,
+          headerText: step.headerText,
+          headerMediaUrl: step.headerMediaUrl,
+          footer: step.footer,
+          buttons: step.buttons,
+          listButtonText: step.listButtonText,
+          listSections: step.listSections,
+          mediaType: step.mediaType,
+          mediaUrl: step.mediaUrl,
+          mediaCaption: step.mediaCaption,
+          mediaFileName: step.mediaFileName,
+          timestamp: nowLabel,
+        });
+      }
+    });
+    return out;
+  };
 
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     const initialSteps = resolveInitialSteps();
-    return initialSteps.map((st, idx) => mapStepToChatMsg(st, idx));
+    return mapStepsToChatMsgs(initialSteps);
   });
 
   const [inputText, setInputText] = useState('');
@@ -121,7 +147,7 @@ export const BotFlowSimulator: React.FC<BotFlowSimulatorProps> = ({
     setActiveStepId(initialId);
     setActiveListMenu(null);
     setInputText('');
-    setMessages(initialSteps.map((st, idx) => mapStepToChatMsg(st, idx)));
+    setMessages(mapStepsToChatMsgs(initialSteps));
   };
 
   useEffect(() => {
@@ -180,31 +206,11 @@ export const BotFlowSimulator: React.FC<BotFlowSimulatorProps> = ({
 
       if (nextSteps.length > 0) {
         setActiveStepId(nextSteps[nextSteps.length - 1].id);
-
-        nextSteps.forEach((nextStep, sIdx) => {
+        const renderedMsgs = mapStepsToChatMsgs(nextSteps);
+        renderedMsgs.forEach((msg, mIdx) => {
           setTimeout(() => {
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: `sim_${Date.now()}_${sIdx}`,
-                sender: 'bot',
-                type: nextStep.type,
-                body: nextStep.body,
-                headerType: nextStep.headerType,
-                headerText: nextStep.headerText,
-                headerMediaUrl: nextStep.headerMediaUrl,
-                footer: nextStep.footer,
-                buttons: nextStep.buttons,
-                listButtonText: nextStep.listButtonText,
-                listSections: nextStep.listSections,
-                mediaType: nextStep.mediaType,
-                mediaUrl: nextStep.mediaUrl,
-                mediaCaption: nextStep.mediaCaption,
-                mediaFileName: nextStep.mediaFileName,
-                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              },
-            ]);
-          }, 450 + sIdx * 450);
+            setMessages((prev) => [...prev, msg]);
+          }, 450 + mIdx * 450);
         });
         return;
       }
@@ -216,28 +222,7 @@ export const BotFlowSimulator: React.FC<BotFlowSimulatorProps> = ({
   // Jump directly to test any step in the pipeline
   const handleJumpToStep = (step: BotStep) => {
     setActiveStepId(step.id);
-    const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: `sim_${Date.now()}`,
-        sender: 'bot',
-        type: step.type,
-        body: step.body,
-        headerType: step.headerType,
-        headerText: step.headerText,
-        headerMediaUrl: step.headerMediaUrl,
-        footer: step.footer,
-        buttons: step.buttons,
-        listButtonText: step.listButtonText,
-        listSections: step.listSections,
-        mediaType: step.mediaType,
-        mediaUrl: step.mediaUrl,
-        mediaCaption: step.mediaCaption,
-        mediaFileName: step.mediaFileName,
-        timestamp: now,
-      },
-    ]);
+    setMessages((prev) => [...prev, ...mapStepsToChatMsgs([step])]);
   };
 
   const handleSendCustomText = (e: React.FormEvent) => {
@@ -270,10 +255,7 @@ export const BotFlowSimulator: React.FC<BotFlowSimulatorProps> = ({
       if (initialSteps.length > 0) {
         setActiveStepId(initialSteps[0].id);
         setTimeout(() => {
-          setMessages((prev) => [
-            ...prev,
-            ...initialSteps.map((st, idx) => mapStepToChatMsg(st, idx)),
-          ]);
+          setMessages((prev) => [...prev, ...mapStepsToChatMsgs(initialSteps)]);
         }, 400);
         return;
       }

@@ -33,8 +33,11 @@ import {
   Eye,
   FileUp,
   Image as ImageIcon,
+  Layers,
+  ArrowUp,
+  ArrowDown,
 } from 'lucide-react';
-import type { BotFlow, BotStep, BotButton } from '../types/index.ts';
+import type { BotFlow, BotStep, BotButton, BotMediaItem } from '../types/index.ts';
 import { uploadMediaFile } from '../lib/services.ts';
 
 function isSafeMediaHref(url?: string): boolean {
@@ -61,7 +64,7 @@ function normalizeDirectMediaInput(raw: string): string {
 
 export interface VisualNode {
   id: string;
-  type: 'start' | 'question_button' | 'message' | 'media' | 'agent';
+  type: 'start' | 'question_button' | 'message' | 'media' | 'multi_media' | 'agent';
   title: string;
   body: string;
   x: number;
@@ -72,6 +75,7 @@ export interface VisualNode {
   mediaType?: 'document' | 'image' | 'video' | 'audio';
   mediaUrl?: string;
   mediaFileName?: string;
+  mediaItems?: BotMediaItem[];
   targetNodeId?: string; // for linear next step (e.g. from start or message node)
   targetNodeIds?: string[]; // for multiple next steps
 }
@@ -219,6 +223,8 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
           type:
             st.type === 'interactive_button'
               ? 'question_button'
+              : st.type === 'multi_media'
+              ? 'multi_media'
               : st.type === 'media'
               ? 'media'
               : st.type === 'agent_transfer'
@@ -239,6 +245,7 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
           mediaType: st.mediaType || 'document',
           mediaUrl: st.mediaUrl,
           mediaFileName: st.mediaFileName,
+          mediaItems: Array.isArray(st.mediaItems) ? st.mediaItems : undefined,
           targetNodeId: stepAutoTargets[0],
           targetNodeIds: stepAutoTargets,
         });
@@ -299,9 +306,13 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
 
   const containerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const multiFileInputRef = useRef<HTMLInputElement>(null);
   const [isUploadingMedia, setIsUploadingMedia] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [uploadStatusText, setUploadStatusText] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [newBundleDirectUrl, setNewBundleDirectUrl] = useState('');
+  const [newBundleFileName, setNewBundleFileName] = useState('');
 
   // File Upload Handler for PC Media Selection (supports Direct Meta Cloud binary upload up to 100 MB PDF)
   const handleSelectMediaFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -310,6 +321,7 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
 
     setIsUploadingMedia(true);
     setUploadProgress(5);
+    setUploadStatusText(null);
     setUploadError(null);
 
     try {
@@ -339,7 +351,73 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
     } finally {
       setIsUploadingMedia(false);
       setUploadProgress(null);
+      setUploadStatusText(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  // Multi-File Upload Handler for Multi-Media / PDF Bundle Node (up to 10 files per single node!)
+  const handleSelectMultipleMediaFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = Array.from(e.target.files || []);
+    if (selectedFiles.length === 0 || !editingNode) return;
+
+    const existingItems = editingNode.mediaItems || [];
+    const remainingSlots = Math.max(0, 10 - existingItems.length);
+    if (remainingSlots === 0) {
+      setUploadError('Maximum 10 files per Multi-Media Bundle node allowed (Meta safe pacing limit).');
+      if (multiFileInputRef.current) multiFileInputRef.current.value = '';
+      return;
+    }
+
+    const filesToUpload = selectedFiles.slice(0, remainingSlots);
+    setIsUploadingMedia(true);
+    setUploadError(null);
+
+    const addedItems: BotMediaItem[] = [];
+    const failedNames: string[] = [];
+
+    try {
+      for (let i = 0; i < filesToUpload.length; i++) {
+        const file = filesToUpload[i];
+        setUploadStatusText(`Uploading file ${i + 1} of ${filesToUpload.length}: ${file.name}`);
+        setUploadProgress(5);
+        try {
+          const data = await uploadMediaFile(
+            file,
+            whatsAppAccessToken,
+            whatsAppPhoneNumberId,
+            (pct) => setUploadProgress(pct)
+          );
+          if (!data?.success) throw new Error('Upload failed');
+          const lowerName = file.name.toLowerCase();
+          const isImg = file.type.startsWith('image/') || /\.(png|jpe?g|webp)$/i.test(lowerName);
+          const isVid = file.type.startsWith('video/') || /\.(mp4|3gp)$/i.test(lowerName);
+          const mediaType: 'image' | 'video' | 'document' = isImg ? 'image' : isVid ? 'video' : 'document';
+          addedItems.push({
+            id: `m_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 6)}`,
+            mediaType,
+            mediaUrl: data.url || data.fullUrl || data.metaMediaId || '',
+            mediaFileName: file.name,
+            caption: '',
+          });
+        } catch (err: any) {
+          failedNames.push(`${file.name} (${err?.message || 'Error'})`);
+        }
+      }
+
+      if (addedItems.length > 0) {
+        updateEditingNode({
+          mediaItems: [...existingItems, ...addedItems],
+        });
+      }
+      if (failedNames.length > 0) {
+        setUploadError(`Failed to upload: ${failedNames.join('; ')}`);
+      }
+    } finally {
+      setIsUploadingMedia(false);
+      setUploadProgress(null);
+      setUploadStatusText(null);
+      if (multiFileInputRef.current) multiFileInputRef.current.value = '';
     }
   };
 
@@ -781,6 +859,7 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
       question_button: 'Question Button',
       message: 'Message',
       media: 'Media / PDF Catalog',
+      multi_media: 'Multi-Media / PDF Bundle',
       agent: 'Agent Handover',
     };
 
@@ -800,11 +879,15 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
           : undefined,
       mediaType: type === 'media' ? 'document' : undefined,
       mediaFileName: type === 'media' ? '' : undefined,
+      mediaItems: type === 'multi_media' ? [] : undefined,
     };
 
     setNodes((prev) => [...prev, newNode]);
     setSelectedNodeId(newId);
     setIsAddMenuOpen(false);
+    if (type === 'multi_media') {
+      setEditingNode(newNode);
+    }
   };
 
   const handleDeleteNode = (nodeId: string) => {
@@ -910,6 +993,8 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
             type:
               n.type === 'question_button'
                 ? 'interactive_button'
+                : n.type === 'multi_media'
+                ? 'multi_media'
                 : n.type === 'media'
                 ? 'media'
                 : n.type === 'agent'
@@ -934,6 +1019,7 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
             mediaType: n.mediaType,
             mediaUrl: n.mediaUrl,
             mediaFileName: n.mediaFileName,
+            mediaItems: n.type === 'multi_media' ? (n.mediaItems || []) : undefined,
             autoNextStepId: nodeAutoTargets[0],
             autoNextStepIds: nodeAutoTargets,
             position: { x: Math.round(n.x), y: Math.round(n.y) },
@@ -1060,6 +1146,8 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
                       type:
                         n.type === 'question_button'
                           ? 'interactive_button'
+                          : n.type === 'multi_media'
+                          ? 'multi_media'
                           : n.type === 'media'
                           ? 'media'
                           : n.type === 'agent'
@@ -1082,6 +1170,7 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
                       mediaType: n.mediaType,
                       mediaUrl: n.mediaUrl,
                       mediaFileName: n.mediaFileName,
+                      mediaItems: n.type === 'multi_media' ? (n.mediaItems || []) : undefined,
                       autoNextStepId: (n.targetNodeIds || (n.targetNodeId ? [n.targetNodeId] : []))[0],
                       autoNextStepIds: n.targetNodeIds || (n.targetNodeId ? [n.targetNodeId] : []),
                       position: { x: Math.round(n.x), y: Math.round(n.y) },
@@ -1374,20 +1463,24 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
                       ? 'bg-neutral-50 dark:bg-neutral-800/60 border-neutral-200 text-neutral-800 dark:text-neutral-200'
                       : node.type === 'message'
                       ? 'bg-emerald-50/60 dark:bg-emerald-950/20 border-emerald-200 text-emerald-900 dark:text-emerald-200'
+                      : node.type === 'multi_media'
+                      ? 'bg-violet-50 dark:bg-violet-950/40 border-violet-200 text-violet-800 dark:text-violet-300'
                       : 'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-200 text-indigo-800'
                   }`}
                 >
-                  <div className="flex items-center space-x-1.5 font-bold">
+                  <div className="flex items-center space-x-1.5 font-bold min-w-0">
                     {node.type === 'start' ? (
-                      <Rocket className="w-3.5 h-3.5 text-emerald-600" />
+                      <Rocket className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                     ) : node.type === 'question_button' ? (
-                      <ListOrdered className="w-3.5 h-3.5 text-emerald-600" />
+                      <ListOrdered className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    ) : node.type === 'multi_media' ? (
+                      <Layers className="w-3.5 h-3.5 text-violet-600 shrink-0" />
                     ) : node.type === 'media' ? (
-                      <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                      <FileText className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
                     ) : (
-                      <Mail className="w-3.5 h-3.5 text-emerald-600" />
+                      <Mail className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                     )}
-                    <span>{node.type === 'question_button' ? 'Question Button' : node.title}</span>
+                    <span className="truncate">{node.type === 'question_button' ? 'Question Button' : node.title}</span>
                   </div>
 
                   {isConnectTarget ? (
@@ -1725,6 +1818,44 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
                           )}
                         </div>
                       )}
+                      {/* Multi-Media Bundle Card view */}
+                      {node.type === 'multi_media' && (
+                        <div className="p-2 rounded-xl bg-violet-50/70 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-800/60 text-[10px] space-y-1.5">
+                          <div className="flex items-center justify-between font-bold text-violet-700 dark:text-violet-300">
+                            <span className="flex items-center space-x-1">
+                              <Layers className="w-3 h-3" />
+                              <span>Media Bundle</span>
+                            </span>
+                            <span className="px-1.5 py-0.5 rounded-md bg-violet-100 dark:bg-violet-900/70 text-[9px]">
+                              {(node.mediaItems || []).length} / 10 Files
+                            </span>
+                          </div>
+                          {(node.mediaItems || []).length > 0 ? (
+                            <div className="space-y-1">
+                              {(node.mediaItems || []).slice(0, 4).map((item, idx) => (
+                                <div
+                                  key={item.id || idx}
+                                  className="flex items-center space-x-1.5 bg-white/80 dark:bg-neutral-900/60 px-1.5 py-1 rounded-md border border-violet-200/60 dark:border-violet-800/40 truncate"
+                                >
+                                  <span>{item.mediaType === 'image' ? '🖼️' : item.mediaType === 'video' ? '🎬' : '📄'}</span>
+                                  <span className="truncate font-semibold text-neutral-700 dark:text-neutral-200">
+                                    {item.mediaFileName || `File ${idx + 1}`}
+                                  </span>
+                                </div>
+                              ))}
+                              {(node.mediaItems || []).length > 4 && (
+                                <p className="text-[9px] font-bold text-violet-600 dark:text-violet-400 text-center">
+                                  +{(node.mediaItems || []).length - 4} more files attached
+                                </p>
+                              )}
+                            </div>
+                          ) : (
+                            <p className="text-[9px] text-neutral-400 italic">
+                              Click node to add multiple PDFs / Images (up to 10)
+                            </p>
+                          )}
+                        </div>
+                      )}
                     </>
                   )}
                 </div>
@@ -1816,8 +1947,20 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
               onClick={() => handleAddNode('media')}
               className="w-full p-2 rounded-xl hover:bg-neutral-100 dark:hover:bg-neutral-800 text-left font-semibold flex items-center space-x-2 text-neutral-800 dark:text-neutral-200 cursor-pointer"
             >
-              <FileText className="w-4 h-4 text-indigo-600" />
+              <FileText className="w-4 h-4 text-indigo-600 shrink-0" />
               <span>📄 PDF Catalog / Media</span>
+            </button>
+            <button
+              onClick={() => handleAddNode('multi_media')}
+              className="w-full p-2 rounded-xl hover:bg-violet-50 dark:hover:bg-violet-950/40 text-left font-semibold flex items-center space-x-2 text-violet-800 dark:text-violet-200 cursor-pointer border border-violet-200/70 dark:border-violet-800/50"
+            >
+              <Layers className="w-4 h-4 text-violet-600 shrink-0" />
+              <div className="min-w-0">
+                <div className="truncate">📚 Multi-Media / PDF Bundle</div>
+                <div className="text-[9px] font-normal text-neutral-500 dark:text-neutral-400">
+                  Send up to 10 PDFs/Images in 1 node
+                </div>
+              </div>
             </button>
             <button
               onClick={() => handleAddNode('agent')}
@@ -1922,9 +2065,11 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
                 <label className="font-semibold text-neutral-700 dark:text-neutral-300">
                   WhatsApp Message Body
                 </label>
-                {editingNode.type === 'media' && (
+                {(editingNode.type === 'media' || editingNode.type === 'multi_media') && (
                   <span className="text-[10px] text-neutral-400 font-normal">
-                    (Optional for PDF/Media)
+                    {editingNode.type === 'multi_media'
+                      ? '(Optional caption on 1st file)'
+                      : '(Optional for PDF/Media)'}
                   </span>
                 )}
               </div>
@@ -1934,8 +2079,8 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
                 onChange={(e) => updateEditingNode({ body: e.target.value })}
                 className="w-full px-3 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white font-sans text-xs focus:outline-hidden focus:ring-2 focus:ring-emerald-500 leading-relaxed"
                 placeholder={
-                  editingNode.type === 'media'
-                    ? 'Optional caption (leave blank to send only the plain file)...'
+                  editingNode.type === 'media' || editingNode.type === 'multi_media'
+                    ? 'Optional caption (leave blank to send only the plain files)...'
                     : 'Type message content (leave blank for plain message)...'
                 }
               />
@@ -2324,6 +2469,252 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
                     </div>
                   </details>
                 </div>
+              </div>
+            )}
+
+            {/* Multi-Media Bundle Node: Attach Multiple PDFs / Images / Videos in a Single Node */}
+            {editingNode.type === 'multi_media' && (
+              <div className="space-y-3.5 pt-3 border-t border-neutral-200 dark:border-neutral-800">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-neutral-800 dark:text-neutral-200 flex items-center space-x-1.5">
+                    <Layers className="w-4 h-4 text-violet-600" />
+                    <span>Multiple Files ({(editingNode.mediaItems || []).length} / 10)</span>
+                  </span>
+                  <span className="text-[10px] bg-violet-100 dark:bg-violet-950/60 text-violet-700 dark:text-violet-300 px-2 py-0.5 rounded-full font-bold">
+                    Multi-PDF Bundle
+                  </span>
+                </div>
+
+                {/* Hidden Multi-File Input */}
+                <input
+                  type="file"
+                  multiple
+                  ref={multiFileInputRef}
+                  onChange={handleSelectMultipleMediaFiles}
+                  accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.webp,.mp4"
+                  className="hidden"
+                />
+
+                {uploadError && (
+                  <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-[11px] font-medium flex items-center justify-between">
+                    <span>{uploadError}</span>
+                    <button
+                      type="button"
+                      onClick={() => setUploadError(null)}
+                      className="text-rose-500 hover:text-rose-700 cursor-pointer ml-2"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+
+                {/* Upload Multiple Files Dropzone */}
+                <div
+                  onClick={() => !isUploadingMedia && (editingNode.mediaItems || []).length < 10 && multiFileInputRef.current?.click()}
+                  className={`p-3.5 rounded-2xl border-2 border-dashed border-violet-400/80 dark:border-violet-600/60 bg-violet-50/40 dark:bg-violet-950/20 hover:bg-violet-50 dark:hover:bg-violet-950/30 transition-all flex flex-col items-center justify-center text-center space-y-2 ${
+                    (editingNode.mediaItems || []).length >= 10 ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'
+                  }`}
+                >
+                  <div className="w-9 h-9 rounded-2xl bg-violet-100 dark:bg-violet-900/60 text-violet-600 dark:text-violet-300 flex items-center justify-center">
+                    {isUploadingMedia ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                      <UploadCloud className="w-5 h-5" />
+                    )}
+                  </div>
+                  <div>
+                    <p className="font-bold text-neutral-800 dark:text-neutral-200 text-xs">
+                      {isUploadingMedia
+                        ? uploadStatusText || `Uploading... ${uploadProgress ?? 0}%`
+                        : 'Select Multiple PDFs / Images from PC'}
+                    </p>
+                    <p className="text-[10px] text-neutral-500 mt-0.5">
+                      Select 1 or multiple files at once · Max 10 files (PDF up to 100 MB each)
+                    </p>
+                  </div>
+                  {isUploadingMedia && uploadProgress !== null && (
+                    <div className="w-full max-w-[220px] h-1.5 rounded-full bg-violet-200/70 dark:bg-violet-900 overflow-hidden">
+                      <div
+                        className="h-full bg-violet-600 transition-all duration-200"
+                        style={{ width: `${Math.max(5, uploadProgress)}%` }}
+                      />
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    disabled={isUploadingMedia || (editingNode.mediaItems || []).length >= 10}
+                    className="px-3 py-1.5 rounded-xl bg-violet-600 hover:bg-violet-700 disabled:opacity-60 text-white font-bold text-[11px] flex items-center space-x-1.5 shadow-xs cursor-pointer"
+                  >
+                    <Paperclip className="w-3.5 h-3.5" />
+                    <span>
+                      {isUploadingMedia
+                        ? `Uploading ${uploadProgress ?? 0}%...`
+                        : (editingNode.mediaItems || []).length >= 10
+                        ? 'Max 10 Files Reached'
+                        : 'Add Files from PC'}
+                    </span>
+                  </button>
+                </div>
+
+                {/* Attached Files Queue */}
+                {(editingNode.mediaItems || []).length > 0 && (
+                  <div className="space-y-2">
+                    {(editingNode.mediaItems || []).map((item, idx) => {
+                      const items = editingNode.mediaItems || [];
+                      return (
+                        <div
+                          key={item.id || idx}
+                          className="p-2.5 rounded-xl border border-violet-200 dark:border-violet-800/70 bg-violet-50/40 dark:bg-violet-950/30 space-y-2"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center space-x-2 min-w-0">
+                              <span className="w-5 h-5 rounded-md bg-violet-600 text-white text-[10px] font-black flex items-center justify-center shrink-0">
+                                {idx + 1}
+                              </span>
+                              <span className="text-sm shrink-0">
+                                {item.mediaType === 'image' ? '🖼️' : item.mediaType === 'video' ? '🎬' : '📄'}
+                              </span>
+                              <span className="font-bold text-[11px] text-neutral-900 dark:text-white truncate">
+                                {item.mediaFileName || `File ${idx + 1}`}
+                              </span>
+                            </div>
+                            <div className="flex items-center space-x-0.5 shrink-0">
+                              <button
+                                type="button"
+                                disabled={idx === 0}
+                                onClick={() => {
+                                  if (idx === 0) return;
+                                  const next = [...items];
+                                  [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
+                                  updateEditingNode({ mediaItems: next });
+                                }}
+                                title="Move Up"
+                                className="p-1 text-neutral-400 hover:text-violet-600 disabled:opacity-30 cursor-pointer"
+                              >
+                                <ArrowUp className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                disabled={idx === items.length - 1}
+                                onClick={() => {
+                                  if (idx === items.length - 1) return;
+                                  const next = [...items];
+                                  [next[idx + 1], next[idx]] = [next[idx], next[idx + 1]];
+                                  updateEditingNode({ mediaItems: next });
+                                }}
+                                title="Move Down"
+                                className="p-1 text-neutral-400 hover:text-violet-600 disabled:opacity-30 cursor-pointer"
+                              >
+                                <ArrowDown className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const next = items.filter((_, i) => i !== idx);
+                                  updateEditingNode({ mediaItems: next });
+                                }}
+                                title="Remove File"
+                                className="p-1 text-neutral-400 hover:text-rose-600 cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 gap-1.5">
+                            <input
+                              type="text"
+                              value={item.mediaFileName || ''}
+                              onChange={(e) => {
+                                const next = items.map((it, i) =>
+                                  i === idx ? { ...it, mediaFileName: e.target.value } : it
+                                );
+                                updateEditingNode({ mediaItems: next });
+                              }}
+                              placeholder="Display filename (e.g. Catalog_1.pdf)"
+                              className="w-full px-2.5 py-1.5 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white text-[11px]"
+                            />
+                            <input
+                              type="text"
+                              value={item.caption || ''}
+                              onChange={(e) => {
+                                const next = items.map((it, i) =>
+                                  i === idx ? { ...it, caption: e.target.value } : it
+                                );
+                                updateEditingNode({ mediaItems: next });
+                              }}
+                              placeholder="Optional caption for this file..."
+                              className="w-full px-2.5 py-1.5 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white text-[11px]"
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Add by Direct HTTPS / Google Drive URL */}
+                {(editingNode.mediaItems || []).length < 10 && (
+                  <details className="text-[11px] text-neutral-500 pt-1">
+                    <summary className="cursor-pointer hover:text-violet-600 font-semibold select-none">
+                      ⚙ Add file by direct URL (HTTPS / Google Drive)
+                    </summary>
+                    <div className="pt-2 space-y-1.5">
+                      <input
+                        type="text"
+                        value={newBundleFileName}
+                        onChange={(e) => setNewBundleFileName(e.target.value)}
+                        placeholder="File display name (e.g. Glossy_Series.pdf)"
+                        className="w-full px-2.5 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white text-[11px]"
+                      />
+                      <div className="flex items-center space-x-1.5">
+                        <input
+                          type="text"
+                          value={newBundleDirectUrl}
+                          onChange={(e) => setNewBundleDirectUrl(e.target.value)}
+                          placeholder="https://... or Google Drive share link"
+                          className="flex-1 px-2.5 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white font-mono text-[10px]"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const normalized = normalizeDirectMediaInput(newBundleDirectUrl).trim();
+                            if (!normalized || !isSafeMediaHref(normalized)) {
+                              setUploadError('Please enter a valid https:// or Google Drive link.');
+                              return;
+                            }
+                            const lower = (newBundleFileName || normalized).toLowerCase();
+                            const mType: 'image' | 'video' | 'document' = /\.(png|jpe?g|webp)$/i.test(lower)
+                              ? 'image'
+                              : /\.(mp4|3gp)$/i.test(lower)
+                              ? 'video'
+                              : 'document';
+                            const nextItem: BotMediaItem = {
+                              id: `m_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                              mediaType: mType,
+                              mediaUrl: normalized,
+                              mediaFileName: newBundleFileName.trim() || 'Catalog.pdf',
+                              caption: '',
+                            };
+                            updateEditingNode({
+                              mediaItems: [...(editingNode.mediaItems || []), nextItem],
+                            });
+                            setNewBundleDirectUrl('');
+                            setNewBundleFileName('');
+                            setUploadError(null);
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white font-bold text-[11px] cursor-pointer shrink-0"
+                        >
+                          Add
+                        </button>
+                      </div>
+                    </div>
+                  </details>
+                )}
+
+                <p className="text-[10px] text-neutral-500 bg-neutral-50 dark:bg-neutral-800/60 rounded-lg px-2.5 py-1.5 border border-neutral-200 dark:border-neutral-700">
+                  All attached files are sent sequentially in order with safe 450ms WhatsApp pacing. Meta direct uploads stay active for 30 days; use Google Drive / HTTPS links for permanent catalogues.
+                </p>
               </div>
             )}
           </div>

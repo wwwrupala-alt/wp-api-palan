@@ -563,10 +563,18 @@ export interface BotListSection {
   rows: BotListRow[];
 }
 
+export interface BotMediaItem {
+  id: string;
+  mediaType: 'image' | 'document' | 'video' | 'audio';
+  mediaUrl: string;
+  mediaFileName?: string;
+  caption?: string;
+}
+
 export interface BotStep {
   id: string;
   title: string;
-  type: 'interactive_button' | 'interactive_list' | 'media' | 'text' | 'agent_transfer';
+  type: 'interactive_button' | 'interactive_list' | 'media' | 'multi_media' | 'text' | 'agent_transfer';
   headerType?: 'none' | 'text' | 'image' | 'video' | 'document';
   headerText?: string;
   headerMediaUrl?: string;
@@ -577,11 +585,13 @@ export interface BotStep {
   // Interactive list menu
   listButtonText?: string; // e.g. "Select Option"
   listSections?: BotListSection[];
-  // Media attachments
+  // Media attachments (single media)
   mediaType?: 'image' | 'document' | 'video' | 'audio';
   mediaUrl?: string;
   mediaCaption?: string;
   mediaFileName?: string;
+  // Multiple media attachments in a single node (up to 10 files)
+  mediaItems?: BotMediaItem[];
   // Fallback / Auto-delay
   autoNextStepId?: string;
   autoNextStepIds?: string[];

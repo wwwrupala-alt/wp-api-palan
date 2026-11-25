@@ -3804,6 +3804,36 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
       }
 
       if (matchedFlow && targetSteps.length > 0) {
+        // Expand any multi_media bundle steps into sequential individual media deliveries (max 10 items/bundle, 15 total)
+        const dispatchSteps: any[] = [];
+        for (const st of targetSteps) {
+          if (dispatchSteps.length >= 15) break;
+          if (st?.type === 'multi_media' && Array.isArray(st.mediaItems) && st.mediaItems.length > 0) {
+            const validItems = st.mediaItems
+              .filter((it: any) => it && typeof it.mediaUrl === 'string' && it.mediaUrl.trim().length > 0)
+              .slice(0, 10);
+            validItems.forEach((it: any, idx: number) => {
+              if (dispatchSteps.length >= 15) return;
+              const itemCaption =
+                (typeof it.caption === 'string' && it.caption.trim()) ||
+                (idx === 0 && typeof st.body === 'string' && st.body.trim()) ||
+                '';
+              dispatchSteps.push({
+                ...st,
+                id: `${st.id}_item_${idx}`,
+                type: 'media',
+                mediaType: it.mediaType || 'document',
+                mediaUrl: it.mediaUrl.trim(),
+                mediaFileName: it.mediaFileName || st.mediaFileName || 'Catalog.pdf',
+                body: itemCaption,
+              });
+            });
+          } else {
+            dispatchSteps.push(st);
+          }
+        }
+        targetSteps = dispatchSteps;
+
         // Increment flow triggered statistics in Firestore
         updateDoc(doc(serverDb, `organizations/${targetOrgId}/botFlows`, matchedFlow.id), {
           totalTriggeredCount: (matchedFlow.totalTriggeredCount || 0) + 1,
@@ -3813,7 +3843,7 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
         if (token && phoneNumberId) {
           const sendUrl = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`;
 
-          // Iterate through all connected target steps (supports multiple nodes connected to one button)
+          // Iterate through all connected target steps (supports multiple nodes & multi-media bundles with safe 450ms pacing)
           for (let stepIdx = 0; stepIdx < targetSteps.length; stepIdx++) {
             const targetStep = targetSteps[stepIdx];
             if (stepIdx > 0) {
