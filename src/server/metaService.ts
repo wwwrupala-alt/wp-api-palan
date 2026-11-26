@@ -3824,7 +3824,7 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
                 type: 'media',
                 mediaType: it.mediaType || 'document',
                 mediaUrl: it.mediaUrl.trim(),
-                mediaFileName: it.mediaFileName || st.mediaFileName || 'Catalog.pdf',
+                mediaFileName: (it.mediaFileName || '').trim(),
                 body: itemCaption,
               });
             });
@@ -3950,7 +3950,18 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
               mediaPayload.caption = targetStep.body.trim();
             }
             if (mType === 'document') {
-              let docFilename = (targetStep.mediaFileName || resolvedMedia?.filename || 'Catalog.pdf').trim();
+              const explicitName = (targetStep.mediaFileName || '').trim();
+              const resolvedName = (resolvedMedia?.filename || '').trim();
+              const isGenericPlaceholder = (n: string) =>
+                !n || n.toLowerCase() === 'catalog.pdf' || n.toLowerCase() === 'uc' || n.toLowerCase() === 'download';
+
+              let docFilename =
+                !isGenericPlaceholder(explicitName)
+                  ? explicitName
+                  : !isGenericPlaceholder(resolvedName)
+                  ? resolvedName
+                  : explicitName || resolvedName || 'Catalog.pdf';
+
               if (!docFilename || docFilename === 'uc' || docFilename === 'download') {
                 docFilename = 'Catalog.pdf';
               } else if (!/\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|csv)$/i.test(docFilename)) {

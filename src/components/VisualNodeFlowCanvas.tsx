@@ -36,6 +36,7 @@ import {
   Layers,
   ArrowUp,
   ArrowDown,
+  FolderOpen,
 } from 'lucide-react';
 import type { BotFlow, BotStep, BotButton, BotMediaItem } from '../types/index.ts';
 import { uploadMediaFile } from '../lib/services.ts';
@@ -61,6 +62,39 @@ function normalizeDirectMediaInput(raw: string): string {
     return `https://drive.usercontent.google.com/download?id=${driveMatch[1]}&export=download&confirm=t`;
   }
   return raw;
+}
+
+function extractClientDriveFileId(raw: string): string | null {
+  const trimmed = (raw || '').trim();
+  const m =
+    trimmed.match(/^https?:\/\/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]{10,120})/i) ||
+    trimmed.match(/^https?:\/\/drive\.google\.com\/open\?(?:[^#]*&)?id=([a-zA-Z0-9_-]{10,120})/i) ||
+    trimmed.match(/^https?:\/\/drive\.google\.com\/uc\?(?:[^#]*&)?id=([a-zA-Z0-9_-]{10,120})/i) ||
+    trimmed.match(/^https?:\/\/drive\.usercontent\.google\.com\/download\?(?:[^#]*&)?id=([a-zA-Z0-9_-]{10,120})/i);
+  return m?.[1] || null;
+}
+
+function isGoogleDriveFolderUrl(raw: string): boolean {
+  const trimmed = (raw || '').trim();
+  return (
+    /^https?:\/\/drive\.google\.com\/drive\/(?:u\/\d+\/)?(?:mobile\/)?folders\/[a-zA-Z0-9_-]{10,120}/i.test(trimmed) ||
+    /^https?:\/\/drive\.google\.com\/(?:embedded)?folderview\?(?:[^#]*&)?id=[a-zA-Z0-9_-]{10,120}/i.test(trimmed)
+  );
+}
+
+function isGoogleDriveAnyUrl(raw: string): boolean {
+  return Boolean(extractClientDriveFileId(raw) || isGoogleDriveFolderUrl(raw));
+}
+
+function extractFilenameFromDirectUrl(raw: string): string | null {
+  try {
+    const parsed = new URL(raw.trim());
+    const seg = decodeURIComponent(parsed.pathname.split('/').pop() || '').trim();
+    if (seg && seg.includes('.') && !/^(download|uc|view|open)$/i.test(seg)) {
+      return seg.slice(0, 120);
+    }
+  } catch {}
+  return null;
 }
 
 export interface VisualNode {
@@ -314,6 +348,10 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [newBundleDirectUrl, setNewBundleDirectUrl] = useState('');
   const [newBundleFileName, setNewBundleFileName] = useState('');
+  const [isDriveFolderMode, setIsDriveFolderMode] = useState(false);
+  const [isResolvingDrive, setIsResolvingDrive] = useState(false);
+  const [bundleStatusMsg, setBundleStatusMsg] = useState<string | null>(null);
+  const [isResolvingSingleDrive, setIsResolvingSingleDrive] = useState(false);
 
   // File Upload Handler for PC Media Selection (supports Direct Meta Cloud binary upload up to 100 MB PDF)
   const handleSelectMediaFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -420,6 +458,189 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
       setUploadStatusText(null);
       if (multiFileInputRef.current) multiFileInputRef.current.value = '';
     }
+  };
+
+  // Auto-detect real filename for a Single Media Node Google Drive link
+  const handleResolveSingleMediaDriveUrl = async (rawUrl: string, forceOverwriteName = false) => {
+    const trimmed = (rawUrl || '').trim();
+    if (!editingNode || !extractClientDriveFileId(trimmed)) return;
+
+    const currentName = (editingNode.mediaFileName || '').trim();
+    const hasCustomName =
+      currentName.length > 0 && !/^(catalog\.pdf|document\.pdf|file\.pdf|selected document)$/i.test(currentName);
+    if (!forceOverwriteName && hasCustomName) return;
+
+    setIsResolvingSingleDrive(true);
+    setUploadError(null);
+    try {
+      const res = await fetch('/api/media/resolve-google-drive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: trimmed, isFolder: false }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success || !Array.isArray(data.files) || data.files.length === 0) {
+        if (forceOverwriteName) {
+          setUploadError(data?.error || 'Could not detect real filename from Google Drive link.');
+        }
+        return;
+      }
+      const resolved = data.files[0];
+      updateEditingNode({
+        mediaUrl: resolved.mediaUrl || normalizeDirectMediaInput(trimmed),
+        mediaFileName: resolved.mediaFileName || currentName || 'Catalog.pdf',
+        mediaType: resolved.mediaType || editingNode.mediaType || 'document',
+      });
+    } catch {
+      if (forceOverwriteName) {
+        setUploadError('Could not connect to server to detect Google Drive filename.');
+      }
+    } finally {
+      setIsResolvingSingleDrive(false);
+    }
+  };
+
+  // Add single Direct/Google Drive file (with REAL filename) OR auto-fetch all PDFs from a Main Google Drive Folder
+  const handleAddBundleFromUrlOrFolder = async () => {
+    if (!editingNode) return;
+    const rawUrl = newBundleDirectUrl.trim();
+    if (!rawUrl) {
+      setUploadError(
+        isDriveFolderMode
+          ? 'Please paste a Main Google Drive Folder link.'
+          : 'Please paste a valid https:// or Google Drive link.'
+      );
+      return;
+    }
+
+    const existingItems = editingNode.mediaItems || [];
+    const remainingSlots = Math.max(0, 10 - existingItems.length);
+    if (remainingSlots === 0) {
+      setUploadError('Maximum 10 files per Multi-Media Bundle node allowed (Meta safe pacing limit).');
+      return;
+    }
+
+    setUploadError(null);
+    setBundleStatusMsg(null);
+
+    const shouldResolveDrive = isDriveFolderMode || isGoogleDriveAnyUrl(rawUrl);
+
+    if (shouldResolveDrive) {
+      setIsResolvingDrive(true);
+      try {
+        const res = await fetch('/api/media/resolve-google-drive', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: rawUrl, isFolder: isDriveFolderMode }),
+        });
+        const data = await res.json().catch(() => null);
+
+        if (!res.ok || !data?.success || !Array.isArray(data.files) || data.files.length === 0) {
+          setUploadError(data?.error || 'Google Drive se PDFs fetch nahi ho payi. Sharing "Anyone with the link" check karein.');
+          return;
+        }
+
+        const existingKeys = new Set(
+          existingItems.map((it) => {
+            const fId = extractClientDriveFileId(it.mediaUrl || '');
+            return fId ? `gdrive:${fId}` : (it.mediaUrl || '').trim();
+          })
+        );
+
+        const resolvedFiles: Array<{
+          fileId?: string;
+          mediaFileName: string;
+          mediaType: 'document' | 'image' | 'video';
+          mediaUrl: string;
+        }> = data.files;
+
+        const isSingleMode = data.mode === 'file' && resolvedFiles.length === 1;
+        const customSingleName = isSingleMode ? newBundleFileName.trim() : '';
+
+        const newItems: BotMediaItem[] = [];
+        let skippedDuplicates = 0;
+
+        for (let i = 0; i < resolvedFiles.length; i++) {
+          const rf = resolvedFiles[i];
+          const key = rf.fileId ? `gdrive:${rf.fileId}` : (rf.mediaUrl || '').trim();
+          if (existingKeys.has(key)) {
+            skippedDuplicates++;
+            continue;
+          }
+          if (newItems.length >= remainingSlots) break;
+
+          existingKeys.add(key);
+          newItems.push({
+            id: `m_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 6)}`,
+            mediaType: rf.mediaType || 'document',
+            mediaUrl: rf.mediaUrl,
+            mediaFileName: customSingleName || rf.mediaFileName || `File_${i + 1}.pdf`,
+            caption: '',
+          });
+        }
+
+        if (newItems.length === 0) {
+          setUploadError(
+            skippedDuplicates > 0
+              ? 'Ye Google Drive PDFs pehle se is bundle me added hain.'
+              : 'No new files could be added (bundle limit 10).'
+          );
+          return;
+        }
+
+        updateEditingNode({
+          mediaItems: [...existingItems, ...newItems],
+        });
+        setNewBundleDirectUrl('');
+        setNewBundleFileName('');
+
+        if (data.mode === 'folder') {
+          const totalFound = Number(data.totalFound) || resolvedFiles.length;
+          const capNote =
+            totalFound > newItems.length + skippedDuplicates
+              ? ` (Folder me total ${totalFound} files mili; bundle max limit 10 hai)`
+              : '';
+          setBundleStatusMsg(
+            `Google Drive folder se ${newItems.length} PDF${newItems.length > 1 ? 's' : ''} real filenames ke saath add ho gayi!${capNote}`
+          );
+        } else {
+          setBundleStatusMsg(`Added "${newItems[0].mediaFileName}" with real Google Drive filename!`);
+        }
+      } catch (err: any) {
+        setUploadError(err?.message || 'Google Drive link fetch karne me error aaya.');
+      } finally {
+        setIsResolvingDrive(false);
+      }
+      return;
+    }
+
+    // Standard non-Drive direct HTTPS URL
+    const normalized = normalizeDirectMediaInput(rawUrl).trim();
+    if (!normalized || !isSafeMediaHref(normalized)) {
+      setUploadError('Please enter a valid https:// or Google Drive link.');
+      return;
+    }
+    const inferredName = newBundleFileName.trim() || extractFilenameFromDirectUrl(normalized) || 'Catalog.pdf';
+    const lower = inferredName.toLowerCase();
+    const mType: 'image' | 'video' | 'document' = /\.(png|jpe?g|webp)$/i.test(lower)
+      ? 'image'
+      : /\.(mp4|3gp)$/i.test(lower)
+      ? 'video'
+      : 'document';
+
+    const nextItem: BotMediaItem = {
+      id: `m_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      mediaType: mType,
+      mediaUrl: normalized,
+      mediaFileName: inferredName,
+      caption: '',
+    };
+    updateEditingNode({
+      mediaItems: [...existingItems, nextItem],
+    });
+    setNewBundleDirectUrl('');
+    setNewBundleFileName('');
+    setBundleStatusMsg(`Added "${inferredName}" to bundle.`);
   };
 
   // Build connections list dynamically from nodes (supports ONE BUTTON TO MULTIPLE NODES)
@@ -2454,18 +2675,43 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
                     <summary className="cursor-pointer hover:text-emerald-600 font-semibold select-none">
                       ⚙ Advanced: Edit direct URL manually (HTTPS / Google Drive)
                     </summary>
-                    <div className="pt-1.5 space-y-1">
-                      <input
-                        type="text"
-                        value={editingNode.mediaUrl || ''}
-                        onChange={(e) =>
-                          updateEditingNode({ mediaUrl: normalizeDirectMediaInput(e.target.value) })
-                        }
-                        placeholder="https://example.com/catalog.pdf or Google Drive share link"
-                        className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white font-mono text-[10px]"
-                      />
+                    <div className="pt-1.5 space-y-1.5">
+                      <div className="flex items-center space-x-1.5">
+                        <input
+                          type="text"
+                          value={editingNode.mediaUrl || ''}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            updateEditingNode({ mediaUrl: normalizeDirectMediaInput(val) });
+                          }}
+                          onBlur={(e) => {
+                            const val = e.target.value.trim();
+                            if (extractClientDriveFileId(val)) {
+                              void handleResolveSingleMediaDriveUrl(val, false);
+                            }
+                          }}
+                          placeholder="https://example.com/catalog.pdf or Google Drive share link"
+                          className="flex-1 px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white font-mono text-[10px]"
+                        />
+                        {extractClientDriveFileId(editingNode.mediaUrl || '') && (
+                          <button
+                            type="button"
+                            disabled={isResolvingSingleDrive}
+                            onClick={() => handleResolveSingleMediaDriveUrl(editingNode.mediaUrl || '', true)}
+                            title="Detect real PDF name from Google Drive"
+                            className="px-2.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-bold text-[10px] cursor-pointer shrink-0 flex items-center space-x-1"
+                          >
+                            {isResolvingSingleDrive ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <Sparkles className="w-3 h-3" />
+                            )}
+                            <span>Get Name</span>
+                          </button>
+                        )}
+                      </div>
                       <p className="text-[10px] text-neutral-400">
-                        Google Drive links (&ldquo;Anyone with the link&rdquo;) are automatically converted to direct PDF download URLs for WhatsApp.
+                        Google Drive links (&ldquo;Anyone with the link&rdquo;) are automatically bridged as real PDFs with their original filename for WhatsApp.
                       </p>
                     </div>
                   </details>
@@ -2654,63 +2900,119 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
                   </div>
                 )}
 
-                {/* Add by Direct HTTPS / Google Drive URL */}
+                {/* Status Confirmation Banner (Google Drive Fetch / Add) */}
+                {bundleStatusMsg && (
+                  <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 text-[11px] font-medium flex items-center justify-between">
+                    <span className="flex items-center space-x-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                      <span>{bundleStatusMsg}</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setBundleStatusMsg(null)}
+                      className="text-emerald-600 hover:text-emerald-800 cursor-pointer ml-2 shrink-0"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+
+                {/* Add by Google Drive (Single PDF or Main Folder) / Direct HTTPS URL */}
                 {(editingNode.mediaItems || []).length < 10 && (
-                  <details className="text-[11px] text-neutral-500 pt-1">
-                    <summary className="cursor-pointer hover:text-violet-600 font-semibold select-none">
-                      ⚙ Add file by direct URL (HTTPS / Google Drive)
-                    </summary>
-                    <div className="pt-2 space-y-1.5">
+                  <div className="p-3 rounded-2xl border border-violet-200/90 dark:border-violet-800/70 bg-violet-50/40 dark:bg-violet-950/20 space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-bold text-neutral-800 dark:text-neutral-200 flex items-center space-x-1.5">
+                        {isDriveFolderMode ? (
+                          <FolderOpen className="w-3.5 h-3.5 text-violet-600" />
+                        ) : (
+                          <Link2 className="w-3.5 h-3.5 text-violet-600" />
+                        )}
+                        <span>Google Drive / Direct PDF Link</span>
+                      </span>
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300">
+                        Auto Real Name
+                      </span>
+                    </div>
+
+                    {/* Checkbox: Main Google Drive Folder Link */}
+                    <label className="flex items-start space-x-2 p-2 rounded-xl bg-white dark:bg-neutral-900/70 border border-violet-200/80 dark:border-violet-800/60 cursor-pointer select-none hover:border-violet-400 transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={isDriveFolderMode}
+                        onChange={(e) => {
+                          setIsDriveFolderMode(e.target.checked);
+                          setUploadError(null);
+                          setBundleStatusMsg(null);
+                        }}
+                        className="mt-0.5 rounded border-violet-400 text-violet-600 focus:ring-violet-500 cursor-pointer"
+                      />
+                      <div className="leading-tight">
+                        <span className="block text-[11px] font-bold text-neutral-800 dark:text-neutral-100">
+                          Main Google Drive Folder Link
+                        </span>
+                        <span className="block text-[10px] text-neutral-500 mt-0.5">
+                          1 folder link paste karein — andar ki saari PDFs unke real names ke saath auto-fetch ho jayengi
+                        </span>
+                      </div>
+                    </label>
+
+                    {!isDriveFolderMode && (
                       <input
                         type="text"
                         value={newBundleFileName}
                         onChange={(e) => setNewBundleFileName(e.target.value)}
-                        placeholder="File display name (e.g. Glossy_Series.pdf)"
+                        placeholder="Optional display name (blank chhodein — real PDF name auto-detect hoga)"
                         className="w-full px-2.5 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white text-[11px]"
                       />
-                      <div className="flex items-center space-x-1.5">
-                        <input
-                          type="text"
-                          value={newBundleDirectUrl}
-                          onChange={(e) => setNewBundleDirectUrl(e.target.value)}
-                          placeholder="https://... or Google Drive share link"
-                          className="flex-1 px-2.5 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white font-mono text-[10px]"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const normalized = normalizeDirectMediaInput(newBundleDirectUrl).trim();
-                            if (!normalized || !isSafeMediaHref(normalized)) {
-                              setUploadError('Please enter a valid https:// or Google Drive link.');
-                              return;
-                            }
-                            const lower = (newBundleFileName || normalized).toLowerCase();
-                            const mType: 'image' | 'video' | 'document' = /\.(png|jpe?g|webp)$/i.test(lower)
-                              ? 'image'
-                              : /\.(mp4|3gp)$/i.test(lower)
-                              ? 'video'
-                              : 'document';
-                            const nextItem: BotMediaItem = {
-                              id: `m_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-                              mediaType: mType,
-                              mediaUrl: normalized,
-                              mediaFileName: newBundleFileName.trim() || 'Catalog.pdf',
-                              caption: '',
-                            };
-                            updateEditingNode({
-                              mediaItems: [...(editingNode.mediaItems || []), nextItem],
-                            });
-                            setNewBundleDirectUrl('');
-                            setNewBundleFileName('');
-                            setUploadError(null);
-                          }}
-                          className="px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white font-bold text-[11px] cursor-pointer shrink-0"
-                        >
-                          Add
-                        </button>
-                      </div>
+                    )}
+
+                    <div className="flex items-center space-x-1.5">
+                      <input
+                        type="text"
+                        value={newBundleDirectUrl}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setNewBundleDirectUrl(val);
+                          if (!isDriveFolderMode && isGoogleDriveFolderUrl(val)) {
+                            setIsDriveFolderMode(true);
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            void handleAddBundleFromUrlOrFolder();
+                          }
+                        }}
+                        placeholder={
+                          isDriveFolderMode
+                            ? 'https://drive.google.com/drive/folders/...'
+                            : 'https://drive.google.com/file/d/... ya direct PDF link'
+                        }
+                        className="flex-1 px-2.5 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white font-mono text-[10px]"
+                      />
+                      <button
+                        type="button"
+                        disabled={isResolvingDrive || isUploadingMedia}
+                        onClick={() => void handleAddBundleFromUrlOrFolder()}
+                        className="px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-700 disabled:opacity-60 text-white font-bold text-[11px] cursor-pointer shrink-0 flex items-center space-x-1"
+                      >
+                        {isResolvingDrive ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            <span>{isDriveFolderMode ? 'Fetching...' : 'Detecting...'}</span>
+                          </>
+                        ) : (
+                          <span>{isDriveFolderMode ? 'Fetch PDFs' : 'Add'}</span>
+                        )}
+                      </button>
                     </div>
-                  </details>
+
+                    <p className="text-[10px] text-neutral-500">
+                      {isDriveFolderMode
+                        ? 'Tip: Google Drive Main Folder par Share -> "Anyone with the link (Viewer)" ON hona chahiye (max 10 PDFs per bundle).'
+                        : 'Google Drive file link paste karke Add dabayein — PDF ka original naam automatically fetch ho kar WhatsApp par jayega.'}
+                    </p>
+                  </div>
                 )}
 
                 <p className="text-[10px] text-neutral-500 bg-neutral-50 dark:bg-neutral-800/60 rounded-lg px-2.5 py-1.5 border border-neutral-200 dark:border-neutral-700">

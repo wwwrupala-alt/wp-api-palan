@@ -9,7 +9,7 @@ const driveMediaMemoryCache = new Map<string, { id: string; filename: string; ex
 
 const DRIVE_CACHE_TTL_MS = 25 * 24 * 60 * 60 * 1000; // 25 days (auto-refreshes before Meta's 30-day Media ID expiry)
 
-function extractGoogleDriveFileId(rawUrl: string): string | null {
+export function extractGoogleDriveFileId(rawUrl: string): string | null {
   const trimmed = rawUrl.trim();
   const patterns = [
     /^https?:\/\/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]{10,120})/i,
@@ -24,6 +24,54 @@ function extractGoogleDriveFileId(rawUrl: string): string | null {
     }
   }
   return null;
+}
+
+export function extractGoogleDriveFolderId(rawUrl: string): string | null {
+  const trimmed = rawUrl.trim();
+  const patterns = [
+    /^https?:\/\/drive\.google\.com\/drive\/(?:u\/\d+\/)?(?:mobile\/)?folders\/([a-zA-Z0-9_-]{10,120})/i,
+    /^https?:\/\/drive\.google\.com\/embeddedfolderview\?(?:[^#]*&)?id=([a-zA-Z0-9_-]{10,120})/i,
+    /^https?:\/\/drive\.google\.com\/folderview\?(?:[^#]*&)?id=([a-zA-Z0-9_-]{10,120})/i,
+  ];
+  for (const re of patterns) {
+    const m = trimmed.match(re);
+    if (m?.[1] && /^[a-zA-Z0-9_-]{10,120}$/.test(m[1])) {
+      return m[1];
+    }
+  }
+  return null;
+}
+
+function decodeHtmlEntities(input: string): string {
+  return input
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => {
+      const code = parseInt(hex, 16);
+      return Number.isFinite(code) ? String.fromCharCode(code) : '';
+    })
+    .replace(/&#(\d+);/g, (_, dec) => {
+      const code = parseInt(dec, 10);
+      return Number.isFinite(code) ? String.fromCharCode(code) : '';
+    });
+}
+
+function sanitizeDriveFilename(raw: string): string {
+  return decodeHtmlEntities(raw || '')
+    .replace(/[\r\n\t\0/\\]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120);
+}
+
+function inferMediaTypeFromFilename(filename: string): 'image' | 'video' | 'document' {
+  const lower = filename.toLowerCase();
+  if (/\.(png|jpe?g|webp)$/i.test(lower)) return 'image';
+  if (/\.(mp4|3gp)$/i.test(lower)) return 'video';
+  return 'document';
 }
 
 function detectMimeAndExtFromBuffer(
@@ -478,5 +526,225 @@ export async function resolveMetaMediaObject(
     console.error('[resolveMetaMediaObject] Error uploading media to Meta Cloud API:', err);
     return null;
   }
+}
+
+export interface ResolvedDriveMediaEntry {
+  fileId: string;
+  mediaFileName: string;
+  mediaType: 'image' | 'video' | 'document';
+  mediaUrl: string;
+}
+
+/**
+ * Resolves the REAL filename of a single public Google Drive file without downloading the whole file.
+ * Strictly fetches only hardcoded Google Drive hosts using a validated alphanumeric fileId.
+ */
+export async function resolveGoogleDriveFileMetadata(fileId: string): Promise<{
+  success: boolean;
+  file?: ResolvedDriveMediaEntry;
+  error?: string;
+}> {
+  if (!/^[a-zA-Z0-9_-]{10,120}$/.test(fileId)) {
+    return { success: false, error: 'Invalid Google Drive file ID.' };
+  }
+
+  const directUrl = `https://drive.usercontent.google.com/download?id=${fileId}&export=download&confirm=t`;
+  let detectedName: string | null = null;
+
+  // 1. Lightweight Range: bytes=0-0 request to read Content-Disposition header without downloading MBs
+  try {
+    const rangeRes = await fetch(directUrl, {
+      method: 'GET',
+      headers: { Range: 'bytes=0-0' },
+      redirect: 'follow',
+      signal: AbortSignal.timeout(10000),
+    });
+    const cdName = parseFilenameFromContentDisposition(rangeRes.headers.get('content-disposition'));
+    if (cdName && cdName !== 'download' && cdName !== 'uc') {
+      detectedName = sanitizeDriveFilename(cdName);
+    }
+    try {
+      await rangeRes.body?.cancel();
+    } catch {}
+  } catch (err) {
+    console.warn('[resolveGoogleDriveFileMetadata] Range header probe notice:', err);
+  }
+
+  // 2. Fallback: Fetch lightweight /file/d/{id}/view HTML to read og:title / <title>
+  if (!detectedName) {
+    try {
+      const viewUrl = `https://drive.google.com/file/d/${fileId}/view`;
+      const viewRes = await fetch(viewUrl, {
+        redirect: 'follow',
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; WabaCloudBot/1.0)' },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (viewRes.url.includes('accounts.google.com')) {
+        return {
+          success: false,
+          error: 'Ye Google Drive file private hai. Kripya sharing "Anyone with the link -> Viewer" ON karein.',
+        };
+      }
+      const html = await viewRes.text();
+      const ogTitleMatch =
+        html.match(/<meta\s+property=["']og:title["']\s+content=["']([^"']+)["']/i) ||
+        html.match(/<meta\s+content=["']([^"']+)["']\s+property=["']og:title["']/i);
+      const titleTagMatch = html.match(/<title>([^<]+)<\/title>/i);
+      let candidate = ogTitleMatch?.[1] || titleTagMatch?.[1] || '';
+      candidate = sanitizeDriveFilename(candidate).replace(/\s*-\s*Google Drive$/i, '').trim();
+      if (
+        candidate &&
+        !/^google drive/i.test(candidate) &&
+        !/^sign in/i.test(candidate) &&
+        !/^meet google drive/i.test(candidate)
+      ) {
+        detectedName = candidate;
+      }
+    } catch (err) {
+      console.warn('[resolveGoogleDriveFileMetadata] View metadata probe notice:', err);
+    }
+  }
+
+  const finalName = detectedName || 'Catalog.pdf';
+  const mediaType = inferMediaTypeFromFilename(finalName);
+  const ensuredName =
+    mediaType === 'document' && !/\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|csv)$/i.test(finalName)
+      ? `${finalName}.pdf`
+      : finalName;
+
+  return {
+    success: true,
+    file: {
+      fileId,
+      mediaFileName: ensuredName,
+      mediaType,
+      mediaUrl: directUrl,
+    },
+  };
+}
+
+/**
+ * Fetches all public PDF/media files (with their REAL filenames) from a shared Google Drive folder.
+ * Strictly fetches only hardcoded Google Drive hosts using a validated alphanumeric folderId.
+ */
+export async function resolveGoogleDriveFolderFiles(folderId: string): Promise<{
+  success: boolean;
+  files: ResolvedDriveMediaEntry[];
+  totalFound: number;
+  error?: string;
+}> {
+  if (!/^[a-zA-Z0-9_-]{10,120}$/.test(folderId)) {
+    return { success: false, files: [], totalFound: 0, error: 'Invalid Google Drive folder ID.' };
+  }
+
+  const foundMap = new Map<string, ResolvedDriveMediaEntry>();
+
+  // Strategy 1: Official public embeddedfolderview list HTML (cleanest & fastest)
+  try {
+    const listUrl = `https://drive.google.com/embeddedfolderview?id=${folderId}#list`;
+    const res = await fetch(listUrl, {
+      redirect: 'follow',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+      signal: AbortSignal.timeout(12000),
+    });
+
+    if (res.url.includes('accounts.google.com') || res.status === 401 || res.status === 403) {
+      return {
+        success: false,
+        files: [],
+        totalFound: 0,
+        error: 'Ye Google Drive folder private hai. Kripya folder par Share -> "Anyone with the link (Viewer)" ON karein.',
+      };
+    }
+
+    const html = await res.text();
+    if (/accounts\.google\.com\/ServiceLogin|Sign in - Google Accounts/i.test(html)) {
+      return {
+        success: false,
+        files: [],
+        totalFound: 0,
+        error: 'Ye Google Drive folder private hai. Kripya folder par Share -> "Anyone with the link (Viewer)" ON karein.',
+      };
+    }
+
+    // Match each flip-entry anchor pointing to /file/d/<ID>/view with its flip-entry-title
+    const entryRegex =
+      /href="https:\/\/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]{10,120})\/view[^"]*"[^>]*>[\s\S]*?<div[^>]*class="[^"]*flip-entry-title[^"]*"[^>]*>([\s\S]*?)<\/div>/gi;
+
+    let match: RegExpExecArray | null;
+    while ((match = entryRegex.exec(html)) !== null) {
+      const fId = match[1];
+      const rawTitle = sanitizeDriveFilename(match[2].replace(/<[^>]+>/g, ''));
+      if (!fId || !rawTitle || foundMap.has(fId)) continue;
+
+      const mediaType = inferMediaTypeFromFilename(rawTitle);
+      const isSupportedMedia =
+        /\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|csv|png|jpe?g|webp|mp4|3gp)$/i.test(rawTitle) ||
+        !rawTitle.includes('.');
+      if (!isSupportedMedia) continue;
+
+      const finalFileName =
+        mediaType === 'document' && !/\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|csv)$/i.test(rawTitle)
+          ? `${rawTitle}.pdf`
+          : rawTitle;
+
+      foundMap.set(fId, {
+        fileId: fId,
+        mediaFileName: finalFileName,
+        mediaType,
+        mediaUrl: `https://drive.usercontent.google.com/download?id=${fId}&export=download&confirm=t`,
+      });
+    }
+
+    // Secondary pattern inside embeddedfolderview if Google swaps id/title order
+    if (foundMap.size === 0) {
+      const altRegex =
+        /id="entry-([a-zA-Z0-9_-]{10,120})"[\s\S]*?class="[^"]*flip-entry-title[^"]*"[^>]*>([\s\S]*?)<\/div>/gi;
+      let altMatch: RegExpExecArray | null;
+      while ((altMatch = altRegex.exec(html)) !== null) {
+        const block = altMatch[0];
+        if (block.includes('/drive/folders/')) continue; // skip sub-folders
+        const fId = altMatch[1];
+        const rawTitle = sanitizeDriveFilename(altMatch[2].replace(/<[^>]+>/g, ''));
+        if (!fId || !rawTitle || foundMap.has(fId)) continue;
+        const mediaType = inferMediaTypeFromFilename(rawTitle);
+        foundMap.set(fId, {
+          fileId: fId,
+          mediaFileName: rawTitle,
+          mediaType,
+          mediaUrl: `https://drive.usercontent.google.com/download?id=${fId}&export=download&confirm=t`,
+        });
+      }
+    }
+  } catch (err) {
+    console.warn('[resolveGoogleDriveFolderFiles] embeddedfolderview notice:', err);
+  }
+
+  const allFiles = Array.from(foundMap.values());
+  // Prioritize PDFs first, then other docs/images/videos
+  allFiles.sort((a, b) => {
+    const aPdf = a.mediaFileName.toLowerCase().endsWith('.pdf') ? 0 : 1;
+    const bPdf = b.mediaFileName.toLowerCase().endsWith('.pdf') ? 0 : 1;
+    return aPdf - bPdf;
+  });
+
+  if (allFiles.length === 0) {
+    return {
+      success: false,
+      files: [],
+      totalFound: 0,
+      error:
+        'Folder me koi public PDF/media file nahi mili. Check karein ki folder me PDFs hain aur folder ki sharing "Anyone with the link (Viewer)" ON hai.',
+    };
+  }
+
+  return {
+    success: true,
+    files: allFiles.slice(0, 20),
+    totalFound: allFiles.length,
+  };
 }
 

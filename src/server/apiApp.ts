@@ -4,7 +4,13 @@ import os from 'os';
 import fs from 'fs';
 import { serverDb } from './serverDb.ts';
 import { collection, getDocs } from 'firebase/firestore';
-import { inMemoryMediaBufferCache } from './metaMediaManager.ts';
+import {
+  inMemoryMediaBufferCache,
+  extractGoogleDriveFileId,
+  extractGoogleDriveFolderId,
+  resolveGoogleDriveFileMetadata,
+  resolveGoogleDriveFolderFiles,
+} from './metaMediaManager.ts';
 import {
   handleGetMetaStatus,
   handleEmbeddedSignupExchange,
@@ -209,6 +215,66 @@ apiApp.use('/uploads', express.static(path.join(process.cwd(), 'public', 'upload
 
 // Media Upload from PC / Device
 apiApp.post('/api/media/upload', handleUploadMedia);
+
+// Resolve real filename from a Google Drive file link OR fetch all PDFs from a public Google Drive folder link
+apiApp.post('/api/media/resolve-google-drive', async (req, res) => {
+  try {
+    const rawUrl = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
+    const expectFolder = Boolean(req.body?.isFolder);
+
+    if (!rawUrl) {
+      return res.status(400).json({ success: false, error: 'Google Drive link is required.' });
+    }
+
+    const folderId = extractGoogleDriveFolderId(rawUrl);
+    if (folderId) {
+      const folderResult = await resolveGoogleDriveFolderFiles(folderId);
+      if (!folderResult.success) {
+        return res.status(400).json({ success: false, error: folderResult.error });
+      }
+      return res.json({
+        success: true,
+        mode: 'folder',
+        folderId,
+        totalFound: folderResult.totalFound,
+        files: folderResult.files,
+      });
+    }
+
+    if (expectFolder) {
+      return res.status(400).json({
+        success: false,
+        error:
+          'Ye Google Drive Folder link nahi lag raha. Kripya Main Folder ka link paste karein (e.g. https://drive.google.com/drive/folders/...).',
+      });
+    }
+
+    const fileId = extractGoogleDriveFileId(rawUrl);
+    if (fileId) {
+      const fileResult = await resolveGoogleDriveFileMetadata(fileId);
+      if (!fileResult.success || !fileResult.file) {
+        return res.status(400).json({ success: false, error: fileResult.error || 'Could not resolve Google Drive file.' });
+      }
+      return res.json({
+        success: true,
+        mode: 'file',
+        totalFound: 1,
+        files: [fileResult.file],
+      });
+    }
+
+    return res.status(400).json({
+      success: false,
+      error: 'Valid Google Drive file ya folder link paste karein.',
+    });
+  } catch (err: any) {
+    console.error('[resolve-google-drive] Error:', err);
+    return res.status(500).json({
+      success: false,
+      error: err?.message || 'Failed to resolve Google Drive link.',
+    });
+  }
+});
 
 // Media Proxy: Safely fetch Meta scontent, lookaside or Meta Media ID buffers for live preview
 apiApp.get('/api/meta/media-proxy', async (req, res) => {
