@@ -97,6 +97,16 @@ function extractFilenameFromDirectUrl(raw: string): string | null {
   return null;
 }
 
+function isPlaceholderMediaFileName(name?: string): boolean {
+  const trimmed = (name || '').trim();
+  return (
+    !trimmed ||
+    /^(catalog\.pdf|catalogue\.pdf|document\.pdf|file\.pdf|file[_\s-]?\d+\.pdf|selected document|uc|download)$/i.test(
+      trimmed
+    )
+  );
+}
+
 export interface VisualNode {
   id: string;
   type: 'start' | 'question_button' | 'message' | 'media' | 'multi_media' | 'agent';
@@ -540,12 +550,15 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
           return;
         }
 
-        const existingKeys = new Set(
-          existingItems.map((it) => {
-            const fId = extractClientDriveFileId(it.mediaUrl || '');
-            return fId ? `gdrive:${fId}` : (it.mediaUrl || '').trim();
-          })
-        );
+        const updatedExisting = [...existingItems];
+        const existingIndexByKey = new Map<string, number>();
+        updatedExisting.forEach((it, idx) => {
+          const fId = extractClientDriveFileId(it.mediaUrl || '');
+          const key = fId ? `gdrive:${fId}` : (it.mediaUrl || '').trim();
+          if (key && !existingIndexByKey.has(key)) {
+            existingIndexByKey.set(key, idx);
+          }
+        });
 
         const resolvedFiles: Array<{
           fileId?: string;
@@ -559,17 +572,37 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
 
         const newItems: BotMediaItem[] = [];
         let skippedDuplicates = 0;
+        let upgradedNamesCount = 0;
 
         for (let i = 0; i < resolvedFiles.length; i++) {
           const rf = resolvedFiles[i];
           const key = rf.fileId ? `gdrive:${rf.fileId}` : (rf.mediaUrl || '').trim();
-          if (existingKeys.has(key)) {
-            skippedDuplicates++;
+          const existingIdx = existingIndexByKey.get(key);
+
+          if (existingIdx !== undefined) {
+            const existingItem = updatedExisting[existingIdx];
+            const candidateName = customSingleName || rf.mediaFileName || '';
+            if (
+              candidateName &&
+              !isPlaceholderMediaFileName(candidateName) &&
+              isPlaceholderMediaFileName(existingItem.mediaFileName)
+            ) {
+              updatedExisting[existingIdx] = {
+                ...existingItem,
+                mediaFileName: candidateName,
+                mediaUrl: rf.mediaUrl || existingItem.mediaUrl,
+                mediaType: rf.mediaType || existingItem.mediaType,
+              };
+              upgradedNamesCount++;
+            } else {
+              skippedDuplicates++;
+            }
             continue;
           }
+
           if (newItems.length >= remainingSlots) break;
 
-          existingKeys.add(key);
+          existingIndexByKey.set(key, updatedExisting.length + newItems.length);
           newItems.push({
             id: `m_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 6)}`,
             mediaType: rf.mediaType || 'document',
@@ -579,7 +612,7 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
           });
         }
 
-        if (newItems.length === 0) {
+        if (newItems.length === 0 && upgradedNamesCount === 0) {
           setUploadError(
             skippedDuplicates > 0
               ? 'Ye Google Drive PDFs pehle se is bundle me added hain.'
@@ -589,19 +622,27 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
         }
 
         updateEditingNode({
-          mediaItems: [...existingItems, ...newItems],
+          mediaItems: [...updatedExisting, ...newItems],
         });
         setNewBundleDirectUrl('');
         setNewBundleFileName('');
 
-        if (data.mode === 'folder') {
+        if (newItems.length === 0 && upgradedNamesCount > 0) {
+          setBundleStatusMsg(
+            `${upgradedNamesCount} existing PDF ka naam real Google Drive filename se update ho gaya!`
+          );
+        } else if (data.mode === 'folder') {
           const totalFound = Number(data.totalFound) || resolvedFiles.length;
           const capNote =
-            totalFound > newItems.length + skippedDuplicates
+            totalFound > newItems.length + skippedDuplicates + upgradedNamesCount
               ? ` (Folder me total ${totalFound} files mili; bundle max limit 10 hai)`
               : '';
+          const upgradeNote =
+            upgradedNamesCount > 0
+              ? ` Aur ${upgradedNamesCount} purani file ka naam bhi real filename me update ho gaya!`
+              : '';
           setBundleStatusMsg(
-            `Google Drive folder se ${newItems.length} PDF${newItems.length > 1 ? 's' : ''} real filenames ke saath add ho gayi!${capNote}`
+            `Google Drive folder se ${newItems.length} PDF${newItems.length > 1 ? 's' : ''} real filenames ke saath add ho gayi!${upgradeNote}${capNote}`
           );
         } else {
           setBundleStatusMsg(`Added "${newItems[0].mediaFileName}" with real Google Drive filename!`);
@@ -1179,6 +1220,92 @@ export const VisualNodeFlowCanvas: React.FC<VisualNodeFlowCanvasProps> = ({
     setEditingNode(updated);
     setNodes((prev) => prev.map((n) => (n.id === updated.id ? updated : n)));
   };
+
+  // Auto-upgrade any previously saved Google Drive PDFs that still have placeholder "Catalog.pdf" names when opening a node
+  const autoFixedNodeIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!editingNode) return;
+    const nodeId = editingNode.id;
+    if (autoFixedNodeIdsRef.current.has(nodeId)) return;
+
+    const staleItems =
+      editingNode.type === 'multi_media'
+        ? (editingNode.mediaItems || []).filter(
+            (it) => Boolean(extractClientDriveFileId(it.mediaUrl || '')) && isPlaceholderMediaFileName(it.mediaFileName)
+          )
+        : [];
+    const staleSingleDriveUrl =
+      editingNode.type === 'media' &&
+      Boolean(extractClientDriveFileId(editingNode.mediaUrl || '')) &&
+      isPlaceholderMediaFileName(editingNode.mediaFileName)
+        ? editingNode.mediaUrl || ''
+        : '';
+
+    if (staleItems.length === 0 && !staleSingleDriveUrl) return;
+    autoFixedNodeIdsRef.current.add(nodeId);
+
+    let cancelled = false;
+    (async () => {
+      if (staleSingleDriveUrl) {
+        try {
+          const res = await fetch('/api/media/resolve-google-drive', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: staleSingleDriveUrl, isFolder: false }),
+          });
+          const data = await res.json().catch(() => null);
+          const resolvedName = data?.files?.[0]?.mediaFileName;
+          if (!cancelled && res.ok && data?.success && resolvedName && !isPlaceholderMediaFileName(resolvedName)) {
+            setEditingNode((prev) => (prev && prev.id === nodeId ? { ...prev, mediaFileName: resolvedName } : prev));
+            setNodes((prev) => prev.map((n) => (n.id === nodeId ? { ...n, mediaFileName: resolvedName } : n)));
+          }
+        } catch {}
+        return;
+      }
+
+      const resolvedByFileId = new Map<string, string>();
+      for (const it of staleItems) {
+        if (cancelled) return;
+        const fId = extractClientDriveFileId(it.mediaUrl || '');
+        if (!fId) continue;
+        try {
+          const res = await fetch('/api/media/resolve-google-drive', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: it.mediaUrl, isFolder: false }),
+          });
+          const data = await res.json().catch(() => null);
+          const resolvedName = data?.files?.[0]?.mediaFileName;
+          if (res.ok && data?.success && resolvedName && !isPlaceholderMediaFileName(resolvedName)) {
+            resolvedByFileId.set(fId, resolvedName);
+          }
+        } catch {}
+      }
+
+      if (!cancelled && resolvedByFileId.size > 0) {
+        const patchItems = (items?: BotMediaItem[]) =>
+          (items || []).map((it) => {
+            const fId = extractClientDriveFileId(it.mediaUrl || '');
+            const realName = fId ? resolvedByFileId.get(fId) : undefined;
+            if (realName && isPlaceholderMediaFileName(it.mediaFileName)) {
+              return { ...it, mediaFileName: realName };
+            }
+            return it;
+          });
+
+        setEditingNode((prev) =>
+          prev && prev.id === nodeId ? { ...prev, mediaItems: patchItems(prev.mediaItems) } : prev
+        );
+        setNodes((prev) =>
+          prev.map((n) => (n.id === nodeId ? { ...n, mediaItems: patchItems(n.mediaItems) } : n))
+        );
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [editingNode?.id]);
 
   // Save Flow to Backend / Firestore
   const handleSaveAndDeploy = async () => {
