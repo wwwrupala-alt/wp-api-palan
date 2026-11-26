@@ -28,10 +28,11 @@ import {
   Trash2,
   Clock,
   Calendar,
+  Bot,
 } from 'lucide-react';
-import type { Campaign, Template, Contact, ContactGroup, WhatsAppAccount } from '../types/index.ts';
+import type { Campaign, Template, Contact, ContactGroup, WhatsAppAccount, BotFlow } from '../types/index.ts';
 import { useToast } from '../context/ToastContext.tsx';
-import { createCampaign, launchCampaign, uploadMediaFile, syncTemplatesFromMeta, sendScheduledCampaignNowApi } from '../lib/services.ts';
+import { createCampaign, launchCampaign, uploadMediaFile, syncTemplatesFromMeta, sendScheduledCampaignNowApi, subscribeBotFlows } from '../lib/services.ts';
 
 interface CreateCampaignModalProps {
   isOpen: boolean;
@@ -100,6 +101,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
     setSelectedAccountId(newAccId);
     setSelectedTemplateId('');
     setTemplateVariables({});
+    setButtonFlowBindings({});
   };
 
   const handleSyncTemplates = async () => {
@@ -146,6 +148,36 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
   const [templateVariables, setTemplateVariables] = useState<Record<string, string>>({});
   const [campaignMediaUrl, setCampaignMediaUrl] = useState('');
   const [campaignMediaPreviewUrl, setCampaignMediaPreviewUrl] = useState('');
+
+  // Smart Template Quick-Reply Button -> Chatbot Flow Bindings (per-campaign isolation: 2x4 vs 2x2 with same template!)
+  const [orgBotFlows, setOrgBotFlows] = useState<BotFlow[]>([]);
+  const [buttonFlowBindings, setButtonFlowBindings] = useState<Record<number, string>>({});
+
+  useEffect(() => {
+    if (!isOpen || !organizationId) return;
+    const unsub = subscribeBotFlows(
+      organizationId,
+      (flows) => setOrgBotFlows(flows),
+      () => {}
+    );
+    return () => unsub();
+  }, [isOpen, organizationId]);
+
+  const availableBotFlowsForAccount = useMemo(() => {
+    const cleanAccPhone = (currentAccount?.displayPhoneNumber || '').replace(/[^0-9]/g, '');
+    const accPhoneId = currentAccount?.phoneNumberId || '';
+    return orgBotFlows.filter((f) => {
+      if (!f.enabled || f.status === 'paused') return false;
+      const fp = (f.phoneNumberId || '').trim();
+      if (!fp || fp === 'all') return true;
+      const cleanFp = fp.replace(/[^0-9]/g, '');
+      const cleanFlowDisplay = (f.displayPhoneNumber || '').replace(/[^0-9]/g, '');
+      return (
+        fp === accPhoneId ||
+        (cleanAccPhone && (cleanFp === cleanAccPhone || cleanFlowDisplay === cleanAccPhone))
+      );
+    });
+  }, [orgBotFlows, currentAccount]);
 
   // Broadcast Schedule Mode: 'immediate' | 'schedule'
   const [scheduleMode, setScheduleMode] = useState<'immediate' | 'schedule'>('immediate');
@@ -211,18 +243,33 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
       );
       setSelectedTemplateId(matchingTpl ? matchingTpl.id : initialCloneCampaign.templateId || '');
 
-      // Pre-fill variables
+      // Pre-fill variables & button-to-flow bindings
       const clonedVars: Record<string, string> = {};
+      const clonedButtonFlows: Record<number, string> = {};
       if (initialCloneCampaign.variableValues) {
         Object.entries(initialCloneCampaign.variableValues).forEach(([k, v]) => {
           if (k.startsWith('body_')) {
             clonedVars[k.replace('body_', '')] = String(v);
           } else if (/^\d+$/.test(k)) {
             clonedVars[k] = String(v);
+          } else if (k.startsWith('qr_payload_') && String(v).startsWith('WABAFLOW:')) {
+            const idx = Number(k.replace('qr_payload_', ''));
+            if (Number.isInteger(idx) && idx >= 0) {
+              clonedButtonFlows[idx] = String(v).slice('WABAFLOW:'.length).trim();
+            }
+          }
+        });
+      }
+      if (initialCloneCampaign.buttonFlowBindings) {
+        Object.entries(initialCloneCampaign.buttonFlowBindings).forEach(([idxStr, meta]) => {
+          const idx = Number(idxStr);
+          if (Number.isInteger(idx) && idx >= 0 && meta?.flowId) {
+            clonedButtonFlows[idx] = meta.flowId;
           }
         });
       }
       setTemplateVariables(clonedVars);
+      setButtonFlowBindings(clonedButtonFlows);
 
       // Pre-fill media attachment (image, video, document)
       const cloneAccount =
@@ -389,6 +436,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
         setUploadedCampaignMedia(null);
       }
       setTemplateVariables({});
+      setButtonFlowBindings({});
       setAudienceMode('manual');
       setManualNumbersText('');
       setScheduleMode('immediate');
@@ -422,6 +470,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
         if (approved.length > 0) setSelectedTemplateId(approved[0].id);
       }
       setTemplateVariables({});
+      setButtonFlowBindings({});
       setCampaignMediaUrl('');
       setCampaignMediaPreviewUrl('');
       setUploadedCampaignMedia(null);
@@ -733,6 +782,13 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
         variablePayload.header_media_url = uploadedCampaignMedia.fullUrl;
       }
 
+      // Attach hidden WABAFLOW:<flowId> payloads for linked Quick Reply buttons
+      Object.entries(buttonFlowBindings).forEach(([idxStr, flowId]) => {
+        if (flowId && flowId.trim()) {
+          variablePayload[`qr_payload_${idxStr}`] = `WABAFLOW:${flowId.trim()}`;
+        }
+      });
+
       const res = await fetch('/api/meta/send-message', {
         method: 'POST',
         headers: {
@@ -830,6 +886,24 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
         campaignVariables.header_media_url = uploadedCampaignMedia.fullUrl;
       }
 
+      // Attach hidden WABAFLOW:<flowId> payloads for linked Quick Reply buttons (zero keyword conflict across campaigns!)
+      const serializedButtonFlowBindings: Record<string, { flowId: string; flowName?: string; buttonText?: string }> = {};
+      const tplButtons = Array.isArray(buttonsComponent?.buttons) ? buttonsComponent.buttons : [];
+      Object.entries(buttonFlowBindings).forEach(([idxStr, flowId]) => {
+        const cleanFlowId = (flowId || '').trim();
+        if (!cleanFlowId) return;
+        const idxNum = Number(idxStr);
+        const btnObj = tplButtons[idxNum];
+        const linkedFlow = orgBotFlows.find((f) => f.id === cleanFlowId);
+        campaignVariables[`qr_payload_${idxStr}`] = `WABAFLOW:${cleanFlowId}`;
+        serializedButtonFlowBindings[idxStr] = {
+          flowId: cleanFlowId,
+          flowName: linkedFlow?.name,
+          buttonText: btnObj?.text,
+        };
+      });
+      const hasButtonFlowBindings = Object.keys(serializedButtonFlowBindings).length > 0;
+
       const campaignName = campName.trim() || `${selectedTemplate.name} Broadcast`;
 
       const buildRecipientVariables = (c: any) => {
@@ -866,6 +940,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
           template: selectedTemplate,
           headerMediaUrl: campaignMediaUrl.trim() || undefined,
           variableValues: campaignVariables,
+          ...(hasButtonFlowBindings ? { buttonFlowBindings: serializedButtonFlowBindings } : {}),
           ...(audienceMode !== 'manual' && selectedGroupId !== 'all' ? { groupId: selectedGroupId } : {}),
           recipientCount: totalTargetRecipients.length,
           status: 'scheduled' as const,
@@ -930,6 +1005,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
           template: selectedTemplate,
           headerMediaUrl: campaignMediaUrl.trim() || undefined,
           variableValues: campaignVariables,
+          ...(hasButtonFlowBindings ? { buttonFlowBindings: serializedButtonFlowBindings } : {}),
           ...(audienceMode !== 'manual' && selectedGroupId !== 'all' ? { groupId: selectedGroupId } : {}),
           recipientCount: totalTargetRecipients.length,
           status: 'ready' as const,
@@ -1009,6 +1085,25 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
       } else if (uploadedCampaignMedia?.fullUrl && !uploadedCampaignMedia.fullUrl.startsWith('blob:')) {
         campaignVariables.header_media_url = uploadedCampaignMedia.fullUrl;
       }
+
+      // Attach hidden WABAFLOW:<flowId> payloads for linked Quick Reply buttons (also preserved on Save to List / Trigger Later!)
+      const serializedButtonFlowBindings: Record<string, { flowId: string; flowName?: string; buttonText?: string }> = {};
+      const tplButtons = Array.isArray(buttonsComponent?.buttons) ? buttonsComponent.buttons : [];
+      Object.entries(buttonFlowBindings).forEach(([idxStr, flowId]) => {
+        const cleanFlowId = (flowId || '').trim();
+        if (!cleanFlowId) return;
+        const idxNum = Number(idxStr);
+        const btnObj = tplButtons[idxNum];
+        const linkedFlow = orgBotFlows.find((f) => f.id === cleanFlowId);
+        campaignVariables[`qr_payload_${idxStr}`] = `WABAFLOW:${cleanFlowId}`;
+        serializedButtonFlowBindings[idxStr] = {
+          flowId: cleanFlowId,
+          flowName: linkedFlow?.name,
+          buttonText: btnObj?.text,
+        };
+      });
+      const hasButtonFlowBindings = Object.keys(serializedButtonFlowBindings).length > 0;
+
       const campaignName = campName.trim() || `${selectedTemplate.name} Broadcast`;
 
       const buildRecipientVariables = (c: any) => {
@@ -1061,6 +1156,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
         template: selectedTemplate,
         headerMediaUrl: campaignMediaUrl.trim() || undefined,
         variableValues: campaignVariables,
+        ...(hasButtonFlowBindings ? { buttonFlowBindings: serializedButtonFlowBindings } : {}),
         ...(audienceMode !== 'manual' && selectedGroupId !== 'all' ? { groupId: selectedGroupId } : {}),
         recipientCount: totalTargetRecipients.length,
         status: 'ready' as const,
@@ -1320,6 +1416,7 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
                     onChange={(e) => {
                       setSelectedTemplateId(e.target.value);
                       setTemplateVariables({});
+                      setButtonFlowBindings({});
                     }}
                     className="w-full px-3.5 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs text-neutral-900 dark:text-white font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-hidden cursor-pointer"
                   >
@@ -1591,6 +1688,82 @@ export const CreateCampaignModal: React.FC<CreateCampaignModalProps> = ({
                   </div>
                 </div>
               )}
+
+              {/* Smart Template Quick-Reply Button -> Chatbot Flow Binding (Per-Campaign Product Isolation) */}
+              {(() => {
+                const rawButtons = Array.isArray(buttonsComponent?.buttons) ? buttonsComponent.buttons : [];
+                const quickReplyEntries = rawButtons
+                  .map((btn: any, idx: number) => ({ btn, idx }))
+                  .filter(({ btn }) => String(btn?.type || '').toUpperCase() === 'QUICK_REPLY');
+                if (quickReplyEntries.length === 0) return null;
+
+                return (
+                  <div className="p-3.5 rounded-2xl bg-violet-50/60 dark:bg-violet-950/25 border border-violet-200 dark:border-violet-800/60 space-y-2.5 animate-fadeIn">
+                    <div className="flex items-center justify-between flex-wrap gap-1.5">
+                      <span className="text-xs font-bold text-violet-900 dark:text-violet-200 flex items-center space-x-1.5">
+                        <Bot className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+                        <span>Link Template Button → Chatbot Flow</span>
+                      </span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-violet-100 dark:bg-violet-900/60 text-violet-700 dark:text-violet-300">
+                        Advance • Zero Mix-up
+                      </span>
+                    </div>
+
+                    <p className="text-[11px] text-neutral-600 dark:text-neutral-300 leading-relaxed">
+                      Same template button (e.g. <strong>CATALOGUE</strong>) ko multiple campaigns me alag-alag Chatbot Flow se link karein — 2x4 campaign par click karne par sirf 2x4 PDFs jayengi, aur 2x2 campaign par sirf 2x2 PDFs!
+                    </p>
+
+                    <div className="space-y-2">
+                      {quickReplyEntries.map(({ btn, idx }) => {
+                        const selectedFlowId = buttonFlowBindings[idx] || '';
+                        return (
+                          <div
+                            key={idx}
+                            className="p-2.5 rounded-xl bg-white dark:bg-neutral-900/80 border border-violet-200/80 dark:border-violet-800/60 flex flex-col sm:flex-row sm:items-center gap-2"
+                          >
+                            <div className="flex items-center space-x-2 sm:w-44 shrink-0">
+                              <span className="px-2 py-1 rounded-lg bg-violet-100 dark:bg-violet-950/70 text-violet-800 dark:text-violet-300 font-bold text-[11px] truncate max-w-[165px]">
+                                🔘 {btn.text || `Button ${idx + 1}`}
+                              </span>
+                            </div>
+                            <select
+                              value={selectedFlowId}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setButtonFlowBindings((prev) => {
+                                  const next = { ...prev };
+                                  if (!val) {
+                                    delete next[idx];
+                                  } else {
+                                    next[idx] = val;
+                                  }
+                                  return next;
+                                });
+                              }}
+                              className="flex-1 px-3 py-1.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs text-neutral-900 dark:text-white font-medium cursor-pointer focus:ring-2 focus:ring-violet-500 focus:outline-hidden"
+                            >
+                              <option value="">⚡ Default (Auto-match by Keyword / Flow Name)</option>
+                              {availableBotFlowsForAccount.map((flow) => (
+                                <option key={flow.id} value={flow.id}>
+                                  🤖 {flow.name}
+                                  {flow.triggerCondition === 'campaign_button' ? ' [Campaign Button]' : ''}
+                                  {flow.steps?.length ? ` (${flow.steps.length} step${flow.steps.length > 1 ? 's' : ''})` : ''}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {availableBotFlowsForAccount.length === 0 && (
+                      <p className="text-[10.5px] text-amber-700 dark:text-amber-300">
+                        Abhi is WhatsApp number ke liye koi Active Chatbot Flow nahi mila. Bot &amp; Automations page me jaakar flow banayein aur ON rakhein.
+                      </p>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Step 3: Audience Selection (Groups / Manual Paste / Both) */}

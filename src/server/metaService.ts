@@ -1730,6 +1730,24 @@ export async function executeCampaignDispatchCore(params: {
     }
   }
 
+  // Extract per-button linked Chatbot Flow map (used as Engine 2 wamidTracker backup alongside Meta hidden payload)
+  const campaignButtonFlowMap: Record<string, string> = {};
+  const tplButtonsComp = template.components?.find((c: any) => String(c.type || '').toUpperCase() === 'BUTTONS');
+  const effectiveCampVars = variableValues || recipients[0]?.variableValues || {};
+  if (Array.isArray(tplButtonsComp?.buttons)) {
+    tplButtonsComp.buttons.forEach((btn: any, idx: number) => {
+      const rawPayload = effectiveCampVars?.[`qr_payload_${idx}`] || effectiveCampVars?.[`button_payload_${idx}`];
+      if (typeof rawPayload === 'string' && rawPayload.startsWith('WABAFLOW:')) {
+        const fId = rawPayload.slice('WABAFLOW:'.length).trim();
+        if (/^[a-zA-Z0-9_-]{2,120}$/.test(fId)) {
+          const btnLabelKey = String(btn?.text || `BUTTON_${idx}`).trim().toUpperCase();
+          campaignButtonFlowMap[btnLabelKey] = fId;
+        }
+      }
+    });
+  }
+  const hasCampaignButtonFlowMap = Object.keys(campaignButtonFlowMap).length > 0;
+
   // 2. Dispatch messages using Fast & Safe Balanced Batching (~12–15 msg/sec)
   // Safely stays well below Meta's 80 msg/sec default burst limit, with adaptive slowdown on 130429 / HTTP 429
   const MAX_BATCH_SIZE = 15;
@@ -1863,6 +1881,7 @@ export async function executeCampaignDispatchCore(params: {
                   customerName,
                   status: 'sent',
                   fbTraceId: traceId || undefined,
+                  ...(hasCampaignButtonFlowMap ? { buttonFlowMap: campaignButtonFlowMap } : {}),
                   updatedAt: itemIso,
                 }),
                 { merge: true }
@@ -3574,13 +3593,112 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
           }
         }
 
+      const resolveFlowInitialSteps = (f: any): any[] => {
+        const allSteps: any[] = Array.isArray(f.steps) ? f.steps : [];
+        const stepById = new Map<string, any>(allSteps.map((s: any) => [s.id, s]));
+        const seedIds: string[] =
+          Array.isArray(f.initialStepIds) && f.initialStepIds.length > 0
+            ? f.initialStepIds
+            : f.initialStepId
+            ? [f.initialStepId]
+            : allSteps[0]?.id
+            ? [allSteps[0].id]
+            : [];
+
+        const resolved: any[] = [];
+        const visited = new Set<string>();
+        const queue = [...seedIds];
+        while (queue.length > 0 && resolved.length < 15) {
+          const nextId = queue.shift()!;
+          if (!nextId || visited.has(nextId)) continue;
+          const st = stepById.get(nextId);
+          if (!st) continue;
+          visited.add(nextId);
+          resolved.push(st);
+          // Also follow chained autoNextStepIds on non-interactive steps (e.g. Media -> Media -> Text)
+          if (st.type !== 'interactive_button' && st.type !== 'interactive_list') {
+            const autoIds: string[] =
+              Array.isArray(st.autoNextStepIds) && st.autoNextStepIds.length > 0
+                ? st.autoNextStepIds
+                : st.autoNextStepId
+                ? [st.autoNextStepId]
+                : [];
+            for (const aid of autoIds) {
+              if (aid && !visited.has(aid)) queue.push(aid);
+            }
+          }
+        }
+        if (resolved.length === 0 && allSteps[0]) {
+          resolved.push(allSteps[0]);
+        }
+        return resolved;
+      };
+
       const upperText = textBody.trim().toUpperCase();
       const cleanSearchText = textBody.trim().toLowerCase();
       let matchedFlow: any = null;
       let targetSteps: any[] = [];
 
-      // If no active flows are enabled for this organization & phone, completely skip chatbot dispatch
-      if (activeFlows.length > 0) {
+      // PRIORITY #0A: Exact Campaign Template Button -> Linked Chatbot Flow binding (payload: "WABAFLOW:<flowId>")
+      // Strictly tenant-isolated to allOrgFlows/activeFlows of targetOrgId — zero keyword conflict across campaigns!
+      const resolveBoundFlowById = (boundFlowId: string, sourceLabel: string) => {
+        if (!/^[a-zA-Z0-9_-]{2,120}$/.test(boundFlowId)) return;
+        const exactBoundFlow =
+          activeFlows.find((f) => f.id === boundFlowId) ||
+          allOrgFlows.find(
+            (f) => f.id === boundFlowId && (f.enabled === true || f.enabled === 'true') && f.status !== 'paused'
+          );
+
+        if (exactBoundFlow) {
+          matchedFlow = exactBoundFlow;
+          targetSteps = resolveFlowInitialSteps(exactBoundFlow);
+          console.log(
+            `[Webhook] Priority #0 (${sourceLabel}) Campaign Button Flow Matched: "${exactBoundFlow.name}" (${exactBoundFlow.id}) via button "${textBody}"`
+          );
+          addWebhookLog({
+            event: 'Campaign Button Flow Matched',
+            origin: `WhatsApp: +${cleanPhone}`,
+            details: `Button "${textBody}" directly triggered linked flow "${exactBoundFlow.name}" via ${sourceLabel} (${targetSteps.length} step(s)).`,
+            status: 'success',
+          });
+        } else {
+          console.warn(
+            `[Webhook] Campaign Button bound flowId "${boundFlowId}" (${sourceLabel}) not found or paused in org "${targetOrgId}".`
+          );
+        }
+      };
+
+      const rawBoundPayload = (interactiveButtonId || '').trim();
+      if (rawBoundPayload.startsWith('WABAFLOW:')) {
+        resolveBoundFlowById(rawBoundPayload.slice('WABAFLOW:'.length).trim(), 'Hidden Payload');
+      }
+
+      // PRIORITY #0B (Fail-Safe Backup): Lookup exact clicked campaign message via msg.context.id -> wamidTracker
+      // Guarantees 100% accuracy even on WhatsApp clients that echo button text instead of custom payload!
+      const contextWamid = typeof msg.context?.id === 'string' ? msg.context.id.trim() : '';
+      if (targetSteps.length === 0 && msg.type === 'button' && contextWamid) {
+        try {
+          const trackerSnap = await getDoc(doc(serverDb, 'wamidTracker', contextWamid));
+          if (trackerSnap.exists()) {
+            const tData = trackerSnap.data() as any;
+            if (tData?.organizationId === targetOrgId && tData?.buttonFlowMap && typeof tData.buttonFlowMap === 'object') {
+              const bMap = tData.buttonFlowMap as Record<string, string>;
+              const matchedBoundId =
+                bMap[upperText] ||
+                Object.entries(bMap).find(([k]) => k.trim().toUpperCase() === upperText)?.[1] ||
+                (Object.keys(bMap).length === 1 ? Object.values(bMap)[0] : '');
+              if (matchedBoundId) {
+                resolveBoundFlowById(String(matchedBoundId).trim(), 'Message Context WAMID');
+              }
+            }
+          }
+        } catch (ctxErr) {
+          console.warn('[Webhook] Priority #0B context wamid lookup notice:', ctxErr);
+        }
+      }
+
+      // If no active flows are enabled for this organization & phone, completely skip standard chatbot dispatch
+      if (targetSteps.length === 0 && activeFlows.length > 0) {
         // 1. Check if incoming message is an interactive button click or matches any button title in the flow pipeline
         const clickedId = interactiveButtonId || interactiveListId;
         for (const flow of activeFlows) {
@@ -3664,6 +3782,12 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
 
           for (const flow of sortedFlows) {
             const condition = flow.triggerCondition || 'contains';
+
+            // Campaign-Button-Only flows MUST NEVER accidentally trigger from typed chat keywords!
+            if (condition === 'campaign_button') {
+              continue;
+            }
+
             const flowKeywords = (flow.keywords || [])
               .map((k: string) => k.trim().toUpperCase())
               .filter((k: string) => k.length > 0);
@@ -3675,47 +3799,6 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
                 flowKeywords.push(nameKw);
               }
             }
-
-            const resolveFlowInitialSteps = (f: any): any[] => {
-              const allSteps: any[] = Array.isArray(f.steps) ? f.steps : [];
-              const stepById = new Map<string, any>(allSteps.map((s: any) => [s.id, s]));
-              const seedIds: string[] =
-                Array.isArray(f.initialStepIds) && f.initialStepIds.length > 0
-                  ? f.initialStepIds
-                  : f.initialStepId
-                  ? [f.initialStepId]
-                  : allSteps[0]?.id
-                  ? [allSteps[0].id]
-                  : [];
-
-              const resolved: any[] = [];
-              const visited = new Set<string>();
-              const queue = [...seedIds];
-              while (queue.length > 0 && resolved.length < 15) {
-                const nextId = queue.shift()!;
-                if (!nextId || visited.has(nextId)) continue;
-                const st = stepById.get(nextId);
-                if (!st) continue;
-                visited.add(nextId);
-                resolved.push(st);
-                // Also follow chained autoNextStepIds on non-interactive steps (e.g. Media -> Media -> Text)
-                if (st.type !== 'interactive_button' && st.type !== 'interactive_list') {
-                  const autoIds: string[] =
-                    Array.isArray(st.autoNextStepIds) && st.autoNextStepIds.length > 0
-                      ? st.autoNextStepIds
-                      : st.autoNextStepId
-                      ? [st.autoNextStepId]
-                      : [];
-                  for (const aid of autoIds) {
-                    if (aid && !visited.has(aid)) queue.push(aid);
-                  }
-                }
-              }
-              if (resolved.length === 0 && allSteps[0]) {
-                resolved.push(allSteps[0]);
-              }
-              return resolved;
-            };
 
             if (condition === 'anything_else') {
               matchedFlow = flow;

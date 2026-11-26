@@ -384,6 +384,7 @@ export interface Campaign {
   template?: Template;
   headerMediaUrl?: string;
   variableValues?: Record<string, string>;
+  buttonFlowBindings?: Record<string, { flowId: string; flowName?: string; buttonText?: string }>;
   recipients?: CampaignRecipient[];
   recipientCount: number;
   groupId?: string;
@@ -605,7 +606,8 @@ export type TriggerCondition =
   | 'whole_word'
   | 'begins_with'
   | 'ends_with'
-  | 'anything_else';
+  | 'anything_else'
+  | 'campaign_button';
 
 export type TriggerScope = 'all' | 'individuals_only';
 

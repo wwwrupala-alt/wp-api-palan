@@ -83,14 +83,26 @@ export const BotFlowEditorModal: React.FC<BotFlowEditorModalProps> = ({
       return;
     }
 
-    // If condition is anything_else, keywords are optional
-    if (triggerCondition !== 'anything_else' && keywords.length === 0 && !keywordInput.trim()) {
+    // If condition is anything_else or campaign_button, keywords are optional
+    if (
+      triggerCondition !== 'anything_else' &&
+      triggerCondition !== 'campaign_button' &&
+      keywords.length === 0 &&
+      !keywordInput.trim()
+    ) {
       setError('Please enter and add at least one trigger keyword/phrase.');
       return;
     }
 
-    const finalKeywords = [...keywords];
-    if (keywordInput.trim() && !finalKeywords.includes(keywordInput.trim().toUpperCase())) {
+    const finalKeywords =
+      triggerCondition === 'campaign_button'
+        ? []
+        : [...keywords];
+    if (
+      triggerCondition !== 'campaign_button' &&
+      keywordInput.trim() &&
+      !finalKeywords.includes(keywordInput.trim().toUpperCase())
+    ) {
       finalKeywords.push(keywordInput.trim().toUpperCase());
     }
 
@@ -197,7 +209,7 @@ export const BotFlowEditorModal: React.FC<BotFlowEditorModalProps> = ({
               required
               value={name || ''}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. CATALOGUE or Sales Inquiry"
+              placeholder="e.g. 2x4 Catalogue Flow, 2x2 Glossy Flow, or Sales Inquiry"
               className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white font-medium focus:ring-1 focus:ring-emerald-500"
             />
           </div>
@@ -249,6 +261,7 @@ export const BotFlowEditorModal: React.FC<BotFlowEditorModalProps> = ({
                 onChange={(e) => setTriggerCondition(e.target.value as TriggerCondition)}
                 className="w-full px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white font-medium cursor-pointer"
               >
+                <option value="campaign_button">🎯 Campaign Button Only (Link inside Campaign — Zero Keyword Conflict)</option>
                 <option value="contains">Message contains</option>
                 <option value="exact">Message is</option>
                 <option value="whole_word">Message contains whole word</option>
@@ -258,8 +271,21 @@ export const BotFlowEditorModal: React.FC<BotFlowEditorModalProps> = ({
               </select>
             </div>
 
+            {/* Info Box when Campaign Button Only mode is selected */}
+            {triggerCondition === 'campaign_button' && (
+              <div className="p-3 rounded-xl bg-violet-50 dark:bg-violet-950/40 border border-violet-200 dark:border-violet-800 text-violet-900 dark:text-violet-200 space-y-1">
+                <p className="font-bold text-[11px] flex items-center space-x-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-violet-600 dark:text-violet-400 shrink-0" />
+                  <span>Advance Campaign-Linked Flow (No Keyword Needed)</span>
+                </p>
+                <p className="text-[11px] leading-relaxed text-violet-700 dark:text-violet-300">
+                  Is flow me koi keyword dalne ki zaroorat nahi! Bas Flow Name clear rakhein (jaise <strong>2x4 Catalogue</strong> ya <strong>2x2 Catalogue</strong>) aur Campaign launch karte waqt Template ke <strong>CATALOGUE</strong> button par is flow ko select kar dein.
+                </p>
+              </div>
+            )}
+
             {/* Keyword Input with + Add Button (Image 1) */}
-            {triggerCondition !== 'anything_else' && (
+            {triggerCondition !== 'anything_else' && triggerCondition !== 'campaign_button' && (
               <div className="space-y-2 pt-1">
                 <div className="flex items-center space-x-2">
                   <input

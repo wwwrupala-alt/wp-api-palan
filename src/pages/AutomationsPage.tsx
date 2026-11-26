@@ -393,23 +393,34 @@ export const AutomationsPage: React.FC = () => {
                       </span>
                     </div>
 
-                    {/* Keywords Chips */}
-                    {flow.keywords && flow.keywords.length > 0 && (
+                    {/* Keywords Chips OR Campaign Button Linked Badge */}
+                    {flow.triggerCondition === 'campaign_button' ? (
                       <div className="space-y-1">
                         <p className="text-[10px] text-neutral-400 uppercase font-semibold">
-                          Trigger Keywords:
+                          Trigger Mode:
                         </p>
-                        <div className="flex flex-wrap gap-1">
-                          {flow.keywords.map((kw, kIdx) => (
-                            <span
-                              key={kIdx}
-                              className="px-2 py-0.5 rounded-md bg-neutral-100 dark:bg-neutral-800 text-neutral-800 dark:text-neutral-200 font-mono text-[10px] border border-neutral-200/60 dark:border-neutral-700"
-                            >
-                              {kw}
-                            </span>
-                          ))}
+                        <div className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-violet-50 dark:bg-violet-950/50 text-violet-700 dark:text-violet-300 border border-violet-200 dark:border-violet-800 text-[11px] font-bold">
+                          <span>🎯 Campaign Button Linked (No Keyword Conflict)</span>
                         </div>
                       </div>
+                    ) : (
+                      flow.keywords && flow.keywords.length > 0 && (
+                        <div className="space-y-1">
+                          <p className="text-[10px] text-neutral-400 uppercase font-semibold">
+                            Trigger Keywords:
+                          </p>
+                          <div className="flex flex-wrap gap-1">
+                            {flow.keywords.map((kw, kIdx) => (
+                              <span
+                                key={kIdx}
+                                className="px-2 py-0.5 rounded-md bg-neutral-100 dark:bg-neutral-800 text-neutral-800 dark:text-neutral-200 font-mono text-[10px] border border-neutral-200/60 dark:border-neutral-700"
+                              >
+                                {kw}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )
                     )}
 
                     {/* Step Visual Preview Pill */}
@@ -422,6 +433,8 @@ export const AutomationsPage: React.FC = () => {
                               <span className="px-2 py-0.5 rounded-lg bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 shrink-0 font-medium">
                                 {st.type === 'interactive_button'
                                   ? '🔘 Buttons'
+                                  : st.type === 'multi_media'
+                                  ? `📚 Multi-PDF (${st.mediaItems?.length || 0})`
                                   : st.type === 'media'
                                   ? '📄 Media'
                                   : st.type === 'agent_transfer'

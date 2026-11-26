@@ -16,8 +16,9 @@ export interface MetaMessageComponent {
   sub_type?: 'url' | 'quick_reply';
   index?: number | string;
   parameters: Array<{
-    type: 'text' | 'image' | 'document' | 'video';
+    type: 'text' | 'image' | 'document' | 'video' | 'payload';
     text?: string;
+    payload?: string;
     image?: { id?: string; link?: string };
     video?: { id?: string; link?: string };
     document?: { id?: string; link?: string; filename?: string };
@@ -275,14 +276,33 @@ export function formatTemplateComponentsForSending(
     // 4. BUTTONS component
     else if (rawType === 'BUTTONS' && Array.isArray(comp.buttons)) {
       comp.buttons.forEach((btn: any, index: number) => {
-        if (btn?.type === 'URL' && btn.url?.includes('{{1}}')) {
+        const btnType = String(btn?.type || '').toUpperCase();
+        if (btnType === 'URL' && btn.url?.includes('{{1}}')) {
           const dynamicUrlPart = variableValues?.[`button_${index}`] || 'link';
           result.push({
             type: 'button',
             sub_type: 'url',
-            index: index,
+            index: String(index),
             parameters: [{ type: 'text', text: dynamicUrlPart }],
           });
+        } else if (btnType === 'QUICK_REPLY') {
+          const rawPayload =
+            variableValues?.[`qr_payload_${index}`] ||
+            variableValues?.[`button_payload_${index}`];
+          if (rawPayload && String(rawPayload).trim()) {
+            const safePayload = String(rawPayload)
+              .replace(/[\r\n\t]+/g, '')
+              .trim()
+              .slice(0, 256);
+            if (safePayload) {
+              result.push({
+                type: 'button',
+                sub_type: 'quick_reply',
+                index: String(index),
+                parameters: [{ type: 'payload', payload: safePayload }],
+              });
+            }
+          }
         }
       });
     }
