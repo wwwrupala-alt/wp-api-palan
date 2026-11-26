@@ -3950,7 +3950,13 @@ async function processIncomingWhatsAppWebhookPayload(value: any) {
               mediaPayload.caption = targetStep.body.trim();
             }
             if (mType === 'document') {
-              mediaPayload.filename = targetStep.mediaFileName || resolvedMedia?.filename || 'Catalog.pdf';
+              let docFilename = (targetStep.mediaFileName || resolvedMedia?.filename || 'Catalog.pdf').trim();
+              if (!docFilename || docFilename === 'uc' || docFilename === 'download') {
+                docFilename = 'Catalog.pdf';
+              } else if (!/\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|csv)$/i.test(docFilename)) {
+                docFilename = `${docFilename}.pdf`;
+              }
+              mediaPayload.filename = docFilename;
             }
 
             outPayload = {

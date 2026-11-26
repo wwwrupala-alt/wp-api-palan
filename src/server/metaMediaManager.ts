@@ -1,9 +1,92 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { serverDb, doc, getDoc, setDoc } from './serverDb.ts';
 
 // In-memory cache to avoid re-uploading the same file during a broadcast campaign
 export const metaMediaIdCache = new Map<string, string>();
+const driveMediaMemoryCache = new Map<string, { id: string; filename: string; expiresAt: number }>();
+
+const DRIVE_CACHE_TTL_MS = 25 * 24 * 60 * 60 * 1000; // 25 days (auto-refreshes before Meta's 30-day Media ID expiry)
+
+function extractGoogleDriveFileId(rawUrl: string): string | null {
+  const trimmed = rawUrl.trim();
+  const patterns = [
+    /^https?:\/\/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]{10,120})/i,
+    /^https?:\/\/drive\.google\.com\/open\?(?:[^#]*&)?id=([a-zA-Z0-9_-]{10,120})/i,
+    /^https?:\/\/drive\.google\.com\/uc\?(?:[^#]*&)?id=([a-zA-Z0-9_-]{10,120})/i,
+    /^https?:\/\/drive\.usercontent\.google\.com\/download\?(?:[^#]*&)?id=([a-zA-Z0-9_-]{10,120})/i,
+  ];
+  for (const re of patterns) {
+    const m = trimmed.match(re);
+    if (m?.[1] && /^[a-zA-Z0-9_-]{10,120}$/.test(m[1])) {
+      return m[1];
+    }
+  }
+  return null;
+}
+
+function detectMimeAndExtFromBuffer(
+  buffer: Buffer,
+  headerMime: string,
+  fallbackType: 'image' | 'video' | 'document' | 'audio'
+): { mimeType: string; ext: string; isHtml: boolean } {
+  const headAscii = buffer.subarray(0, 64).toString('utf8').trimStart().toLowerCase();
+  if (
+    headerMime.toLowerCase().includes('text/html') ||
+    headAscii.startsWith('<!doctype html') ||
+    headAscii.startsWith('<html')
+  ) {
+    return { mimeType: 'text/html', ext: '.html', isHtml: true };
+  }
+  // PDF magic bytes: %PDF-
+  if (buffer.length >= 5 && buffer[0] === 0x25 && buffer[1] === 0x50 && buffer[2] === 0x44 && buffer[3] === 0x46 && buffer[4] === 0x2d) {
+    return { mimeType: 'application/pdf', ext: '.pdf', isHtml: false };
+  }
+  // PNG magic bytes: 89 50 4E 47
+  if (buffer.length >= 4 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
+    return { mimeType: 'image/png', ext: '.png', isHtml: false };
+  }
+  // JPEG magic bytes: FF D8 FF
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return { mimeType: 'image/jpeg', ext: '.jpg', isHtml: false };
+  }
+  // WEBP: RIFF....WEBP
+  if (buffer.length >= 12 && buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP') {
+    return { mimeType: 'image/webp', ext: '.webp', isHtml: false };
+  }
+  // MP4: ....ftyp
+  if (buffer.length >= 8 && buffer.subarray(4, 8).toString('ascii') === 'ftyp') {
+    return { mimeType: 'video/mp4', ext: '.mp4', isHtml: false };
+  }
+  // Office OpenXML (DOCX/XLSX/PPTX) starts with PK\x03\x04
+  if (headerMime && !headerMime.includes('octet-stream')) {
+    const clean = headerMime.split(';')[0].trim().toLowerCase();
+    if (clean === 'application/pdf') return { mimeType: 'application/pdf', ext: '.pdf', isHtml: false };
+    if (clean === 'image/png') return { mimeType: 'image/png', ext: '.png', isHtml: false };
+    if (clean === 'image/jpeg') return { mimeType: 'image/jpeg', ext: '.jpg', isHtml: false };
+    if (clean === 'video/mp4') return { mimeType: 'video/mp4', ext: '.mp4', isHtml: false };
+  }
+  if (fallbackType === 'document') return { mimeType: 'application/pdf', ext: '.pdf', isHtml: false };
+  if (fallbackType === 'video') return { mimeType: 'video/mp4', ext: '.mp4', isHtml: false };
+  if (fallbackType === 'audio') return { mimeType: 'audio/mpeg', ext: '.mp3', isHtml: false };
+  return { mimeType: 'image/jpeg', ext: '.jpg', isHtml: false };
+}
+
+function parseFilenameFromContentDisposition(header: string | null): string | null {
+  if (!header) return null;
+  const utf8Match = header.match(/filename\*=UTF-8''([^;\r\n]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]).replace(/["/\\]/g, '').trim();
+    } catch {}
+  }
+  const plainMatch = header.match(/filename="?([^";\r\n]+)"?/i);
+  if (plainMatch?.[1]) {
+    return plainMatch[1].replace(/["/\\]/g, '').trim();
+  }
+  return null;
+}
 
 export interface InMemoryMediaFile {
   buffer: Buffer;
@@ -150,15 +233,140 @@ export async function resolveMetaMediaObject(
     !trimmed.includes('scontent.whatsapp.net') &&
     !trimmed.includes('lookaside.fbsbx.com')
   ) {
-    let resolvedLink = trimmed;
-    const driveFileMatch =
-      trimmed.match(/^https:\/\/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]{10,120})/i) ||
-      trimmed.match(/^https:\/\/drive\.google\.com\/open\?id=([a-zA-Z0-9_-]{10,120})/i);
-    if (driveFileMatch?.[1]) {
-      resolvedLink = `https://drive.google.com/uc?export=download&id=${driveFileMatch[1]}`;
+    // 3a. Google Drive Direct Bridge:
+    // Google Drive's uc?export=download returns application/octet-stream (or a virus-scan HTML page for >25MB PDFs),
+    // which causes WhatsApp Cloud API to render the document as a ".bin" file!
+    // Instead, we download the real PDF binary from drive.usercontent.google.com, verify magic bytes,
+    // upload it to Meta with explicit "application/pdf" MIME type, and cache the Meta Media ID for 25 days (auto-refreshing forever!).
+    const driveFileId = extractGoogleDriveFileId(trimmed);
+    if (driveFileId && token && /^\d+$/.test((phoneNumberId || '').trim())) {
+      const cleanPhoneId = phoneNumberId.trim();
+      const driveCacheDocId = `${cleanPhoneId}_${driveFileId}`;
+
+      // Step 1: In-memory cache hit (0ms)
+      const memHit = driveMediaMemoryCache.get(driveCacheDocId);
+      if (memHit && memHit.expiresAt > Date.now()) {
+        return { id: memHit.id, filename: memHit.filename };
+      }
+
+      // Step 2: Firestore 25-day cache hit (1 read across Vercel cold starts)
+      try {
+        const fsCacheSnap = await getDoc(doc(serverDb, 'metaDriveMediaCache', driveCacheDocId));
+        if (fsCacheSnap.exists()) {
+          const cached = fsCacheSnap.data() as any;
+          if (cached?.metaMediaId && Number(cached.expiresAt || 0) > Date.now()) {
+            const safeName = cached.filename || 'Catalog.pdf';
+            driveMediaMemoryCache.set(driveCacheDocId, {
+              id: String(cached.metaMediaId),
+              filename: safeName,
+              expiresAt: Number(cached.expiresAt),
+            });
+            return { id: String(cached.metaMediaId), filename: safeName };
+          }
+        }
+      } catch (cacheReadErr) {
+        console.warn('[resolveMetaMediaObject] Drive cache read notice:', cacheReadErr);
+      }
+
+      // Step 3: Fetch verified binary from Google's direct usercontent download endpoint (strictly allowlisted host + validated ID)
+      const directDownloadUrls = [
+        `https://drive.usercontent.google.com/download?id=${driveFileId}&export=download&confirm=t`,
+        `https://drive.google.com/uc?export=download&confirm=t&id=${driveFileId}`,
+      ];
+
+      for (const dlUrl of directDownloadUrls) {
+        try {
+          const dlRes = await fetch(dlUrl, { redirect: 'follow' });
+          if (!dlRes.ok) continue;
+
+          const contentLengthHeader = Number(dlRes.headers.get('content-length') || '0');
+          if (contentLengthHeader > 100 * 1024 * 1024) {
+            console.warn('[resolveMetaMediaObject] Google Drive file exceeds Meta 100 MB limit:', contentLengthHeader);
+            break;
+          }
+
+          const arrBuf = await dlRes.arrayBuffer();
+          const buffer = Buffer.from(arrBuf);
+          if (buffer.length === 0 || buffer.length > 100 * 1024 * 1024) continue;
+
+          const headerMime = dlRes.headers.get('content-type') || '';
+          const detected = detectMimeAndExtFromBuffer(buffer, headerMime, mediaType);
+
+          if (detected.isHtml) {
+            console.warn('[resolveMetaMediaObject] Google Drive returned HTML page (file may not be public "Anyone with the link" or requires confirmation).');
+            continue;
+          }
+
+          let resolvedFileName =
+            parseFilenameFromContentDisposition(dlRes.headers.get('content-disposition')) ||
+            `Catalog${detected.ext}`;
+          if (!path.extname(resolvedFileName)) {
+            resolvedFileName = `${resolvedFileName}${detected.ext}`;
+          }
+
+          const blob = new Blob([new Uint8Array(buffer)], { type: detected.mimeType });
+          const formData = new FormData();
+          formData.append('messaging_product', 'whatsapp');
+          formData.append('type', detected.mimeType);
+          formData.append('file', blob, resolvedFileName);
+
+          const uploadUrl = `https://graph.facebook.com/${graphVersion}/${cleanPhoneId}/media`;
+          const uploadRes = await fetch(uploadUrl, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` },
+            body: formData,
+          });
+          const uploadData = await uploadRes.json();
+
+          if (uploadRes.ok && uploadData?.id) {
+            const newMediaId = String(uploadData.id);
+            const expiresAt = Date.now() + DRIVE_CACHE_TTL_MS;
+            driveMediaMemoryCache.set(driveCacheDocId, {
+              id: newMediaId,
+              filename: resolvedFileName,
+              expiresAt,
+            });
+            metaMediaIdCache.set(cacheKey, newMediaId);
+
+            // Persist 25-day auto-refreshing cache in Firestore (best-effort)
+            setDoc(doc(serverDb, 'metaDriveMediaCache', driveCacheDocId), {
+              metaMediaId: newMediaId,
+              driveFileId,
+              phoneNumberId: cleanPhoneId,
+              filename: resolvedFileName,
+              mimeType: detected.mimeType,
+              size: buffer.length,
+              expiresAt,
+              updatedAt: new Date().toISOString(),
+            }).catch(() => {});
+
+            console.log(
+              `[resolveMetaMediaObject] Bridged Google Drive (${driveFileId}) as ${detected.mimeType} -> Meta Media ID: ${newMediaId}`
+            );
+            return { id: newMediaId, filename: resolvedFileName };
+          } else {
+            console.warn('[resolveMetaMediaObject] Meta upload of Google Drive buffer failed:', uploadData);
+          }
+        } catch (driveErr) {
+          console.warn('[resolveMetaMediaObject] Google Drive bridge fetch notice:', driveErr);
+        }
+      }
+
+      // Fallback link if upload failed — still use drive.usercontent.google.com and NEVER return "uc" as filename
+      return {
+        link: `https://drive.usercontent.google.com/download?id=${driveFileId}&export=download&confirm=t`,
+        filename: mediaType === 'document' ? 'Catalog.pdf' : undefined,
+      };
     }
-    const filename = path.basename(resolvedLink.split('?')[0]) || undefined;
-    return { link: resolvedLink, filename };
+
+    const rawBase = path.basename(trimmed.split('?')[0]) || '';
+    const safeFilename =
+      rawBase && rawBase !== 'uc' && rawBase !== 'download' && path.extname(rawBase)
+        ? rawBase
+        : mediaType === 'document'
+        ? 'Catalog.pdf'
+        : undefined;
+    return { link: trimmed, filename: safeFilename };
   }
 
   // 4. Local file path or relative URL (e.g. "/uploads/aa11_1791101223567.png" or "https://ais-dev-.../uploads/...")

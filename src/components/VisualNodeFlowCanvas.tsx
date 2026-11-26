@@ -54,10 +54,11 @@ function isSafeMediaHref(url?: string): boolean {
 function normalizeDirectMediaInput(raw: string): string {
   const trimmed = raw.trim();
   const driveMatch =
-    trimmed.match(/^https:\/\/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]{10,120})/i) ||
-    trimmed.match(/^https:\/\/drive\.google\.com\/open\?id=([a-zA-Z0-9_-]{10,120})/i);
+    trimmed.match(/^https?:\/\/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]{10,120})/i) ||
+    trimmed.match(/^https?:\/\/drive\.google\.com\/open\?(?:[^#]*&)?id=([a-zA-Z0-9_-]{10,120})/i) ||
+    trimmed.match(/^https?:\/\/drive\.google\.com\/uc\?(?:[^#]*&)?id=([a-zA-Z0-9_-]{10,120})/i);
   if (driveMatch?.[1]) {
-    return `https://drive.google.com/uc?export=download&id=${driveMatch[1]}`;
+    return `https://drive.usercontent.google.com/download?id=${driveMatch[1]}&export=download&confirm=t`;
   }
   return raw;
 }
